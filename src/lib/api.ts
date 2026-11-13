@@ -110,16 +110,73 @@ export function libraryStats(path: string): Promise<LibraryStats> {
 
 // --- Photos and thumbnails --------------------------------------------------
 
+/**
+ * Dates of photos (`sortDate`, `DayGroup.day`) are the wall-clock time the
+ * camera showed, encoded as if that time were UTC. Always format them with
+ * `timeZone: "UTC"`.
+ */
+
+/** One day of the timeline. Mirrors `DayGroup` in src-tauri/src/db.rs. */
+export interface DayGroup {
+  /** Days since 1970-01-01. */
+  day: number;
+  count: number;
+}
+
 /** Mirrors `PhotoItem` in src-tauri/src/db.rs. */
 export interface PhotoItem {
   fingerprint: string;
   relPath: string;
-  /** Wall-clock date of the photo, encoded as if it were UTC. */
   sortDate: number;
+  /** Upright size in pixels, when known. */
+  width: number | null;
+  height: number | null;
 }
 
-export function newestPhotos(path: string, limit: number): Promise<PhotoItem[]> {
-  return invoke("newest_photos", { path, limit });
+/** Mirrors `FolderEntry` in src-tauri/src/db.rs. */
+export interface FolderEntry {
+  /** Path relative to the library root; "" is the root itself. */
+  folder: string;
+  /** Photos directly in this folder. */
+  count: number;
+}
+
+/** Mirrors `PhotoDetails` in src-tauri/src/db.rs. */
+export interface PhotoDetails {
+  relPath: string;
+  fingerprint: string;
+  size: number;
+  sortDate: number;
+  dateFromExif: boolean;
+  width: number | null;
+  height: number | null;
+  cameraMake: string | null;
+  cameraModel: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+/** Day groups, newest first, of the whole library (`folder` null) or one folder. */
+export function timeline(path: string, folder: string | null): Promise<DayGroup[]> {
+  return invoke("timeline", { path, folder });
+}
+
+/** A slice of the photo listing, in the same order as `timeline`. */
+export function photosPage(
+  path: string,
+  folder: string | null,
+  offset: number,
+  limit: number,
+): Promise<PhotoItem[]> {
+  return invoke("photos_page", { path, folder, offset, limit });
+}
+
+export function listFolders(path: string): Promise<FolderEntry[]> {
+  return invoke("folders", { path });
+}
+
+export function photoDetails(path: string, relPath: string): Promise<PhotoDetails | null> {
+  return invoke("photo_details", { path, relPath });
 }
 
 /**
@@ -128,4 +185,9 @@ export function newestPhotos(path: string, limit: number): Promise<PhotoItem[]> 
  */
 export function thumbUrl(fingerprint: string, size: "grid" | "preview" = "grid"): string {
   return convertFileSrc(`${size}/${fingerprint}`, "thumb");
+}
+
+/** URL of the full-size photo, served by the app's `photo://` protocol. */
+export function photoUrl(fingerprint: string): string {
+  return convertFileSrc(fingerprint, "photo");
 }

@@ -12,7 +12,7 @@
 use std::fs;
 use std::io::{self, BufWriter};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -191,6 +191,74 @@ impl ThumbCache {
     }
 }
 
+/// File types every webview can display by itself. Anything else the viewer
+/// gets as a JPEG made by [`render_jpeg`].
+pub fn is_web_image(path: &Path) -> Option<&'static str> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "png" => Some("image/png"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        _ => None,
+    }
+}
+
+/// Decodes `source` and re-encodes it as a full-size, upright JPEG, for
+/// formats the webview can't display (HEIC, TIFF).
+pub fn render_jpeg(source: &Path, orientation: Option<u8>) -> Result<Vec<u8>, ThumbError> {
+    let decoded = decode(source)?;
+    let orientation = orientation
+        .filter(|_| !decoded.upright)
+        .and_then(Orientation::from_exif)
+        .unwrap_or(Orientation::NoTransforms);
+    let mut image = DynamicImage::ImageRgb8(decoded.pixels);
+    image.apply_orientation(orientation);
+
+    let mut bytes = Vec::new();
+    JpegEncoder::new_with_quality(&mut bytes, 90).encode_image(&image)?;
+    Ok(bytes)
+}
+
+/// Reads a photo's upright size from the file header, without decoding it.
+fn probe_size(source: &Path, orientation: Option<u8>) -> Option<(u32, u32)> {
+    if is_heic(source) {
+        return probe_heic_size(source); // already upright
+    }
+    let (width, height) = ImageReader::open(source)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()?;
+    // EXIF orientations 5 to 8 turn the image on its side.
+    Some(if orientation.is_some_and(|o| (5..=8).contains(&o)) {
+        (height, width)
+    } else {
+        (width, height)
+    })
+}
+
+#[cfg(feature = "heic")]
+fn probe_heic_size(source: &Path) -> Option<(u32, u32)> {
+    let bytes = fs::read(source).ok()?;
+    let context = libheif_rs::HeifContext::read_from_bytes(&bytes).ok()?;
+    let handle = context.primary_image_handle().ok()?;
+    Some((handle.width(), handle.height()))
+}
+
+#[cfg(not(feature = "heic"))]
+fn probe_heic_size(_source: &Path) -> Option<(u32, u32)> {
+    None
+}
+
+fn is_heic(source: &Path) -> bool {
+    source
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("heic") || ext.eq_ignore_ascii_case("heif"))
+}
+
 struct Decoded {
     pixels: RgbImage,
     /// True when the decoder already applied the file's rotation.
@@ -198,11 +266,7 @@ struct Decoded {
 }
 
 fn decode(source: &Path) -> Result<Decoded, ThumbError> {
-    let is_heic = source
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("heic") || ext.eq_ignore_ascii_case("heif"));
-    if is_heic {
+    if is_heic(source) {
         return decode_heic(source);
     }
 
@@ -357,6 +421,8 @@ pub fn generate_missing(
         report(0);
     }
 
+    let generated = AtomicU64::new(0);
+    let generated = &generated;
     std::thread::scope(|scope| -> rusqlite::Result<()> {
         let (sender, receiver) = mpsc::sync_channel::<Outcome>(WRITE_BATCH);
         let pending = &pending;
@@ -365,10 +431,12 @@ pub fn generate_missing(
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
+                let source = root.join(&photo.rel_path);
                 let result = if cache.has_both(&photo.fingerprint) {
-                    Ok(None) // e.g. a renamed file, or a second copy
+                    // E.g. a renamed file, a second copy, or a rebuilt index.
+                    Ok(probe_size(&source, photo.orientation))
                 } else {
-                    let source = root.join(&photo.rel_path);
+                    generated.fetch_add(1, Ordering::Relaxed);
                     cache
                         .generate(&source, &photo.fingerprint, photo.orientation)
                         .map(Some)
@@ -383,7 +451,6 @@ pub fn generate_missing(
             match result {
                 Ok(size) => {
                     db::set_thumb_state(&tx, &rel_path, ThumbState::Ready, size)?;
-                    summary.generated += u64::from(size.is_some());
                 }
                 Err(ThumbError::Decode(_)) => {
                     db::set_thumb_state(&tx, &rel_path, ThumbState::Failed, None)?;
@@ -406,6 +473,8 @@ pub fn generate_missing(
         tx.commit()
     })?;
 
+    summary.generated =
+        generated.load(Ordering::Relaxed) - summary.undecodable - summary.unreadable;
     summary.cancelled = cancel.load(Ordering::Relaxed);
     summary.duration_ms = started.elapsed().as_millis() as u64;
     Ok(summary)
@@ -597,6 +666,32 @@ mod tests {
         let third = generate_missing(&root, &mut conn, &cache, &never, &|_| {}).unwrap();
         assert_eq!(third.generated, 0);
         assert!(db::pending_thumbs(&conn).unwrap().is_empty());
+        let renamed = db::photo_details(&conn, "renamed.jpg").unwrap().unwrap();
+        assert_eq!((renamed.width, renamed.height), (Some(300), Some(300)));
+    }
+
+    #[test]
+    fn renders_non_web_formats_as_upright_jpeg() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("scan.tiff");
+        RgbImage::from_fn(60, 30, |x, _| {
+            if x < 30 {
+                Rgb([255, 0, 0])
+            } else {
+                Rgb([0, 0, 255])
+            }
+        })
+        .save(&source)
+        .unwrap();
+
+        assert_eq!(is_web_image(&source), None);
+        assert_eq!(is_web_image(Path::new("a/B.JPG")), Some("image/jpeg"));
+
+        let jpeg = render_jpeg(&source, Some(6)).unwrap();
+        let image = image::load_from_memory(&jpeg).unwrap().into_rgb8();
+        assert_eq!(image.dimensions(), (30, 60));
+        assert!(is_red(image.get_pixel(15, 5)));
+        assert!(is_blue(image.get_pixel(15, 55)));
     }
 
     #[cfg(feature = "heic")]

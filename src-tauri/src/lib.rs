@@ -8,7 +8,7 @@ mod thumbs;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -33,6 +33,8 @@ struct AppState {
     /// Path of the library that is open in the window, if any. The `thumb://`
     /// protocol uses it to make a missing thumbnail on demand.
     open_library: Mutex<Option<String>>,
+    /// Limits on-demand image decoding (thumbnails and converted originals).
+    on_demand: Limiter,
 }
 
 struct RunningScan {
@@ -276,24 +278,104 @@ fn thumb_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
     }
 }
 
-/// Generates the thumbnails of one photo of the open library right now,
-/// instead of waiting for the background pass to reach it.
-fn make_thumb_on_demand(state: &AppState, fingerprint: &str) -> Result<(), ()> {
+/// Finds the original file of a photo of the open library, and its EXIF
+/// orientation. Only files that are in the index can be reached this way.
+fn find_original(state: &AppState, fingerprint: &str) -> Result<(PathBuf, Option<u8>), ()> {
     let library_path = state.open_library.lock().unwrap().clone().ok_or(())?;
     let conn = db::open(&index_db_path(&state.data_dir, &library_path)).map_err(drop)?;
     let (rel_path, orientation) = db::find_by_fingerprint(&conn, fingerprint)
         .map_err(drop)?
         .ok_or(())?;
-    drop(conn);
+    Ok((Path::new(&library_path).join(rel_path), orientation))
+}
+
+/// Generates the thumbnails of one photo of the open library right now,
+/// instead of waiting for the background pass to reach it.
+fn make_thumb_on_demand(state: &AppState, fingerprint: &str) -> Result<(), ()> {
+    let (source, orientation) = find_original(state, fingerprint)?;
+    // Scrolling through photos that have no thumbnails yet asks for many at
+    // once; decode only a few at a time.
+    let _permit = state.on_demand.acquire();
+    if state.thumbs.has_both(fingerprint) {
+        return Ok(()); // made while we were waiting
+    }
     state
         .thumbs
-        .generate(
-            &Path::new(&library_path).join(rel_path),
-            fingerprint,
-            orientation,
-        )
+        .generate(&source, fingerprint, orientation)
         .map(drop)
         .map_err(drop)
+}
+
+/// Answers a `photo://localhost/<fingerprint>` request with the full-size
+/// original, for the viewer. Formats the webview can't show are converted to
+/// JPEG on the fly.
+fn photo_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
+    let status = |code: StatusCode| {
+        Response::builder()
+            .status(code)
+            .body(Vec::new())
+            .expect("static response")
+    };
+
+    let fingerprint = uri_path.trim_start_matches('/');
+    if !thumbs::is_fingerprint(fingerprint) {
+        return status(StatusCode::BAD_REQUEST);
+    }
+    let state = app.state::<AppState>();
+    let Ok((source, orientation)) = find_original(&state, fingerprint) else {
+        return status(StatusCode::NOT_FOUND);
+    };
+
+    let result = match thumbs::is_web_image(&source) {
+        Some(mime) => fs::read(&source).map(|bytes| (mime, bytes)).map_err(drop),
+        None => {
+            let _permit = state.on_demand.acquire();
+            thumbs::render_jpeg(&source, orientation)
+                .map(|bytes| ("image/jpeg", bytes))
+                .map_err(drop)
+        }
+    };
+    match result {
+        Ok((mime, bytes)) => Response::builder()
+            .header(header::CONTENT_TYPE, mime)
+            .header(header::CACHE_CONTROL, "private, max-age=3600")
+            .body(bytes)
+            .expect("static response"),
+        Err(()) => status(StatusCode::NOT_FOUND),
+    }
+}
+
+/// Lets at most `permits` threads through at a time.
+struct Limiter {
+    available: Mutex<usize>,
+    freed: Condvar,
+}
+
+struct Permit<'a>(&'a Limiter);
+
+impl Limiter {
+    fn new(permits: usize) -> Self {
+        Self {
+            available: Mutex::new(permits),
+            freed: Condvar::new(),
+        }
+    }
+
+    fn acquire(&self) -> Permit<'_> {
+        let mut available = self.available.lock().unwrap();
+        while *available == 0 {
+            available = self.freed.wait(available).unwrap();
+        }
+        *available -= 1;
+        Permit(self)
+    }
+}
+
+impl Drop for Permit<'_> {
+    fn drop(&mut self) {
+        *self.0.available.lock().unwrap() += 1;
+        self.0.freed.notify_one();
+    }
 }
 
 // The commands are marked `async` so they run off the main thread: a stalled
@@ -392,15 +474,51 @@ fn library_stats(path: String, state: State<'_, AppState>) -> Result<LibraryStat
     })
 }
 
-/// The newest photos of a library, newest first.
+/// Opens the index of the library at `path` for a query from the UI.
+fn open_index(state: &AppState, path: &str) -> Result<rusqlite::Connection, String> {
+    db::open(&index_db_path(&state.data_dir, path)).map_err(|e| e.to_string())
+}
+
+/// Day groups of the whole library, or of one folder, newest first.
 #[tauri::command(async)]
-fn newest_photos(
+fn timeline(
     path: String,
+    folder: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<db::DayGroup>, String> {
+    db::timeline(&open_index(&state, &path)?, folder.as_deref()).map_err(|e| e.to_string())
+}
+
+/// A slice of the photo listing, in the same order as [`timeline`].
+#[tauri::command(async)]
+fn photos_page(
+    path: String,
+    folder: Option<String>,
+    offset: u32,
     limit: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<db::PhotoItem>, String> {
-    let conn = db::open(&index_db_path(&state.data_dir, &path)).map_err(|e| e.to_string())?;
-    db::newest_photos(&conn, limit.min(1000)).map_err(|e| e.to_string())
+    db::photos_page(
+        &open_index(&state, &path)?,
+        folder.as_deref(),
+        offset,
+        limit.min(1000),
+    )
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+fn folders(path: String, state: State<'_, AppState>) -> Result<Vec<db::FolderEntry>, String> {
+    db::folders(&open_index(&state, &path)?).map_err(|e| e.to_string())
+}
+
+#[tauri::command(async)]
+fn photo_details(
+    path: String,
+    rel_path: String,
+    state: State<'_, AppState>,
+) -> Result<Option<db::PhotoDetails>, String> {
+    db::photo_details(&open_index(&state, &path)?, &rel_path).map_err(|e| e.to_string())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -414,6 +532,9 @@ pub fn run() {
                 scan: Mutex::new(None),
                 thumbs: ThumbCache::new(&data_dir),
                 open_library: Mutex::new(None),
+                on_demand: Limiter::new(
+                    std::thread::available_parallelism().map_or(2, |n| n.get().div_ceil(2)),
+                ),
                 data_dir,
             });
             Ok(())
@@ -427,6 +548,13 @@ pub fn run() {
                 responder.respond(thumb_response(&app, &path));
             });
         })
+        .register_asynchronous_uri_scheme_protocol("photo", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(photo_response(&app, &path));
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             open_library,
             list_recent_libraries,
@@ -434,7 +562,10 @@ pub fn run() {
             rescan_library,
             close_library,
             library_stats,
-            newest_photos
+            timeline,
+            photos_page,
+            folders,
+            photo_details
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
