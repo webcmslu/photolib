@@ -194,6 +194,21 @@ export function timeline(path: string, listing: Listing): Promise<DayGroup[]> {
   return invoke("timeline", { path, listing });
 }
 
+/** Mirrors `MonthSummary` in src-tauri/src/db.rs. */
+export interface MonthSummary {
+  year: number;
+  /** 1 to 12. */
+  month: number;
+  count: number;
+  /** Fingerprints of a few photos to show for the month. */
+  covers: string[];
+}
+
+/** The months of a listing with a few cover photos each, newest first. */
+export function listMonths(path: string, listing: Listing): Promise<MonthSummary[]> {
+  return invoke("months", { path, listing });
+}
+
 /** A slice of a listing's photos, in the same order as `timeline`. */
 export function photosPage(
   path: string,

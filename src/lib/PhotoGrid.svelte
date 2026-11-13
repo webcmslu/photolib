@@ -5,6 +5,9 @@
   the scroll height is right from the start and only the cells near the
   viewport exist in the DOM, whatever the size of the library. Photo data is
   pulled from `pages` for the visible range only.
+
+  A day with enough photos shows its first one as a large "featured" card,
+  several cells wide and two rows high, with the others flowing around it.
 -->
 <script lang="ts">
   import { thumbUrl, type DayGroup } from "./api";
@@ -21,8 +24,20 @@
     onopen: (index: number) => void;
     /** Called to select or deselect a photo; `range` extends from the last one. */
     ontoggle: (index: number, range: boolean) => void;
+    /** The width cells aim for, in pixels: smaller means more per row. */
+    cellSize?: number;
+    /** A month (`year * 12 + month - 1`) to start scrolled to. */
+    startAt?: number | null;
   }
-  let { groups, pages, selected, onopen, ontoggle }: Props = $props();
+  let {
+    groups,
+    pages,
+    selected,
+    onopen,
+    ontoggle,
+    cellSize = 150,
+    startAt = null,
+  }: Props = $props();
 
   /** A plain click opens a photo, unless a selection is under way. */
   function onclick(event: MouseEvent, index: number) {
@@ -31,7 +46,6 @@
     else onopen(index);
   }
 
-  const TARGET_CELL = 150;
   const GAP = 3;
   const SIDE_PADDING = 16;
   const MONTH_HEADER = 52;
@@ -55,11 +69,45 @@
     monthTitle: string | null;
     headerHeight: number;
     height: number;
+    /** Rows of cells. */
+    rows: number;
+    /** Size of the featured first card in cells; 0 when there is none. */
+    featuredWidth: number;
+    featuredHeight: number;
+  }
+
+  /**
+   * How large a day's featured card is, in cells. A day gets one only if it
+   * has enough photos to fill the space beside it, so no gaps appear.
+   */
+  function featuredSize(count: number, columns: number): [number, number] {
+    for (const [width, height] of [
+      [3, 2],
+      [2, 2],
+    ]) {
+      if (columns > width && count >= 1 + height * (columns - width)) return [width, height];
+    }
+    return [0, 0];
+  }
+
+  /** Where the photo number `i` of a section goes: its row and column. */
+  function place(section: Section, i: number, columns: number): { row: number; column: number } {
+    const { featuredWidth: width, featuredHeight: height } = section;
+    if (width === 0) return { row: Math.floor(i / columns), column: i % columns };
+    if (i === 0) return { row: 0, column: 0 };
+    // Beside the featured card there are `side` cells per row.
+    const side = columns - width;
+    const beside = i - 1;
+    if (beside < height * side) {
+      return { row: Math.floor(beside / side), column: width + (beside % side) };
+    }
+    const below = beside - height * side;
+    return { row: height + Math.floor(below / columns), column: below % columns };
   }
 
   const layout = $derived.by(() => {
     const width = Math.max(0, clientWidth - 2 * SIDE_PADDING);
-    const columns = Math.max(2, Math.floor((width + GAP) / (TARGET_CELL + GAP)));
+    const columns = Math.max(2, Math.floor((width + GAP) / (cellSize + GAP)));
     const cell = (width - GAP * (columns - 1)) / columns;
     const pitch = cell + GAP;
 
@@ -72,8 +120,24 @@
       const monthTitle = month !== previousMonth ? formatMonth(group.day) : null;
       previousMonth = month;
       const headerHeight = DAY_HEADER + (monthTitle ? MONTH_HEADER : 0);
-      const height = headerHeight + Math.ceil(group.count / columns) * pitch;
-      sections.push({ ...group, start, top, monthTitle, headerHeight, height });
+      const [featuredWidth, featuredHeight] = featuredSize(group.count, columns);
+      const rows =
+        featuredWidth === 0
+          ? Math.ceil(group.count / columns)
+          : featuredHeight +
+            Math.ceil((group.count - 1 - featuredHeight * (columns - featuredWidth)) / columns);
+      const height = headerHeight + rows * pitch;
+      sections.push({
+        ...group,
+        start,
+        top,
+        monthTitle,
+        headerHeight,
+        height,
+        rows,
+        featuredWidth,
+        featuredHeight,
+      });
       top += height;
       start += group.count;
     }
@@ -96,7 +160,8 @@
   const visible = $derived.by(() => {
     const { sections, columns, cell, pitch } = layout;
     const headers: Section[] = [];
-    const cells: { index: number; x: number; y: number }[] = [];
+    /** `size` is the cell's width and height in pixels. */
+    const cells: { index: number; x: number; y: number; width: number; height: number }[] = [];
     if (sections.length === 0 || cell <= 0) return { headers, cells, first: 0, last: -1 };
 
     const viewTop = scrollTop - OVERSCAN;
@@ -107,26 +172,48 @@
       headers.push(section);
 
       const gridTop = section.top + section.headerHeight;
-      const rows = Math.ceil(section.count / columns);
+      const { featuredWidth, featuredHeight } = section;
       const firstRow = Math.max(0, Math.floor((viewTop - gridTop) / pitch));
-      const lastRow = Math.min(rows - 1, Math.floor((viewBottom - gridTop) / pitch));
+      const lastRow = Math.min(section.rows - 1, Math.floor((viewBottom - gridTop) / pitch));
+      const add = (i: number, row: number, column: number, across = 1, down = 1) =>
+        cells.push({
+          index: section.start + i,
+          x: SIDE_PADDING + column * pitch,
+          y: gridTop + row * pitch,
+          width: across * pitch - GAP,
+          height: down * pitch - GAP,
+        });
+
+      if (featuredWidth > 0 && firstRow < featuredHeight && lastRow >= 0) {
+        add(0, 0, 0, featuredWidth, featuredHeight);
+      }
+      const side = columns - featuredWidth;
+      const beside = featuredHeight * side;
       for (let row = firstRow; row <= lastRow; row++) {
-        const rowEnd = Math.min(section.count, (row + 1) * columns);
-        for (let i = row * columns; i < rowEnd; i++) {
-          cells.push({
-            index: section.start + i,
-            x: SIDE_PADDING + (i % columns) * pitch,
-            y: gridTop + row * pitch,
-          });
+        if (featuredWidth > 0 && row < featuredHeight) {
+          for (let slot = 0; slot < side; slot++) {
+            add(1 + row * side + slot, row, featuredWidth + slot);
+          }
+        } else {
+          // Photos before this row: the featured one and those beside it.
+          const before =
+            featuredWidth > 0 ? 1 + beside + (row - featuredHeight) * columns : row * columns;
+          const rowEnd = Math.min(section.count, before + columns);
+          for (let i = before; i < rowEnd; i++) add(i, row, i - before);
         }
       }
     }
-    return {
-      headers,
-      cells,
-      first: cells.length > 0 ? cells[0].index : 0,
-      last: cells.length > 0 ? cells[cells.length - 1].index : -1,
-    };
+    let first = 0;
+    let last = -1;
+    if (cells.length > 0) {
+      first = cells[0].index;
+      last = cells[0].index;
+      for (const { index } of cells) {
+        first = Math.min(first, index);
+        last = Math.max(last, index);
+      }
+    }
+    return { headers, cells, first, last };
   });
 
   // Ask for the photos in view once the scroll position has settled. While the
@@ -158,7 +245,7 @@
       section = candidate;
     }
     if (!section) return;
-    const row = Math.floor((index - section.start) / columns);
+    const { row } = place(section, index - section.start, columns);
     const y = section.top + section.headerHeight + row * pitch;
     if (y < scroller.scrollTop) {
       scroller.scrollTop = Math.max(0, y - section.headerHeight);
@@ -166,10 +253,25 @@
       scroller.scrollTop = y + cell - clientHeight + GAP;
     }
   }
+
+  /** Scrolls to the first day of a month (`year * 12 + month - 1`). */
+  export function scrollToMonth(target: number) {
+    const section = layout.sections.find((candidate) => monthKey(candidate.day) <= target);
+    if (section) scroller.scrollTop = section.top;
+  }
+
+  // Start at the month asked for, once there is a layout to scroll in.
+  let started = false;
+  $effect(() => {
+    if (started || startAt === null || clientWidth === 0 || layout.sections.length === 0) return;
+    started = true;
+    scrollToMonth(startAt);
+    scrollTop = scroller.scrollTop;
+  });
 </script>
 
 <div class="scroller" bind:this={scroller} bind:clientWidth bind:clientHeight {onscroll}>
-  <div class="canvas" style:height="{layout.height}px" style:--cell="{layout.cell}px">
+  <div class="canvas" style:height="{layout.height}px">
     {#each visible.headers as section (section.day)}
       <header style:transform="translateY({section.top}px)" style:height="{section.headerHeight}px">
         {#if section.monthTitle}
@@ -189,6 +291,8 @@
         class="cell"
         class:selected={isSelected}
         style:transform="translate({cell.x}px, {cell.y}px)"
+        style:width="{cell.width}px"
+        style:height="{cell.height}px"
       >
         <button
           class="open"
@@ -198,7 +302,7 @@
           {#if photo}
             <!-- A video without a thumbnail keeps the cell's plain background. -->
             <img
-              src={thumbUrl(photo.fingerprint)}
+              src={thumbUrl(photo.fingerprint, cell.width > 320 ? "preview" : "grid")}
               alt=""
               draggable="false"
               decoding="async"
@@ -276,8 +380,6 @@
     position: absolute;
     top: 0;
     left: 0;
-    width: var(--cell);
-    height: var(--cell);
     background: var(--surface-hover);
   }
 

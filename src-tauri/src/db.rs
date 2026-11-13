@@ -462,6 +462,65 @@ pub fn timeline(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<Da
     rows.collect()
 }
 
+/// One month of a listing, for the Years and Months overviews.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonthSummary {
+    pub year: i32,
+    /// 1 to 12.
+    pub month: u32,
+    pub count: u32,
+    /// A few photos to show for the month: favorites first, then a sample
+    /// spread over the whole month.
+    pub covers: Vec<String>,
+}
+
+/// How many cover photos each month gets.
+const MONTH_COVERS: u32 = 7;
+
+/// The months of a listing, newest first.
+pub fn months(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<MonthSummary>> {
+    let (filter, param) = listing.filter();
+    // Ordering by fingerprint (a hash) picks the same random-looking sample
+    // every time, instead of seven shots of the month's last event.
+    let mut stmt = conn.prepare(&format!(
+        "SELECT ym, total, fingerprint FROM (
+             SELECT strftime('%Y-%m', sort_date / 1000, 'unixepoch') AS ym,
+                    COUNT(*) OVER (PARTITION BY strftime('%Y-%m', sort_date / 1000, 'unixepoch'))
+                        AS total,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY strftime('%Y-%m', sort_date / 1000, 'unixepoch')
+                        ORDER BY {IS_FAVORITE} DESC, kind, fingerprint) AS position,
+                    fingerprint
+             FROM photos {filter})
+         WHERE position <= {MONTH_COVERS}
+         ORDER BY ym DESC, position"
+    ))?;
+    let mut months: Vec<MonthSummary> = Vec::new();
+    let mut rows = stmt.query([param])?;
+    while let Some(row) = rows.next()? {
+        let ym: String = row.get(0)?;
+        let parsed = ym.split_once('-').and_then(|(year, month)| {
+            // Years before 0 come out as "-0001-05": not worth showing right.
+            Some((year.parse::<i32>().ok()?, month.parse::<u32>().ok()?))
+        });
+        let Some((year, month)) = parsed else {
+            continue;
+        };
+        let fingerprint: String = row.get(2)?;
+        match months.last_mut() {
+            Some(last) if last.year == year && last.month == month => last.covers.push(fingerprint),
+            _ => months.push(MonthSummary {
+                year,
+                month,
+                count: row.get(1)?,
+                covers: vec![fingerprint],
+            }),
+        }
+    }
+    Ok(months)
+}
+
 /// A photo as the grid lists it.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1038,6 +1097,52 @@ mod tests {
             east: 1.0,
         };
         assert!(photos_page(&conn, &broken, 0, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn months_have_counts_and_covers() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        // 2024-07-14 and 2023-12-31 as wall-clock milliseconds.
+        let july = 1_720_915_200_000;
+        let december = 1_703_980_800_000;
+        for n in 0..10 {
+            let mut photo = dated(&format!("july-{n}.jpg"), july + n * 1000);
+            photo.fingerprint = format!("j{n}");
+            upsert(&tx, &photo).unwrap();
+        }
+        let mut old = dated("december.jpg", december);
+        old.fingerprint = "d".into();
+        upsert(&tx, &old).unwrap();
+        let fav = Event {
+            ts: 1,
+            op: Op::Fav {
+                photo: "j7".into(),
+                on: true,
+            },
+        };
+        apply_event(&tx, "device", &fav).unwrap();
+        tx.commit().unwrap();
+
+        let months = months(&conn, &Listing::Library).unwrap();
+        assert_eq!(months.len(), 2);
+        assert_eq!(
+            (months[0].year, months[0].month, months[0].count),
+            (2024, 7, 10)
+        );
+        assert_eq!(months[0].covers.len(), 7);
+        // The favorite leads.
+        assert_eq!(months[0].covers[0], "j7");
+        assert_eq!(
+            months[1],
+            MonthSummary {
+                year: 2023,
+                month: 12,
+                count: 1,
+                covers: vec!["d".into()],
+            }
+        );
+        assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);
     }
 
     #[test]

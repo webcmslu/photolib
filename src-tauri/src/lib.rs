@@ -637,6 +637,16 @@ fn open_index(state: &AppState, path: &str) -> Result<rusqlite::Connection, Stri
     db::open(&state.index_db(path)).map_err(|e| e.to_string())
 }
 
+/// The months of a listing with a few cover photos each, newest first.
+#[tauri::command(async)]
+fn months(
+    path: String,
+    listing: db::Listing,
+    state: State<'_, AppState>,
+) -> Result<Vec<db::MonthSummary>, String> {
+    db::months(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
+}
+
 /// Day groups of a listing, newest first.
 #[tauri::command(async)]
 fn timeline(
@@ -836,6 +846,7 @@ pub fn run() {
             photos_page,
             folders,
             photo_details,
+            months,
             map_clusters,
             albums,
             apply_ops,

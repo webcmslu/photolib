@@ -32,6 +32,9 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   GPS position on an OpenStreetMap map, clustered by zoom level; clicking a
   marker lists its photos. The map tiles are fetched from
   `tile.openstreetmap.org`, the only thing the app loads from the internet.
+- Milestone 9 (browsing polish): Years / Months / All Photos views, a
+  larger "featured" card for days with many photos, a thumbnail size slider
+  (also Ctrl/Cmd + and -), and a resizable sidebar.
 
 ## Develop
 

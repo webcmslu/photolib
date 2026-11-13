@@ -13,6 +13,7 @@
     libraryStats,
     listAlbums,
     listFolders,
+    listMonths,
     onIndexEvent,
     rescanLibrary,
     syncLibrary,
@@ -23,6 +24,7 @@
     type IndexEvent,
     type LibraryInfo,
     type Listing,
+    type MonthSummary,
     type Op,
     type ScanProgress,
     type ScanSummary,
@@ -30,6 +32,7 @@
   } from "./api";
   import { formatNumber, photoCount } from "./format";
   import MapView from "./MapView.svelte";
+  import Overview from "./Overview.svelte";
   import { PhotoPages } from "./pages.svelte";
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
@@ -275,6 +278,78 @@
   /** Bumped whenever the listing is reloaded. */
   let revision = $state(0);
 
+  // --- How the listing is shown ----------------------------------------------
+
+  /** Reads a number the user set earlier (a size), within its limits. */
+  function remembered(key: string, fallback: number, min: number, max: number): number {
+    const stored = Number(localStorage.getItem(key));
+    return stored >= min && stored <= max ? stored : fallback;
+  }
+
+  const CELL_MIN = 70;
+  const CELL_MAX = 360;
+  /** The width the grid's cells aim for: the zoom level. */
+  let cellSize = $state(remembered("photolib.cellSize", 150, CELL_MIN, CELL_MAX));
+  $effect(() => localStorage.setItem("photolib.cellSize", String(cellSize)));
+
+  const SIDEBAR_MIN = 150;
+  const SIDEBAR_MAX = 600;
+  let sidebarWidth = $state(remembered("photolib.sidebarWidth", 220, SIDEBAR_MIN, SIDEBAR_MAX));
+  $effect(() => localStorage.setItem("photolib.sidebarWidth", String(sidebarWidth)));
+
+  let resizing: { pointerId: number; startX: number; startWidth: number } | null = null;
+  function startResize(event: PointerEvent) {
+    resizing = { pointerId: event.pointerId, startX: event.clientX, startWidth: sidebarWidth };
+    (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+  }
+  function resize(event: PointerEvent) {
+    if (resizing?.pointerId !== event.pointerId) return;
+    const wanted = resizing.startWidth + event.clientX - resizing.startX;
+    sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, wanted));
+  }
+  function resizeWithKeys(event: KeyboardEvent) {
+    const step = event.key === "ArrowLeft" ? -16 : event.key === "ArrowRight" ? 16 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, sidebarWidth + step));
+  }
+
+  /** Years and months are overviews; "all" is the photo grid. */
+  let viewMode = $state<"years" | "months" | "all">("all");
+  let months = $state<MonthSummary[]>([]);
+  /** Where the next view starts: a year for the months, a month for the grid. */
+  let startYear = $state<number | null>(null);
+  let startMonth = $state<number | null>(null);
+
+  async function loadMonths(target: PhotoPages) {
+    try {
+      const loaded = await listMonths(target.libraryPath, target.listing);
+      if (target === pages) months = loaded;
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  // The overviews need the months; the grid does not.
+  $effect(() => {
+    if (viewMode !== "all") loadMonths(pages);
+  });
+
+  function setViewMode(mode: "years" | "months" | "all") {
+    startYear = null;
+    startMonth = null;
+    viewMode = mode;
+  }
+
+  /** Ctrl/Cmd with + or - zooms the grid, like in a browser. */
+  function onkeydown(event: KeyboardEvent) {
+    if (!(event.ctrlKey || event.metaKey) || viewerIndex !== null) return;
+    const factor = event.key === "+" || event.key === "=" ? 1.25 : event.key === "-" ? 0.8 : 0;
+    if (factor === 0) return;
+    event.preventDefault();
+    cellSize = Math.round(Math.min(CELL_MAX, Math.max(CELL_MIN, cellSize * factor)));
+  }
+
   let grid = $state<PhotoGrid>();
   let viewerIndex = $state<number | null>(null);
   const selected = new SvelteSet<number>();
@@ -286,6 +361,9 @@
     // Only a change of `pages` may re-run this, not the state it resets.
     untrack(() => {
       groups = [];
+      months = [];
+      startYear = null;
+      startMonth = null;
       groupsLoaded = false;
       viewerIndex = null;
       selected.clear();
@@ -322,6 +400,7 @@
     selected.clear();
     selectionAnchor = null;
     loadGroups(pages);
+    if (viewMode !== "all") loadMonths(pages);
     loadSidebar();
   }
 
@@ -419,6 +498,8 @@
   }
 </script>
 
+<svelte:window {onkeydown} />
+
 <div class="library">
   <header>
     <button class="link" onclick={onclose}>‹ Libraries</button>
@@ -465,7 +546,7 @@
   {/if}
 
   <div class="body">
-    <nav aria-label="Library sections">
+    <nav aria-label="Library sections" style:width="{sidebarWidth}px">
       {#snippet row(target: Listing, label: string, count: number | null, depth = 0, enabled = true)}
         <button
           class="row"
@@ -535,6 +616,23 @@
         )}
       {/each}
     </nav>
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+    <div
+      class="resizer"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize the sidebar"
+      aria-valuenow={sidebarWidth}
+      aria-valuemin={SIDEBAR_MIN}
+      aria-valuemax={SIDEBAR_MAX}
+      tabindex="0"
+      onpointerdown={startResize}
+      onpointermove={resize}
+      onpointerup={() => (resizing = null)}
+      onpointercancel={() => (resizing = null)}
+      onkeydown={resizeWithKeys}
+      ondblclick={() => (sidebarWidth = 220)}
+    ></div>
 
     <main>
       {#if showMap}
@@ -614,6 +712,26 @@
           <strong class="title">{title}</strong>
           {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
           <span class="spacer"></span>
+          <div class="segmented" role="group" aria-label="View">
+            {#each [["years", "Years"], ["months", "Months"], ["all", "All Photos"]] as const as [mode, label] (mode)}
+              <button aria-pressed={viewMode === mode} onclick={() => setViewMode(mode)}>
+                {label}
+              </button>
+            {/each}
+          </div>
+          <span class="spacer"></span>
+          {#if viewMode === "all"}
+            <input
+              class="zoom"
+              type="range"
+              min={CELL_MIN}
+              max={CELL_MAX}
+              step="10"
+              bind:value={cellSize}
+              aria-label="Thumbnail size"
+              title="Thumbnail size (Ctrl/Cmd + and -)"
+            />
+          {/if}
           {#if currentAlbum}
             {#if confirmingDelete}
               <span class="dim">Delete this album? The photos stay in the library.</span>
@@ -636,12 +754,28 @@
       </div>
 
       <div class="grid">
-        {#if groups.length > 0}
+        {#if groups.length > 0 && viewMode !== "all"}
+          <Overview
+            mode={viewMode}
+            {months}
+            {startYear}
+            onyear={(year) => {
+              startYear = year;
+              viewMode = "months";
+            }}
+            onmonth={(month) => {
+              startMonth = month;
+              viewMode = "all";
+            }}
+          />
+        {:else if groups.length > 0}
           <PhotoGrid
             bind:this={grid}
             {groups}
             {pages}
             {selected}
+            {cellSize}
+            startAt={startMonth}
             onopen={(index) => (viewerIndex = index)}
             ontoggle={toggleSelected}
           />
@@ -771,12 +905,55 @@
   }
 
   nav {
-    width: 220px;
     flex-shrink: 0;
     padding: 8px 0 16px;
     overflow-y: auto;
-    border-right: 1px solid var(--border);
     background: var(--surface);
+  }
+
+  /* The line between the sidebar and the photos; drag it to resize. */
+  .resizer {
+    flex-shrink: 0;
+    width: 5px;
+    margin-right: -4px;
+    border-left: 1px solid var(--border);
+    cursor: col-resize;
+    touch-action: none;
+    z-index: 1;
+  }
+
+  .resizer:hover,
+  .resizer:focus-visible {
+    border-left: 3px solid var(--accent);
+    outline: none;
+  }
+
+  .segmented {
+    display: flex;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+
+  .segmented button {
+    padding: 4px 12px;
+    border: none;
+    background: var(--surface);
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .segmented button + button {
+    border-left: 1px solid var(--border);
+  }
+
+  .segmented button[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .toolbar input.zoom {
+    width: 120px;
   }
 
   nav h2 {
