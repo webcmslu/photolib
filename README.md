@@ -21,6 +21,8 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   stored as per-device append-only logs in `<library>/.photolib/` and merged
   on every computer that opens the folder. Works offline from the local cache
   (read-only).
+- Milestone 6 (packaging): CI checks and release builds for macOS, Windows
+  and Linux with GitHub Actions.
 
 ## Develop
 
@@ -37,6 +39,30 @@ cd src-tauri && cargo test
 cargo test --release -- --ignored --nocapture   # 10k-file indexing benchmark
 npm run tauri build    # release bundle
 ```
+
+## Packaging
+
+Two GitHub Actions workflows live in `.github/workflows/`:
+
+- `ci.yml` runs on every push to `main` and on pull requests: UI type-check
+  and build, `cargo fmt --check`, clippy and the Rust tests.
+- `release.yml` builds the installers: dmg for macOS (Apple Silicon and
+  Intel), msi and exe for Windows, deb and AppImage for Linux. Pushing a tag
+  such as `v0.1.0` attaches them to a draft GitHub release; running the
+  workflow by hand keeps them as workflow artifacts instead.
+
+macOS builds are signed and notarized only if the `APPLE_*` repository
+secrets listed at the top of `release.yml` are set.
+
+HEIC in the installers: the deb includes it (it depends on `libheif1` and
+`libheif-plugin-libde265`). The AppImage bundles libheif but not its HEVC
+decoder plugin, so HEIC works there only if the host has
+`libheif-plugin-libde265` installed. The macOS and Windows installers
+are currently built **without** HEIC, because the app would otherwise depend
+on a libheif that is not on the user's machine. A local build on a Mac with
+`brew install libheif` does have HEIC.
+
+To build installers locally: `npm run tauri build`.
 
 ## Layout
 

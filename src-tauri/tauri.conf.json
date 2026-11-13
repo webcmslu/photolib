@@ -32,6 +32,20 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Photography",
+    "shortDescription": "Photo browser for any folder",
+    "longDescription": "Browse photos in any folder: a NAS, an external drive or a local disk. Originals are never modified; favorites and albums are shared by every computer that opens the folder.",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libheif1",
+          "libheif-plugin-libde265"
+        ]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }

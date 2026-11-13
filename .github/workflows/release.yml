@@ -1,0 +1,130 @@
+# Builds the installers for macOS (dmg), Windows (msi, exe) and Linux
+# (deb, AppImage).
+#
+# - Push a tag like `v0.1.0`: builds everything and attaches it to a draft
+#   GitHub release for that tag.
+# - Run manually (Actions > Release > Run workflow): builds everything and
+#   keeps the installers as workflow artifacts, without making a release.
+#
+# macOS signing and notarization happen only when these repository secrets
+# are set; without them the app is built unsigned:
+#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD   password of that .p12
+#   APPLE_SIGNING_IDENTITY       e.g. "Developer ID Application: Name (TEAMID)"
+#   APPLE_ID, APPLE_PASSWORD     Apple ID and an app-specific password
+#   APPLE_TEAM_ID
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # HEIC needs the libheif system library. It is on where that is a
+          # plain package install (Linux) and off elsewhere for now: see
+          # "Packaging" in the README.
+          - name: Linux x64
+            os: ubuntu-24.04
+            args: ""
+          - name: macOS Apple Silicon
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: "--target aarch64-apple-darwin -- --no-default-features"
+          - name: macOS Intel
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: "--target x86_64-apple-darwin -- --no-default-features"
+          - name: Windows x64
+            os: windows-latest
+            args: "-- --no-default-features"
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libxdo-dev libssl-dev pkg-config patchelf file \
+            libheif-dev libheif-plugin-libde265
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      # Pass the signing settings on only if they exist: an empty certificate
+      # variable would make the build try (and fail) to sign.
+      - name: Enable macOS signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No signing certificate configured: building unsigned."
+            exit 0
+          fi
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
+                      APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!name}" ]; then
+              echo "$name=${!name}" >> "$GITHUB_ENV"
+            fi
+          done
+
+      - name: Build and attach to a draft release
+        if: github.ref_type == 'tag'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: Photolib ${{ github.ref_name }}
+          releaseDraft: true
+          args: ${{ matrix.args }}
+
+      - name: Build only
+        if: github.ref_type != 'tag'
+        uses: tauri-apps/tauri-action@v0
+        with:
+          args: ${{ matrix.args }}
+
+      - name: Keep the installers as artifacts
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: photolib-${{ matrix.target || runner.os }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/**/release/bundle/dmg/*.dmg
+            src-tauri/target/**/release/bundle/msi/*.msi
+            src-tauri/target/**/release/bundle/nsis/*.exe
+            src-tauri/target/**/release/bundle/deb/*.deb
+            src-tauri/target/**/release/bundle/appimage/*.AppImage
