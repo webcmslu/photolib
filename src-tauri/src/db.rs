@@ -352,7 +352,7 @@ fn folder_of(rel_path: &str) -> &str {
 }
 
 /// What a photo listing shows.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Listing {
     /// Every photo that is not hidden.
@@ -366,6 +366,13 @@ pub enum Listing {
         album: String,
     },
     Hidden,
+    /// The photos taken inside a rectangle on the map.
+    Area {
+        south: f64,
+        west: f64,
+        north: f64,
+        east: f64,
+    },
 }
 
 const IS_HIDDEN: &str =
@@ -401,6 +408,25 @@ impl Listing {
                 format!("WHERE {IS_LISTED} AND {IS_HIDDEN} AND ?1 IS NULL"),
                 None,
             ),
+            Listing::Area {
+                south,
+                west,
+                north,
+                east,
+            } => {
+                // Numbers are written into the SQL text: `{:?}` prints a
+                // finite float exactly, and anything else selects nothing.
+                let bounds = [south, west, north, east];
+                let inside = if bounds.iter().all(|value| value.is_finite()) {
+                    format!(
+                        "latitude BETWEEN {south:?} AND {north:?}
+                         AND longitude BETWEEN {west:?} AND {east:?}"
+                    )
+                } else {
+                    "0".to_owned()
+                };
+                (format!("WHERE {visible} AND {inside} AND ?1 IS NULL"), None)
+            }
         }
     }
 }
@@ -574,6 +600,39 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
         .query_map([&details.fingerprint], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     Ok(Some(details))
+}
+
+/// A photo's position, for the map.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeoPoint {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub fingerprint: String,
+}
+
+/// The listed, non-hidden photos that have a position inside the rectangle,
+/// newest first.
+pub fn geo_points(
+    conn: &Connection,
+    south: f64,
+    west: f64,
+    north: f64,
+    east: f64,
+) -> rusqlite::Result<Vec<GeoPoint>> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT latitude, longitude, fingerprint FROM photos
+         WHERE {IS_LISTED} AND NOT {IS_HIDDEN}
+           AND latitude BETWEEN ?1 AND ?3 AND longitude BETWEEN ?2 AND ?4
+         ORDER BY sort_date DESC, rel_path"
+    ))?;
+    let rows = stmt.query_map(params![south, west, north, east], |row| {
+        Ok(GeoPoint {
+            latitude: row.get(0)?,
+            longitude: row.get(1)?,
+            fingerprint: row.get(2)?,
+        })
+    })?;
+    rows.collect()
 }
 
 // --- Organization (see org.rs) ------------------------------------------------
@@ -926,6 +985,59 @@ mod tests {
         tx.commit().unwrap();
         assert_eq!(pair_live_photos(&mut conn).unwrap(), 1);
         assert_eq!(count(&conn).unwrap(), 4);
+    }
+
+    #[test]
+    fn area_listing_and_geo_points() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        let at = |rel_path: &str, latitude: f64, longitude: f64| PhotoRow {
+            fingerprint: rel_path.into(),
+            latitude: Some(latitude),
+            longitude: Some(longitude),
+            ..row(rel_path, 1)
+        };
+        upsert(&tx, &at("luxembourg.jpg", 49.61, 6.13)).unwrap();
+        upsert(&tx, &at("paris.jpg", 48.86, 2.35)).unwrap();
+        upsert(&tx, &at("sydney.jpg", -33.87, 151.21)).unwrap();
+        let nowhere = PhotoRow {
+            latitude: None,
+            longitude: None,
+            ..row("nowhere.jpg", 1)
+        };
+        upsert(&tx, &nowhere).unwrap();
+        tx.commit().unwrap();
+
+        let europe = Listing::Area {
+            south: 40.0,
+            west: -5.0,
+            north: 55.0,
+            east: 10.0,
+        };
+        let mut names: Vec<String> = photos_page(&conn, &europe, 0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.rel_path)
+            .collect();
+        names.sort();
+        assert_eq!(names, ["luxembourg.jpg", "paris.jpg"]);
+        assert_eq!(timeline(&conn, &europe).unwrap()[0].count, 2);
+        assert_eq!(
+            geo_points(&conn, -90.0, -180.0, 90.0, 180.0).unwrap().len(),
+            3
+        );
+        assert_eq!(
+            geo_points(&conn, -40.0, 100.0, 0.0, 180.0).unwrap().len(),
+            1
+        );
+
+        let broken = Listing::Area {
+            south: f64::NAN,
+            west: 0.0,
+            north: 1.0,
+            east: 1.0,
+        };
+        assert!(photos_page(&conn, &broken, 0, 10).unwrap().is_empty());
     }
 
     #[test]

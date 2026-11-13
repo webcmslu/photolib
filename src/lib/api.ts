@@ -185,7 +185,9 @@ export type Listing =
   | { kind: "folder"; folder: string }
   | { kind: "favorites" }
   | { kind: "album"; album: string }
-  | { kind: "hidden" };
+  | { kind: "hidden" }
+  /** The photos taken inside a rectangle on the map. */
+  | { kind: "area"; south: number; west: number; north: number; east: number };
 
 /** Day groups of a listing, newest first. */
 export function timeline(path: string, listing: Listing): Promise<DayGroup[]> {
@@ -224,6 +226,30 @@ export function thumbUrl(fingerprint: string, size: "grid" | "preview" = "grid")
  */
 export function photoUrl(fingerprint: string): string {
   return convertFileSrc(fingerprint, "photo");
+}
+
+/** A group of photos taken close together. Mirrors `Cluster` in src-tauri/src/geo.rs. */
+export interface MapCluster {
+  /** Where the marker goes: the average position of the photos. */
+  latitude: number;
+  longitude: number;
+  count: number;
+  /** The newest photo, shown on the marker. */
+  fingerprint: string;
+  /** The rectangle that holds all the photos. */
+  south: number;
+  west: number;
+  north: number;
+  east: number;
+}
+
+/** The markers for one rectangle of the map at one zoom level. */
+export function mapClusters(
+  path: string,
+  bounds: { south: number; west: number; north: number; east: number },
+  zoom: number,
+): Promise<MapCluster[]> {
+  return invoke("map_clusters", { path, ...bounds, zoom });
 }
 
 // The Linux webview can't play video from `photo://`; there the app serves

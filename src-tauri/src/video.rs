@@ -14,7 +14,8 @@
 //! │  ├─ keys         the key names, numbered from 1
 //! │  └─ ilst         one atom per value, named by key number
 //! └─ udta
-//!    └─ ©xyz         GPS position, written by Android phones
+//!    ├─ ©xyz         GPS position as text, written by Android phones
+//!    └─ loci         GPS position as numbers (the 3GPP way)
 //! ```
 
 use std::fs::File;
@@ -72,6 +73,8 @@ struct Parsed {
     /// Apple's creation date: local time where the video was shot.
     apple_date: Option<String>,
     location: Option<String>,
+    /// Latitude and longitude from a `loci` atom.
+    position: Option<(f64, f64)>,
     make: Option<String>,
     model: Option<String>,
     content_id: Option<String>,
@@ -84,7 +87,11 @@ impl Parsed {
             .as_deref()
             .and_then(parse_apple_date)
             .or_else(|| self.created_utc_ms.and_then(utc_to_wall_clock));
-        let position = self.location.as_deref().and_then(parse_iso6709);
+        let position = self
+            .location
+            .as_deref()
+            .and_then(parse_iso6709)
+            .or(self.position);
         PhotoMeta {
             taken_at,
             orientation: None,
@@ -193,11 +200,26 @@ fn walk<R: Read + Seek>(
                         .map(|text| String::from_utf8_lossy(text).into_owned());
                 }
             }
+            b"loci" => parsed.position = read_loci(&read_leaf(reader, &atom)?),
             _ => {}
         }
         reader.seek(SeekFrom::Start(atom.end))?;
     }
     Ok(())
+}
+
+/// The 3GPP location atom: version and flags (4 bytes), language (2), a
+/// zero-terminated place name, a role byte, then longitude and latitude as
+/// fixed-point numbers with 16 fractional bits.
+fn read_loci(data: &[u8]) -> Option<(f64, f64)> {
+    let name_len = data.get(6..)?.iter().position(|byte| *byte == 0)?;
+    let at = 6 + name_len + 1 + 1;
+    let degrees = |at| Some(f64::from(be32(data, at)? as i32) / 65536.0);
+    let (longitude, latitude) = (degrees(at)?, degrees(at + 4)?);
+    let valid = (-90.0..=90.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude)
+        && (latitude != 0.0 || longitude != 0.0);
+    valid.then_some((latitude, longitude))
 }
 
 fn be32(data: &[u8], at: usize) -> Option<u32> {
@@ -549,6 +571,30 @@ mod tests {
         let meta = read(&path);
         assert!(meta.is_video);
         assert_eq!(meta.taken_at, None);
+    }
+
+    #[test]
+    fn reads_3gpp_location() {
+        // Version and flags, language, a place name, a role byte, then
+        // longitude 6.1319 and latitude 49.6116, and the rest of the atom.
+        let mut loci = b"\0\0\0\0\x15\xC7Home\0\0".to_vec();
+        loci.extend_from_slice(&((6.1319f64 * 65536.0) as i32).to_be_bytes());
+        loci.extend_from_slice(&((49.6116f64 * 65536.0) as i32).to_be_bytes());
+        loci.extend_from_slice(b"\0\0\0\0earth\0\0");
+        let file = movie(&[mvhd(CREATED, 9000), atom(b"udta", &atom(b"loci", &loci))]);
+        let meta = parse_bytes(&file).into_meta(Some);
+        assert!((meta.latitude.unwrap() - 49.6116).abs() < 1e-4);
+        assert!((meta.longitude.unwrap() - 6.1319).abs() < 1e-4);
+
+        assert_eq!(read_loci(b"\0\0\0\0\0\0"), None);
+        let south_west = {
+            let mut loci = b"\0\0\0\0\0\0\0\0".to_vec();
+            loci.extend_from_slice(&((-74.006f64 * 65536.0) as i32).to_be_bytes());
+            loci.extend_from_slice(&((-33.5f64 * 65536.0) as i32).to_be_bytes());
+            loci
+        };
+        let (latitude, longitude) = read_loci(&south_west).unwrap();
+        assert!((latitude - -33.5).abs() < 1e-4 && (longitude - -74.006).abs() < 1e-4);
     }
 
     #[test]

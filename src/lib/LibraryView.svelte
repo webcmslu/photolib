@@ -1,7 +1,7 @@
 <!--
-  An open library: a sidebar (Library, Favorites, Hidden, albums, folders),
-  the photo grid for whatever is selected there, the scan status, and the
-  viewer on top.
+  An open library: a sidebar (Library, Favorites, Hidden, Map, albums,
+  folders), the photo grid for whatever is selected there (or the map), the
+  scan status, and the viewer on top.
 -->
 <script lang="ts">
   import { onMount, untrack } from "svelte";
@@ -29,6 +29,7 @@
     type ThumbSummary,
   } from "./api";
   import { formatNumber, photoCount } from "./format";
+  import MapView from "./MapView.svelte";
   import { PhotoPages } from "./pages.svelte";
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
@@ -178,6 +179,8 @@
   let folders = $state<FolderEntry[]>([]);
   // Raw (not a deep proxy): it is passed to the backend as is.
   let listing = $state.raw<Listing>({ kind: "library" });
+  /** True while the map is shown instead of a photo grid. */
+  let showMap = $state(false);
 
   async function loadSidebar() {
     try {
@@ -244,6 +247,8 @@
         return currentAlbum?.name ?? "Album";
       case "folder":
         return listing.folder || "Top level";
+      case "area":
+        return "Photos from the map";
     }
   });
 
@@ -464,10 +469,13 @@
       {#snippet row(target: Listing, label: string, count: number | null, depth = 0, enabled = true)}
         <button
           class="row"
-          class:selected={JSON.stringify(target) === JSON.stringify(listing)}
+          class:selected={!showMap && JSON.stringify(target) === JSON.stringify(listing)}
           style:padding-left="{12 + depth * 14}px"
           disabled={!enabled}
-          onclick={() => (listing = target)}
+          onclick={() => {
+            listing = target;
+            showMap = false;
+          }}
           title={label}
         >
           <span class="row-name">{label}</span>
@@ -478,6 +486,13 @@
       {@render row({ kind: "library" }, "Library", null)}
       {@render row({ kind: "favorites" }, "Favorites", null)}
       {@render row({ kind: "hidden" }, "Hidden", null)}
+      <button
+        class="row"
+        class:selected={showMap || listing.kind === "area"}
+        onclick={() => (showMap = true)}
+      >
+        <span class="row-name">Map</span>
+      </button>
 
       <h2>
         Albums
@@ -522,6 +537,18 @@
     </nav>
 
     <main>
+      {#if showMap}
+        <div class="map">
+          <MapView
+            libraryPath={library.path}
+            {revision}
+            onopen={(area) => {
+              listing = area;
+              showMap = false;
+            }}
+          />
+        </div>
+      {:else}
       <div class="toolbar">
         {#if selected.size > 0}
           <strong>{formatNumber(selected.size)} selected</strong>
@@ -581,6 +608,9 @@
             />
           </form>
         {:else}
+          {#if listing.kind === "area"}
+            <button class="secondary" onclick={() => (showMap = true)}>‹ Map</button>
+          {/if}
           <strong class="title">{title}</strong>
           {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
           <span class="spacer"></span>
@@ -619,6 +649,7 @@
           <p class="empty">{emptyText}</p>
         {/if}
       </div>
+      {/if}
     </main>
   </div>
 </div>
@@ -881,6 +912,12 @@
   }
 
   .grid {
+    flex: 1;
+    min-height: 0;
+  }
+
+  .map {
+    position: relative;
     flex: 1;
     min-height: 0;
   }

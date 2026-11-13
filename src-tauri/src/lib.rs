@@ -1,6 +1,7 @@
 mod db;
 mod fingerprint;
 mod frames;
+mod geo;
 #[cfg(target_os = "macos")]
 mod heic_macos;
 mod indexer;
@@ -669,6 +670,23 @@ fn folders(path: String, state: State<'_, AppState>) -> Result<Vec<db::FolderEnt
     db::folders(&open_index(&state, &path)?).map_err(|e| e.to_string())
 }
 
+/// The markers for the part of the map on screen: the photos taken inside
+/// the rectangle, grouped for the zoom level.
+#[tauri::command(async)]
+fn map_clusters(
+    path: String,
+    south: f64,
+    west: f64,
+    north: f64,
+    east: f64,
+    zoom: u8,
+    state: State<'_, AppState>,
+) -> Result<Vec<geo::Cluster>, String> {
+    let conn = open_index(&state, &path)?;
+    let points = db::geo_points(&conn, south, west, north, east).map_err(|e| e.to_string())?;
+    Ok(geo::cluster(&points, zoom))
+}
+
 #[tauri::command(async)]
 fn photo_details(
     path: String,
@@ -818,6 +836,7 @@ pub fn run() {
             photos_page,
             folders,
             photo_details,
+            map_clusters,
             albums,
             apply_ops,
             create_album,

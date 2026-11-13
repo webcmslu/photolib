@@ -28,6 +28,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   more); MP4/MOV videos with thumbnails, date, length and GPS, played in the
   viewer; an iPhone Live Photo's `.MOV` is attached to its photo instead of
   being listed twice.
+- Milestone 8 (map): a Map section shows the photos and videos that have a
+  GPS position on an OpenStreetMap map, clustered by zoom level; clicking a
+  marker lists its photos. The map tiles are fetched from
+  `tile.openstreetmap.org`, the only thing the app loads from the internet.
 
 ## Develop
 
@@ -89,6 +93,7 @@ To build installers locally: `npm run tauri build`.
 - `raw.rs` finds the preview in RAW files; `video.rs` reads MP4/MOV
   metadata; `frames.rs` grabs a video frame for thumbnails; `media_server.rs`
   serves videos to the Linux webview, which can't play them from `photo://`.
+- `geo.rs` clusters photo positions for the map (`MapView.svelte`, Leaflet).
 - `org.rs` is the shared organization: the `.photolib` log format and the
   merge. Its header comment describes the format.
 - Per-machine state (recents now; index and thumbnails later) lives in the OS
