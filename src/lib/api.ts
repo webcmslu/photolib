@@ -1,5 +1,5 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -47,12 +47,12 @@ export function removeRecentLibrary(path: string): Promise<RecentLibrary[]> {
 
 /** Mirrors `Progress` in src-tauri/src/indexer.rs. */
 export interface ScanProgress {
-  phase: "scanning" | "indexing";
+  phase: "scanning" | "indexing" | "thumbnails";
   /** Image files found so far by the folder walk. */
   discovered: number;
-  /** New or changed files that need indexing. */
-  toIndex: number;
-  indexed: number;
+  /** Items the current phase has to process, and how many are done. */
+  total: number;
+  done: number;
 }
 
 /** Mirrors `ScanSummary` in src-tauri/src/indexer.rs. */
@@ -68,10 +68,22 @@ export interface ScanSummary {
   durationMs: number;
 }
 
+/** Mirrors `ThumbSummary` in src-tauri/src/thumbs.rs. */
+export interface ThumbSummary {
+  generated: number;
+  /** Files that are not decodable images. */
+  undecodable: number;
+  /** Files that could not be read this time; retried on the next scan. */
+  unreadable: number;
+  cancelled: boolean;
+  durationMs: number;
+}
+
 /** Mirrors `IndexEvent` in src-tauri/src/lib.rs. */
 export type IndexEvent =
   | { state: "running"; libraryPath: string; progress: ScanProgress }
-  | { state: "finished"; libraryPath: string; summary: ScanSummary }
+  | { state: "indexed"; libraryPath: string; summary: ScanSummary }
+  | { state: "finished"; libraryPath: string; summary: ScanSummary; thumbnails: ThumbSummary }
   | { state: "failed"; libraryPath: string; message: string };
 
 export interface LibraryStats {
@@ -94,4 +106,26 @@ export function closeLibrary(path: string): Promise<void> {
 
 export function libraryStats(path: string): Promise<LibraryStats> {
   return invoke("library_stats", { path });
+}
+
+// --- Photos and thumbnails --------------------------------------------------
+
+/** Mirrors `PhotoItem` in src-tauri/src/db.rs. */
+export interface PhotoItem {
+  fingerprint: string;
+  relPath: string;
+  /** Wall-clock date of the photo, encoded as if it were UTC. */
+  sortDate: number;
+}
+
+export function newestPhotos(path: string, limit: number): Promise<PhotoItem[]> {
+  return invoke("newest_photos", { path, limit });
+}
+
+/**
+ * URL of a cached thumbnail, served by the app's `thumb://` protocol.
+ * "grid" is about 256 px on the short side, "preview" about 1024 px on the long side.
+ */
+export function thumbUrl(fingerprint: string, size: "grid" | "preview" = "grid"): string {
+  return convertFileSrc(`${size}/${fingerprint}`, "thumb");
 }

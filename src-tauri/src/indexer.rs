@@ -44,6 +44,7 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 pub enum Phase {
     Scanning,
     Indexing,
+    Thumbnails,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -52,10 +53,11 @@ pub struct Progress {
     pub phase: Phase,
     /// Image files found so far by the walk.
     pub discovered: u64,
-    /// New or changed files that need indexing (known once the walk is done).
-    pub to_index: u64,
-    /// How many of `to_index` are done.
-    pub indexed: u64,
+    /// Items the current phase has to process: new or changed files when
+    /// indexing, photos without thumbnails when making thumbnails.
+    pub total: u64,
+    /// How many of `total` are done.
+    pub done: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -98,7 +100,7 @@ impl From<rusqlite::Error> for ScanError {
     }
 }
 
-/// A new or changed file waiting to be indexed.
+/// A new or changed file waiting to be done.
 struct Candidate {
     abs_path: PathBuf,
     rel_path: String,
@@ -109,7 +111,7 @@ struct Candidate {
 
 /// Brings the index in `conn` up to date with the folder at `root`.
 ///
-/// Set `cancel` from another thread to stop early; whatever was indexed so far
+/// Set `cancel` from another thread to stop early; whatever was done so far
 /// is kept. `on_progress` is called from this thread only.
 pub fn scan(
     root: &Path,
@@ -179,21 +181,21 @@ pub fn scan(
             on_progress(Progress {
                 phase: Phase::Scanning,
                 discovered,
-                to_index: 0,
-                indexed: 0,
+                total: 0,
+                done: 0,
             });
         }
     }
 
     // Phase 2: index new and changed files. Workers read files in parallel and
     // send rows over a bounded channel; this thread is the only database writer.
-    let to_index = todo.len() as u64;
-    let mut indexed = 0u64;
+    let total = todo.len() as u64;
+    let mut done = 0u64;
     on_progress(Progress {
         phase: Phase::Indexing,
         discovered,
-        to_index,
-        indexed,
+        total,
+        done,
     });
 
     let write_result = std::thread::scope(|scope| -> rusqlite::Result<()> {
@@ -223,7 +225,7 @@ pub fn scan(
                 }
                 None => summary.failed += 1,
             }
-            indexed += 1;
+            done += 1;
             pending += 1;
             if pending >= WRITE_BATCH {
                 tx.commit()?;
@@ -235,8 +237,8 @@ pub fn scan(
                 on_progress(Progress {
                     phase: Phase::Indexing,
                     discovered,
-                    to_index,
-                    indexed,
+                    total,
+                    done,
                 });
             }
         }
@@ -266,6 +268,13 @@ pub fn scan(
 fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
     let fingerprint = fingerprint::fingerprint(&candidate.abs_path).ok()?;
     let meta = metadata::read(&candidate.abs_path);
+    // EXIF gives the stored size; orientations 5 to 8 display it turned sideways.
+    let sideways = meta.orientation.is_some_and(|o| o >= 5);
+    let (width, height) = if sideways {
+        (meta.height, meta.width)
+    } else {
+        (meta.width, meta.height)
+    };
     Some(PhotoRow {
         rel_path: candidate.rel_path.clone(),
         size: candidate.size,
@@ -276,8 +285,8 @@ fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
             .unwrap_or_else(|| wall_clock_ms(candidate.mtime_ms)),
         date_from_exif: meta.taken_at.is_some(),
         orientation: meta.orientation,
-        width: meta.width,
-        height: meta.height,
+        width,
+        height,
         camera_make: meta.camera_make,
         camera_model: meta.camera_model,
         latitude: meta.latitude,
@@ -497,7 +506,7 @@ mod tests {
         let phases = std::cell::RefCell::new(Vec::new());
         let mut conn = db::open_in_memory().unwrap();
         scan(dir.path(), &mut conn, &AtomicBool::new(false), &|p| {
-            phases.borrow_mut().push((p.phase, p.to_index))
+            phases.borrow_mut().push((p.phase, p.total))
         })
         .unwrap();
 

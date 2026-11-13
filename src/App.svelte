@@ -3,17 +3,21 @@
   import {
     closeLibrary as stopLibraryScan,
     libraryStats,
+    newestPhotos,
     listRecentLibraries,
     onIndexEvent,
     openLibrary,
     pickLibraryFolder,
     removeRecentLibrary,
     rescanLibrary,
+    thumbUrl,
     type IndexEvent,
     type LibraryInfo,
+    type PhotoItem,
     type RecentLibrary,
     type ScanProgress,
     type ScanSummary,
+    type ThumbSummary,
   } from "./lib/api";
 
   /** How often an open library is rescanned for changes made outside the app. */
@@ -29,6 +33,22 @@
   let progress = $state<ScanProgress | null>(null);
   let scanning = $state(false);
   let lastScan = $state<ScanSummary | null>(null);
+  let lastThumbs = $state<ThumbSummary | null>(null);
+  let newest = $state<PhotoItem[]>([]);
+
+  /** How many of the newest photos the placeholder strip shows. */
+  const NEWEST_COUNT = 60;
+
+  async function refreshNewest() {
+    const path = library?.path;
+    if (!path) return;
+    try {
+      const photos = await newestPhotos(path, NEWEST_COUNT);
+      if (library?.path === path) newest = photos;
+    } catch (e) {
+      scanError = String(e);
+    }
+  }
   let scanError = $state<string | null>(null);
 
   onMount(() => {
@@ -49,11 +69,18 @@
     if (event.state === "running") {
       scanning = true;
       progress = event.progress;
+    } else if (event.state === "indexed") {
+      // The index is complete; thumbnails are still being made.
+      lastScan = event.summary;
+      photoCount = event.summary.total;
+      refreshNewest();
     } else if (event.state === "finished") {
       scanning = false;
       progress = null;
       lastScan = event.summary;
+      lastThumbs = event.thumbnails;
       photoCount = event.summary.total;
+      refreshNewest();
     } else {
       scanning = false;
       progress = null;
@@ -104,9 +131,12 @@
       photoCount = null;
       progress = null;
       lastScan = null;
+      lastThumbs = null;
+      newest = [];
       scanError = null;
       scanning = true; // open_library starts a scan
       library = opened;
+      refreshNewest();
       // Show the count from the previous session while the scan runs.
       const stats = await libraryStats(opened.path);
       if (library?.path === opened.path) {
@@ -187,10 +217,15 @@
 
       {#if scanning}
         <div class="scan" role="status">
-          {#if progress?.phase === "indexing" && progress.toIndex > 0}
-            <progress value={progress.indexed} max={progress.toIndex}></progress>
+          {#if progress?.phase === "indexing" && progress.total > 0}
+            <progress value={progress.done} max={progress.total}></progress>
             <p class="dim">
-              Indexing {n(progress.indexed)} of {n(progress.toIndex)} new or changed photos
+              Indexing {n(progress.done)} of {n(progress.total)} new or changed photos
+            </p>
+          {:else if progress?.phase === "thumbnails"}
+            <progress value={progress.done} max={progress.total}></progress>
+            <p class="dim">
+              Making thumbnails: {n(progress.done)} of {n(progress.total)}
             </p>
           {:else}
             <progress></progress>
@@ -204,14 +239,34 @@
         <p class="error" role="alert">{scanError}</p>
       {:else if lastScan}
         <p class="dim">{describe(lastScan)}</p>
-        {#if lastScan.failed > 0}
+        {#if lastScan.failed + (lastThumbs?.unreadable ?? 0) > 0}
           <p class="dim">
-            {n(lastScan.failed)} {lastScan.failed === 1 ? "file" : "files"} could not be read.
+            {n(lastScan.failed + (lastThumbs?.unreadable ?? 0))} files could not be read.
+          </p>
+        {/if}
+        {#if lastThumbs && lastThumbs.undecodable > 0}
+          <p class="dim">
+            {n(lastThumbs.undecodable)}
+            {lastThumbs.undecodable === 1 ? "file is" : "files are"} not readable as images.
           </p>
         {/if}
       {/if}
 
-      <p class="dim hint">The photo grid arrives in the next milestones.</p>
+      {#if newest.length > 0}
+        <h2>Newest photos</h2>
+        <div class="strip">
+          {#each newest as photo (photo.fingerprint + photo.relPath)}
+            <img
+              src={thumbUrl(photo.fingerprint)}
+              alt={photo.relPath}
+              title={photo.relPath}
+              loading="lazy"
+              decoding="async"
+            />
+          {/each}
+        </div>
+        <p class="dim hint">The full timeline grid arrives in the next milestone.</p>
+      {/if}
     </main>
   </div>
 {:else}
@@ -445,7 +500,7 @@
   }
 
   .hint {
-    margin-top: 32px !important;
+    margin-top: 16px !important;
   }
 
   .banner {
@@ -461,7 +516,28 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    padding: 32px 16px;
+    overflow-y: auto;
+  }
+
+  .empty h2 {
+    align-self: stretch;
+    margin: 32px 0 8px;
+  }
+
+  .strip {
+    align-self: stretch;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 3px;
+  }
+
+  .strip img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    background: var(--surface-hover);
   }
 
   .empty p {

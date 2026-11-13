@@ -121,7 +121,7 @@ pub mod testing {
         }
     }
 
-    pub fn short(tag: Tag, value: u16) -> Field {
+    pub fn short_field(tag: Tag, value: u16) -> Field {
         Field {
             tag,
             ifd_num: In::PRIMARY,
@@ -141,6 +141,12 @@ pub mod testing {
     /// A JPEG that is just SOI + an EXIF APP1 segment + EOI. Not decodable as an
     /// image, but a valid container as far as EXIF readers are concerned.
     pub fn jpeg_with_exif(fields: &[Field]) -> Vec<u8> {
+        insert_exif(&[0xFF, 0xD8, 0xFF, 0xD9], fields)
+    }
+
+    /// Adds an EXIF APP1 segment right after the SOI marker of a real JPEG.
+    pub fn insert_exif(jpeg: &[u8], fields: &[Field]) -> Vec<u8> {
+        assert_eq!(jpeg[..2], [0xFF, 0xD8], "not a JPEG");
         let mut writer = Writer::new();
         for field in fields {
             writer.push_field(field);
@@ -149,12 +155,12 @@ pub mod testing {
         writer.write(&mut tiff, false).unwrap();
         let tiff = tiff.into_inner();
 
-        let mut jpeg = vec![0xFF, 0xD8, 0xFF, 0xE1];
-        jpeg.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());
-        jpeg.extend_from_slice(b"Exif\0\0");
-        jpeg.extend_from_slice(&tiff);
-        jpeg.extend_from_slice(&[0xFF, 0xD9]);
-        jpeg
+        let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
+        out.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());
+        out.extend_from_slice(b"Exif\0\0");
+        out.extend_from_slice(&tiff);
+        out.extend_from_slice(&jpeg[2..]);
+        out
     }
 }
 
@@ -176,7 +182,7 @@ mod tests {
         let meta = read_fields(&[
             ascii_field(Tag::Make, "Canon"),
             ascii_field(Tag::Model, "EOS R6 "),
-            short(Tag::Orientation, 6),
+            short_field(Tag::Orientation, 6),
             ascii_field(Tag::DateTimeOriginal, "2024:07:14 18:30:05"),
         ]);
 

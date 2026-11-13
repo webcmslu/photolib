@@ -11,11 +11,16 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 - Milestone 2 (indexer): background scan into a local SQLite index with EXIF
   (date, camera, GPS, orientation) and content fingerprints; progress UI;
   incremental rescan on open, on demand and every 15 minutes.
+- Milestone 3 (thumbnails): grid (~256 px) and preview (~1024 px) JPEGs made in
+  parallel after each scan, cached by fingerprint in the app-data dir and served
+  to the UI over `thumb://`. JPEG, PNG, WebP, GIF, TIFF and HEIC.
 
 ## Develop
 
-Prerequisites: Node 20+, Rust 1.85+, and the
-[Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
+Prerequisites: Node 20+, Rust 1.85+, the
+[Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS,
+and libheif 1.23+ for HEIC (`libheif-dev` on Debian). To build without HEIC,
+pass `--no-default-features` to cargo.
 
 ```sh
 npm install
@@ -31,6 +36,7 @@ npm run tauri build    # release bundle
 - `src/` is the Svelte UI. `src/lib/api.ts` wraps every Rust command.
 - `src-tauri/src/lib.rs` holds the Tauri commands and starts background scans.
 - `indexer.rs` walks the folder; `fingerprint.rs` and `metadata.rs` read each
-  file; `db.rs` is the SQLite index; `recents.rs` the recent libraries list.
+  file; `db.rs` is the SQLite index; `thumbs.rs` makes and caches thumbnails;
+  `recents.rs` is the recent libraries list.
 - Per-machine state (recents now; index and thumbnails later) lives in the OS
   app-data dir, never in the library folder.
