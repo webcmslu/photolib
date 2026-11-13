@@ -1,7 +1,8 @@
 <!--
   Full-window photo viewer: arrow keys to move, wheel / double-click / +/- to
   zoom, drag to pan, "i" for the info panel, "f" for full screen, "." to
-  favorite, "h" to hide, Esc to close.
+  favorite, "h" to hide, Esc to close. Videos play in place (space to pause);
+  a Live Photo plays its short video with the LIVE button or "l".
 
   It shows the cached preview at once and swaps in the full-size photo when it
   has loaded, so moving through photos stays fast on a slow network.
@@ -12,12 +13,13 @@
     photoDetails,
     photoUrl,
     thumbUrl,
+    videoUrl,
     type Album,
     type Op,
     type PhotoDetails,
     type PhotoItem,
   } from "./api";
-  import { formatBytes, formatDateTime, formatNumber } from "./format";
+  import { formatBytes, formatDateTime, formatDuration, formatNumber } from "./format";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -69,6 +71,11 @@
   let y = $state(0);
   let stage: HTMLDivElement;
   let image = $state<HTMLImageElement>();
+  let player = $state<HTMLVideoElement>();
+  /** True while a Live Photo's video is playing over its photo. */
+  let livePlaying = $state(false);
+  /** Fingerprint of a video that the webview could not play. */
+  let unplayable = $state<string | null>(null);
 
   // A new photo starts fitted to the window.
   $effect(() => {
@@ -76,6 +83,7 @@
     scale = 1;
     x = 0;
     y = 0;
+    livePlaying = false;
   });
 
   // Load the photo for the current index, then its neighbours' previews.
@@ -96,7 +104,7 @@
   // Fetch the full-size photo once the user has paused on it.
   $effect(() => {
     const fingerprint = photo?.fingerprint;
-    if (!fingerprint || fullSizeReady === fingerprint) return;
+    if (!fingerprint || photo?.video || fullSizeReady === fingerprint) return;
     const loader = new Image();
     const timer = setTimeout(() => {
       loader.onload = () => {
@@ -152,6 +160,7 @@
 
   /** Zooms to `target`, keeping the point under (clientX, clientY) in place. */
   function zoomTo(target: number, clientX?: number, clientY?: number) {
+    if (photo?.video) return; // videos stay fitted to the window
     const next = Math.min(MAX_SCALE, Math.max(1, target));
     const box = stage.getBoundingClientRect();
     const px = (clientX ?? box.left + box.width / 2) - (box.left + box.width / 2);
@@ -226,6 +235,15 @@
     }
   }
 
+  function togglePlay() {
+    if (photo?.video) {
+      if (player?.paused) player.play().catch(() => {});
+      else player?.pause();
+    } else if (photo?.liveVideo) {
+      livePlaying = !livePlaying;
+    }
+  }
+
   function onkeydown(event: KeyboardEvent) {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.target instanceof HTMLSelectElement && event.key !== "Escape") return;
@@ -256,6 +274,10 @@
         break;
       case "f":
         toggleFullscreen();
+        break;
+      case " ":
+      case "l":
+        togglePlay();
         break;
       case "+":
       case "=":
@@ -307,8 +329,17 @@
       <button onclick={toggleHidden} disabled={!canEdit || !photo} title="{showingHidden ? 'Unhide' : 'Hide'} (H)">
         {showingHidden ? "Unhide" : "Hide"}
       </button>
+      {#if photo?.liveVideo}
+        <button onclick={togglePlay} aria-pressed={livePlaying} title="Play the Live Photo (L)">
+          LIVE
+        </button>
+      {/if}
       <button onclick={() => zoomTo(scale / 1.5)} disabled={scale <= 1} title="Zoom out (-)">−</button>
-      <button onclick={() => zoomTo(scale * 1.5)} disabled={scale >= MAX_SCALE} title="Zoom in (+)">+</button>
+      <button
+        onclick={() => zoomTo(scale * 1.5)}
+        disabled={scale >= MAX_SCALE || photo?.video}
+        title="Zoom in (+)">+</button
+      >
       <button onclick={toggleFullscreen} title="Full screen (F)">⛶</button>
       <button onclick={() => (showInfo = !showInfo)} aria-pressed={showInfo} title="Info (I)">ⓘ</button>
     </div>
@@ -325,7 +356,24 @@
       onpointercancel={onpointerup}
       role="presentation"
     >
-      {#if src}
+      {#if photo?.video}
+        <!-- Keyed, so that moving to another video starts a fresh player. -->
+        {#key photo.fingerprint}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            bind:this={player}
+            src={videoUrl(photo.fingerprint)}
+            poster={thumbUrl(photo.fingerprint, "preview")}
+            controls
+            autoplay
+            playsinline
+            onerror={() => (unplayable = photo?.fingerprint ?? null)}
+          ></video>
+        {/key}
+        {#if unplayable === photo.fingerprint}
+          <p class="notice">This video can't be played here.</p>
+        {/if}
+      {:else if src}
         <img
           bind:this={image}
           {src}
@@ -333,6 +381,18 @@
           draggable="false"
           style:transform="translate({x}px, {y}px) scale({scale})"
         />
+        {#if livePlaying && photo?.liveVideo}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            class="live"
+            src={videoUrl(photo.liveVideo)}
+            autoplay
+            playsinline
+            onended={() => (livePlaying = false)}
+            onerror={() => (livePlaying = false)}
+            style:transform="translate({x}px, {y}px) scale({scale})"
+          ></video>
+        {/if}
       {/if}
 
       {#if index > 0}
@@ -371,6 +431,14 @@
           {/if}
           <dt>Size</dt>
           <dd>{formatBytes(details.size)}</dd>
+          {#if details.durationMs !== null}
+            <dt>Length</dt>
+            <dd>{formatDuration(details.durationMs)}</dd>
+          {/if}
+          {#if details.liveVideo}
+            <dt>Kind</dt>
+            <dd>Live Photo</dd>
+          {/if}
           {#if details.cameraMake || details.cameraModel}
             <dt>Camera</dt>
             <dd>{[details.cameraMake, details.cameraModel].filter(Boolean).join(" ")}</dd>
@@ -487,6 +555,33 @@
     height: 100%;
     object-fit: contain;
     will-change: transform;
+  }
+
+  video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    background: #000;
+  }
+
+  /* A Live Photo's video covers its photo exactly while it plays. */
+  video.live {
+    background: none;
+    pointer-events: none;
+  }
+
+  .notice {
+    position: absolute;
+    left: 50%;
+    bottom: 72px;
+    transform: translateX(-50%);
+    margin: 0;
+    padding: 6px 12px;
+    border-radius: 6px;
+    background: rgb(0 0 0 / 0.7);
+    font-size: 13px;
   }
 
   .nav {

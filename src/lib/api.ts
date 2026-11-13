@@ -140,6 +140,11 @@ export interface PhotoItem {
   width: number | null;
   height: number | null;
   favorite: boolean;
+  video: boolean;
+  /** Length of a video, when known. */
+  durationMs: number | null;
+  /** For a Live Photo: the fingerprint of its video. */
+  liveVideo: string | null;
 }
 
 /** Mirrors `FolderEntry` in src-tauri/src/db.rs. */
@@ -167,6 +172,9 @@ export interface PhotoDetails {
   hidden: boolean;
   /** Ids of the albums the photo is in. */
   albums: string[];
+  video: boolean;
+  durationMs: number | null;
+  liveVideo: string | null;
 }
 
 /** What a photo listing shows. Mirrors `Listing` in src-tauri/src/db.rs. */
@@ -210,9 +218,24 @@ export function thumbUrl(fingerprint: string, size: "grid" | "preview" = "grid")
   return convertFileSrc(`${size}/${fingerprint}`, "thumb");
 }
 
-/** URL of the full-size photo, served by the app's `photo://` protocol. */
+/**
+ * URL of the full-size photo, or of the video file, served by the app's
+ * `photo://` protocol.
+ */
 export function photoUrl(fingerprint: string): string {
   return convertFileSrc(fingerprint, "photo");
+}
+
+// The Linux webview can't play video from `photo://`; there the app serves
+// videos over local HTTP instead (see src-tauri/src/media_server.rs).
+let mediaBase: string | null = null;
+invoke<string | null>("media_base")
+  .then((base) => (mediaBase = base))
+  .catch(() => {});
+
+/** URL a `<video>` element can play the video file from. */
+export function videoUrl(fingerprint: string): string {
+  return mediaBase ? `${mediaBase}/${fingerprint}` : photoUrl(fingerprint);
 }
 
 // --- Organization: favorites, hidden photos, albums ---------------------------

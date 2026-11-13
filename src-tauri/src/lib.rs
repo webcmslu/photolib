@@ -1,12 +1,16 @@
 mod db;
 mod fingerprint;
+mod frames;
 #[cfg(target_os = "macos")]
 mod heic_macos;
 mod indexer;
+mod media_server;
 mod metadata;
 mod org;
+mod raw;
 mod recents;
 mod thumbs;
+mod video;
 
 use std::collections::HashMap;
 use std::fs;
@@ -45,6 +49,9 @@ struct AppState {
     open_library: Mutex<Option<OpenLibrary>>,
     /// Limits on-demand image decoding (thumbnails and converted originals).
     on_demand: Limiter,
+    /// Where the viewer loads videos from when the webview can't play them
+    /// from `photo://` (Linux; see media_server.rs). `None` elsewhere.
+    media_base: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -381,6 +388,12 @@ fn make_thumb_on_demand(state: &AppState, fingerprint: &str) -> Result<(), ()> {
     if state.thumbs.has_both(fingerprint) {
         return Ok(()); // made while we were waiting
     }
+    if metadata::kind_of(&source) == Some(metadata::Kind::Video) {
+        return state
+            .thumbs
+            .generate_from_video(&source, fingerprint)
+            .map_err(drop);
+    }
     state
         .thumbs
         .generate(&source, fingerprint, orientation)
@@ -390,8 +403,9 @@ fn make_thumb_on_demand(state: &AppState, fingerprint: &str) -> Result<(), ()> {
 
 /// Answers a `photo://localhost/<fingerprint>` request with the full-size
 /// original, for the viewer. Formats the webview can't show are converted to
-/// JPEG on the fly.
-fn photo_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
+/// JPEG on the fly. Videos are served in pieces: `range` is the request's
+/// `Range` header.
+fn photo_response(app: &AppHandle, uri_path: &str, range: Option<&str>) -> Response<Vec<u8>> {
     let status = |code: StatusCode| {
         Response::builder()
             .status(code)
@@ -407,6 +421,9 @@ fn photo_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
     let Ok((source, orientation)) = find_original(&state, fingerprint) else {
         return status(StatusCode::NOT_FOUND);
     };
+    if metadata::kind_of(&source) == Some(metadata::Kind::Video) {
+        return video_response(&source, range).unwrap_or_else(|_| status(StatusCode::NOT_FOUND));
+    }
 
     let result = match thumbs::is_web_image(&source) {
         Some(mime) => fs::read(&source).map(|bytes| (mime, bytes)).map_err(drop),
@@ -425,6 +442,46 @@ fn photo_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
             .expect("static response"),
         Err(()) => status(StatusCode::NOT_FOUND),
     }
+}
+
+/// The most video data sent in one response. Players ask for the rest as
+/// they need it, so a long video is never loaded into memory whole.
+const VIDEO_CHUNK: u64 = 4 * 1024 * 1024;
+
+/// Serves a video file, honoring `Range` requests: that is how the player
+/// seeks, and WebKit refuses to play a video from a server without them.
+fn video_response(source: &Path, range: Option<&str>) -> std::io::Result<Response<Vec<u8>>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mime = media_server::mime_of(source);
+    let mut file = fs::File::open(source)?;
+    let len = file.metadata()?.len();
+    let response = Response::builder()
+        .header(header::CONTENT_TYPE, mime)
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "private, max-age=3600");
+
+    let Some(range) = range else {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        return Ok(response.body(bytes).expect("static response"));
+    };
+    let Some((first, last)) = media_server::parse_range(range, len) else {
+        return Ok(Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{len}"))
+            .body(Vec::new())
+            .expect("static response"));
+    };
+    let last = last.min(first + VIDEO_CHUNK - 1);
+    let mut bytes = vec![0u8; (last - first + 1) as usize];
+    file.seek(SeekFrom::Start(first))?;
+    file.read_exact(&mut bytes)?;
+    Ok(response
+        .status(StatusCode::PARTIAL_CONTENT)
+        .header(header::CONTENT_RANGE, format!("bytes {first}-{last}/{len}"))
+        .body(bytes)
+        .expect("static response"))
 }
 
 /// Lets at most `permits` threads through at a time.
@@ -509,6 +566,12 @@ fn open_library(
         writable,
         online,
     })
+}
+
+/// The base URL videos are loaded from, when it is not `photo://`.
+#[tauri::command]
+fn media_base(state: State<'_, AppState>) -> Option<String> {
+    state.media_base.clone()
 }
 
 #[tauri::command(async)]
@@ -691,7 +754,24 @@ pub fn run() {
                 .ok()
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
                 .unwrap_or_default();
+            let media_base = if cfg!(target_os = "linux") {
+                let handle = app.handle().clone();
+                // Serves only videos that are in the index of the open library.
+                let resolve = move |fingerprint: &str| {
+                    if !thumbs::is_fingerprint(fingerprint) {
+                        return None;
+                    }
+                    let (source, _) =
+                        find_original(&handle.state::<AppState>(), fingerprint).ok()?;
+                    (metadata::kind_of(&source) == Some(metadata::Kind::Video)).then_some(source)
+                };
+                // Without it, videos just don't play: not worth failing startup.
+                media_server::start(Arc::new(resolve)).ok()
+            } else {
+                None
+            };
             app.manage(AppState {
+                media_base,
                 device,
                 keys: Mutex::new(keys),
                 recents: Mutex::new(RecentStore::new(&data_dir)),
@@ -717,12 +797,18 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("photo", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
             let path = request.uri().path().to_owned();
+            let range = request
+                .headers()
+                .get(header::RANGE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
             tauri::async_runtime::spawn_blocking(move || {
-                responder.respond(photo_response(&app, &path));
+                responder.respond(photo_response(&app, &path, range.as_deref()));
             });
         })
         .invoke_handler(tauri::generate_handler![
             open_library,
+            media_base,
             list_recent_libraries,
             remove_recent_library,
             rescan_library,

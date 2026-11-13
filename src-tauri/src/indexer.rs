@@ -23,11 +23,6 @@ use walkdir::{DirEntry, WalkDir};
 use crate::db::{self, PhotoRow};
 use crate::{fingerprint, metadata};
 
-/// File types the index picks up. RAW and video come in phase 2.
-const IMAGE_EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "tif", "tiff",
-];
-
 /// Folders that NAS systems fill with their own thumbnails and trash.
 const SKIPPED_DIRS: &[&str] = &[
     "@eaDir",
@@ -146,7 +141,7 @@ pub fn scan(
                 continue;
             }
         };
-        if !entry.file_type().is_file() || !has_image_extension(entry.path()) {
+        if !entry.file_type().is_file() || metadata::kind_of(entry.path()).is_none() {
             continue;
         }
         let Some(rel_path) = relative_path(root, entry.path()) else {
@@ -259,6 +254,12 @@ pub fn scan(
         tx.commit()?;
     }
 
+    // After additions and removals, work out again which videos belong to
+    // which photos.
+    if !summary.cancelled {
+        db::pair_live_photos(conn)?;
+    }
+
     summary.total = db::count(conn)?;
     summary.duration_ms = started.elapsed().as_millis() as u64;
     Ok(summary)
@@ -291,6 +292,9 @@ fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
         camera_model: meta.camera_model,
         latitude: meta.latitude,
         longitude: meta.longitude,
+        is_video: meta.is_video,
+        duration_ms: meta.duration_ms,
+        live_candidate: meta.live_candidate,
     })
 }
 
@@ -299,16 +303,6 @@ fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
 fn is_skipped(entry: &DirEntry) -> bool {
     let name = entry.file_name().to_string_lossy();
     name.starts_with('.') || (entry.file_type().is_dir() && SKIPPED_DIRS.contains(&name.as_ref()))
-}
-
-fn has_image_extension(path: &Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| {
-            IMAGE_EXTENSIONS
-                .iter()
-                .any(|known| ext.eq_ignore_ascii_case(known))
-        })
 }
 
 /// Path relative to the library root with '/' separators, so the same library

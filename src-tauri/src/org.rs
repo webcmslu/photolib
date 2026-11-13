@@ -777,6 +777,9 @@ mod tests {
                     camera_model: None,
                     latitude: None,
                     longitude: None,
+                    is_video: false,
+                    duration_ms: None,
+                    live_candidate: false,
                 },
             )
             .unwrap();

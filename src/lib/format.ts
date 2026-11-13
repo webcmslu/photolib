@@ -29,6 +29,16 @@ export const formatDay = (day: number) => dayFormat.format(day * DAY_MS);
 /** "July 2024" for a day number. */
 export const formatMonth = (day: number) => monthFormat.format(day * DAY_MS);
 
+/** "0:07", "12:34" or "1:02:03" for a video length. */
+export function formatDuration(ms: number): string {
+  const seconds = Math.round(ms / 1000);
+  const two = (value: number) => String(value).padStart(2, "0");
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return h > 0 ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
+}
+
 /** A number that changes exactly when the calendar month does. */
 export function monthKey(day: number): number {
   const date = new Date(day * DAY_MS);

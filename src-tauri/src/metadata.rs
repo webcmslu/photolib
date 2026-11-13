@@ -1,11 +1,44 @@
-//! Reads the EXIF fields the browser needs: date taken, orientation, camera, GPS.
+//! Reads the metadata the browser needs: date taken, orientation, camera, GPS.
+//! Photos carry it as EXIF; videos have their own format (see video.rs).
 
-use std::fs::File;
-use std::io::BufReader;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use chrono::NaiveDate;
 use exif::{Exif, In, Tag, Value};
+
+use crate::{raw, video};
+
+/// What kind of file something is, judged by its extension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// A format decoded directly: JPEG, PNG, HEIC...
+    Image,
+    /// A camera RAW file, shown through its embedded preview.
+    Raw,
+    Video,
+}
+
+/// Image file types the index picks up, besides RAW.
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "tif", "tiff",
+];
+
+/// `None` for files the app does not show.
+pub fn kind_of(path: &Path) -> Option<Kind> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let ext = ext.as_str();
+    if IMAGE_EXTENSIONS.contains(&ext) {
+        Some(Kind::Image)
+    } else if raw::EXTENSIONS.contains(&ext) {
+        Some(Kind::Raw)
+    } else if video::EXTENSIONS.contains(&ext) {
+        Some(Kind::Video)
+    } else {
+        None
+    }
+}
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct PhotoMeta {
@@ -22,11 +55,23 @@ pub struct PhotoMeta {
     pub camera_model: Option<String>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    pub is_video: bool,
+    pub duration_ms: Option<u64>,
+    /// True for a video that may be the moving half of a Live Photo.
+    pub live_candidate: bool,
 }
 
-/// Reads metadata from a file. Files without EXIF (or with broken EXIF) give an
-/// empty `PhotoMeta`: missing metadata is normal, not an error.
+/// Reads metadata from a file. Files without metadata (or with broken
+/// metadata) give an empty `PhotoMeta`: that is normal, not an error.
 pub fn read(path: &Path) -> PhotoMeta {
+    match kind_of(path) {
+        Some(Kind::Video) => video::read(path),
+        Some(Kind::Raw) => read_raw(path).unwrap_or_default(),
+        _ => read_image(path),
+    }
+}
+
+fn read_image(path: &Path) -> PhotoMeta {
     let Ok(file) = File::open(path) else {
         return PhotoMeta::default();
     };
@@ -34,6 +79,29 @@ pub fn read(path: &Path) -> PhotoMeta {
         Ok(exif) => from_exif(&exif),
         Err(_) => PhotoMeta::default(),
     }
+}
+
+/// RAW files: the EXIF is normally within the first part of the file. Only
+/// when that gives no date is the whole file read, to look in the embedded
+/// preview instead.
+fn read_raw(path: &Path) -> Option<PhotoMeta> {
+    let mut header = Vec::new();
+    File::open(path)
+        .ok()?
+        .take(raw::HEADER_BYTES as u64)
+        .read_to_end(&mut header)
+        .ok()?;
+    let meta = raw::exif_of_header(&header)
+        .map(|exif| from_exif(&exif))
+        .unwrap_or_default();
+    if meta.taken_at.is_some() {
+        return Some(meta);
+    }
+    let from_preview = raw::exif_of_preview(&fs::read(path).ok()?).map(|exif| from_exif(&exif));
+    Some(match from_preview {
+        Some(preview) if preview.taken_at.is_some() => preview,
+        _ => meta,
+    })
 }
 
 pub fn from_exif(exif: &Exif) -> PhotoMeta {
@@ -59,6 +127,7 @@ pub fn from_exif(exif: &Exif) -> PhotoMeta {
         camera_model: text(exif, Tag::Model),
         latitude,
         longitude,
+        ..PhotoMeta::default()
     }
 }
 
@@ -144,16 +213,22 @@ pub mod testing {
         insert_exif(&[0xFF, 0xD8, 0xFF, 0xD9], fields)
     }
 
-    /// Adds an EXIF APP1 segment right after the SOI marker of a real JPEG.
-    pub fn insert_exif(jpeg: &[u8], fields: &[Field]) -> Vec<u8> {
-        assert_eq!(jpeg[..2], [0xFF, 0xD8], "not a JPEG");
+    /// The fields as a bare little-endian TIFF file, which is what an EXIF
+    /// block is (and what most RAW files look like from the outside).
+    pub fn tiff_with_exif(fields: &[Field]) -> Vec<u8> {
         let mut writer = Writer::new();
         for field in fields {
             writer.push_field(field);
         }
         let mut tiff = Cursor::new(Vec::new());
-        writer.write(&mut tiff, false).unwrap();
-        let tiff = tiff.into_inner();
+        writer.write(&mut tiff, true).unwrap();
+        tiff.into_inner()
+    }
+
+    /// Adds an EXIF APP1 segment right after the SOI marker of a real JPEG.
+    pub fn insert_exif(jpeg: &[u8], fields: &[Field]) -> Vec<u8> {
+        assert_eq!(jpeg[..2], [0xFF, 0xD8], "not a JPEG");
+        let tiff = tiff_with_exif(fields);
 
         let mut out = vec![0xFF, 0xD8, 0xFF, 0xE1];
         out.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());

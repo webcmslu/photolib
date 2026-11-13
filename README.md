@@ -23,6 +23,11 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   (read-only).
 - Milestone 6 (packaging): CI checks and release builds for macOS, Windows
   and Linux with GitHub Actions.
+- Milestone 7 (RAW, video, Live Photos): camera RAW files shown through
+  their embedded JPEG preview (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2 and
+  more); MP4/MOV videos with thumbnails, date, length and GPS, played in the
+  viewer; an iPhone Live Photo's `.MOV` is attached to its photo instead of
+  being listed twice.
 
 ## Develop
 
@@ -33,12 +38,19 @@ HEIC: macOS decodes it with its own ImageIO framework, so nothing extra is
 needed there. Linux and Windows use libheif 1.17+ (`libheif-dev` on Debian);
 to build without it, pass `--no-default-features` to cargo.
 
+Video thumbnails are made by `ffmpeg` when it is installed (on the PATH or in
+a Homebrew folder); on macOS the system's Quick Look is used when it is not.
+Without either, videos show a placeholder tile but still play. Playback uses
+the webview's own player: on Linux that needs `gstreamer1.0-libav`.
+
 ```sh
 npm install
 npm run tauri dev      # run the app with hot reload
 npm run check          # type-check the UI
 cd src-tauri && cargo test
-cargo test --release -- --ignored --nocapture   # 10k-file indexing benchmark
+cargo test --release benchmark -- --ignored --nocapture   # 10k-file indexing benchmark
+# check RAW support against your own camera files:
+PHOTOLIB_RAW_SAMPLES=/some/folder cargo test real_raw -- --ignored --nocapture
 npm run tauri build    # release bundle
 ```
 
@@ -74,6 +86,9 @@ To build installers locally: `npm run tauri build`.
 - `indexer.rs` walks the folder; `fingerprint.rs` and `metadata.rs` read each
   file; `db.rs` is the SQLite index; `thumbs.rs` makes and caches thumbnails;
   `recents.rs` is the recent libraries list.
+- `raw.rs` finds the preview in RAW files; `video.rs` reads MP4/MOV
+  metadata; `frames.rs` grabs a video frame for thumbnails; `media_server.rs`
+  serves videos to the Linux webview, which can't play them from `photo://`.
 - `org.rs` is the shared organization: the `.photolib` log format and the
   merge. Its header comment describes the format.
 - Per-machine state (recents now; index and thumbnails later) lives in the OS

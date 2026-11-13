@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
   import { thumbUrl, type DayGroup } from "./api";
-  import { formatDay, formatMonth, formatNumber, monthKey } from "./format";
+  import { formatDay, formatDuration, formatMonth, formatNumber, monthKey } from "./format";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -196,9 +196,22 @@
           aria-label={photo?.relPath ?? "Photo"}
         >
           {#if photo}
-            <img src={thumbUrl(photo.fingerprint)} alt="" draggable="false" decoding="async" />
+            <!-- A video without a thumbnail keeps the cell's plain background. -->
+            <img
+              src={thumbUrl(photo.fingerprint)}
+              alt=""
+              draggable="false"
+              decoding="async"
+              onerror={(event) => ((event.currentTarget as HTMLImageElement).style.visibility = "hidden")}
+              onload={(event) => ((event.currentTarget as HTMLImageElement).style.visibility = "")}
+            />
           {/if}
         </button>
+        {#if photo?.video}
+          <span class="badge">▶ {photo.durationMs === null ? "" : formatDuration(photo.durationMs)}</span>
+        {:else if photo?.liveVideo}
+          <span class="badge">LIVE</span>
+        {/if}
         {#if photo?.favorite}
           <span class="favorite" aria-label="Favorite">♥</span>
         {/if}
@@ -304,6 +317,20 @@
 
   /* The round checkbox in the corner: shown on hover, and always once
      anything is selected. */
+  .badge {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: rgb(0 0 0 / 0.55);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    pointer-events: none;
+  }
+
   .check {
     position: absolute;
     top: 6px;

@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -36,18 +36,35 @@ CREATE TABLE photos (
     camera_model  TEXT,
     latitude      REAL,
     longitude     REAL,
-    -- 0 = thumbnails not made yet, 1 = ready, 2 = not a decodable image
-    thumb_state   INTEGER NOT NULL DEFAULT 0
+    -- 0 = thumbnails not made yet, 1 = ready, 2 = not a decodable image,
+    -- 3 = a video shown without a thumbnail (no tool here can make one),
+    -- 4 = a video shown without a thumbnail (the tool failed on it)
+    thumb_state   INTEGER NOT NULL DEFAULT 0,
+    -- 0 = photo, 1 = video
+    kind          INTEGER NOT NULL DEFAULT 0,
+    duration_ms   INTEGER,
+    -- rel_path without its extension, lowercased: what the two files of a
+    -- Live Photo (IMG_1.HEIC + IMG_1.MOV) have in common.
+    stem          TEXT NOT NULL,
+    -- 1 for a video that may be the moving half of a Live Photo
+    live_candidate INTEGER NOT NULL DEFAULT 0,
+    -- On the photo of a Live Photo: the fingerprint of its video.
+    live_video    TEXT,
+    -- 1 on the video of a Live Photo. It is shown through its photo, never
+    -- listed by itself.
+    live_part     INTEGER NOT NULL DEFAULT 0
 );
 -- The order the timeline and the folder view list photos in. Partial, to match
 -- their WHERE clause, so skipping to a far offset reads only the index.
--- (fingerprint and thumb_state are included only so that the filter can be
--- evaluated from the index alone.)
-CREATE INDEX photos_timeline ON photos (sort_date DESC, rel_path, fingerprint, thumb_state)
-    WHERE thumb_state != 2;
+-- (fingerprint, thumb_state and live_part are included only so that the filter
+-- can be evaluated from the index alone.)
+CREATE INDEX photos_timeline
+    ON photos (sort_date DESC, rel_path, fingerprint, thumb_state, live_part)
+    WHERE thumb_state != 2 AND live_part = 0;
 CREATE INDEX photos_folder
-    ON photos (folder, sort_date DESC, rel_path, fingerprint, thumb_state)
-    WHERE thumb_state != 2;
+    ON photos (folder, sort_date DESC, rel_path, fingerprint, thumb_state, live_part)
+    WHERE thumb_state != 2 AND live_part = 0;
+CREATE INDEX photos_stem ON photos (stem);
 
 -- The merged organization (favorites, hidden, albums): one row per value that
 -- the device logs set, holding the winning event. See org.rs.
@@ -92,6 +109,9 @@ pub struct PhotoRow {
     pub camera_model: Option<String>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    pub is_video: bool,
+    pub duration_ms: Option<u64>,
+    pub live_candidate: bool,
 }
 
 /// Opens (creating if needed) the index database at `path`.
@@ -151,8 +171,9 @@ pub fn upsert(tx: &Transaction<'_>, row: &PhotoRow) -> rusqlite::Result<()> {
     tx.prepare_cached(
         "INSERT INTO photos (folder, rel_path, size, mtime_ms, fingerprint, sort_date, date_source,
                              orientation, width, height, camera_make, camera_model,
-                             latitude, longitude)
-         VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                             latitude, longitude, kind, duration_ms, live_candidate, stem)
+         VALUES (?14, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13,
+                 ?15, ?16, ?17, ?18)
          ON CONFLICT (rel_path) DO UPDATE SET
              size = excluded.size, mtime_ms = excluded.mtime_ms,
              fingerprint = excluded.fingerprint, sort_date = excluded.sort_date,
@@ -163,7 +184,9 @@ pub fn upsert(tx: &Transaction<'_>, row: &PhotoRow) -> rusqlite::Result<()> {
              thumb_state = CASE WHEN photos.fingerprint = excluded.fingerprint
                                 THEN photos.thumb_state ELSE 0 END,
              camera_make = excluded.camera_make, camera_model = excluded.camera_model,
-             latitude = excluded.latitude, longitude = excluded.longitude",
+             latitude = excluded.latitude, longitude = excluded.longitude,
+             kind = excluded.kind, duration_ms = excluded.duration_ms,
+             live_candidate = excluded.live_candidate",
     )?
     .execute(params![
         row.rel_path,
@@ -180,6 +203,10 @@ pub fn upsert(tx: &Transaction<'_>, row: &PhotoRow) -> rusqlite::Result<()> {
         row.latitude,
         row.longitude,
         folder_of(&row.rel_path),
+        row.is_video,
+        row.duration_ms.map(|ms| ms as i64),
+        row.live_candidate,
+        stem_of(&row.rel_path),
     ])?;
     Ok(())
 }
@@ -194,6 +221,12 @@ pub fn delete(tx: &Transaction<'_>, rel_path: &str) -> rusqlite::Result<()> {
 pub enum ThumbState {
     Ready = 1,
     Failed = 2,
+    /// A video listed without a thumbnail, because this computer has no
+    /// tool to make one. Tried again once it has.
+    Missing = 3,
+    /// A video listed without a thumbnail, because the tool could not make
+    /// one. Not tried again.
+    NoFrame = 4,
 }
 
 /// A photo that still needs thumbnails.
@@ -202,21 +235,68 @@ pub struct PendingThumb {
     pub rel_path: String,
     pub fingerprint: String,
     pub orientation: Option<u8>,
+    pub is_video: bool,
 }
 
+/// The Live Photo videos are left out: they are never shown by themselves.
 pub fn pending_thumbs(conn: &Connection) -> rusqlite::Result<Vec<PendingThumb>> {
     let mut stmt = conn.prepare(
-        "SELECT rel_path, fingerprint, orientation FROM photos
-         WHERE thumb_state = 0 ORDER BY sort_date DESC",
+        "SELECT rel_path, fingerprint, orientation, kind FROM photos
+         WHERE thumb_state = 0 AND live_part = 0 ORDER BY sort_date DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(PendingThumb {
             rel_path: row.get(0)?,
             fingerprint: row.get(1)?,
             orientation: row.get(2)?,
+            is_video: row.get(3)?,
         })
     })?;
     rows.collect()
+}
+
+/// Makes the next thumbnail pass try again the videos that have none, for
+/// when a tool that can make them has been installed since.
+pub fn retry_missing_thumbs(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE photos SET thumb_state = 0 WHERE thumb_state = 3",
+        [],
+    )
+}
+
+/// Pairs each Live Photo's video with its photo: a short (or Apple-tagged)
+/// video next to a photo with the same name. The video then disappears from
+/// the listings and the photo gets a link to it. Returns how many rows changed.
+pub fn pair_live_photos(conn: &mut Connection) -> rusqlite::Result<usize> {
+    let tx = conn.transaction()?;
+    tx.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS live_pairs (
+             image_id INTEGER PRIMARY KEY, video_id INTEGER, video_fp TEXT);
+         DELETE FROM live_pairs;
+         INSERT OR REPLACE INTO live_pairs
+             SELECT i.id, v.id, v.fingerprint
+             FROM photos v JOIN photos i ON i.stem = v.stem AND i.kind = 0
+             WHERE v.kind = 1 AND v.live_candidate = 1
+             ORDER BY v.rel_path DESC;",
+    )?;
+    let mut changed = 0;
+    // Only rows whose pairing really changed are written.
+    for update in [
+        "UPDATE photos SET live_video = NULL
+         WHERE live_video IS NOT NULL AND id NOT IN (SELECT image_id FROM live_pairs)",
+        "UPDATE photos SET live_part = 0
+         WHERE live_part = 1 AND id NOT IN (SELECT video_id FROM live_pairs)",
+        "UPDATE photos
+         SET live_video = (SELECT video_fp FROM live_pairs WHERE image_id = photos.id)
+         WHERE id IN (SELECT image_id FROM live_pairs)
+           AND live_video IS NOT (SELECT video_fp FROM live_pairs WHERE image_id = photos.id)",
+        "UPDATE photos SET live_part = 1
+         WHERE live_part = 0 AND id IN (SELECT video_id FROM live_pairs)",
+    ] {
+        changed += tx.execute(update, [])?;
+    }
+    tx.commit()?;
+    Ok(changed)
 }
 
 /// Records the outcome of thumbnail generation. `size` is the upright
@@ -241,7 +321,8 @@ pub fn set_thumb_state(
     Ok(())
 }
 
-/// Finds where a photo with this fingerprint is, to make its thumbnail on demand.
+/// Finds where a photo with this fingerprint is (its path and its EXIF
+/// orientation), to make its thumbnail on demand or to show the original.
 pub fn find_by_fingerprint(
     conn: &Connection,
     fingerprint: &str,
@@ -252,6 +333,16 @@ pub fn find_by_fingerprint(
         |row| Ok((row.get(0)?, row.get(1)?)),
     )
     .optional()
+}
+
+/// `"2024/summer/img_1"` for `"2024/summer/IMG_1.HEIC"`.
+fn stem_of(rel_path: &str) -> String {
+    let name_at = rel_path.rfind('/').map_or(0, |slash| slash + 1);
+    let stem = match rel_path[name_at..].rfind('.') {
+        Some(dot) if dot > 0 => &rel_path[..name_at + dot],
+        _ => rel_path,
+    };
+    stem.to_lowercase()
 }
 
 /// The folder part of a relative path: `"2024/summer"` for
@@ -281,13 +372,15 @@ const IS_HIDDEN: &str =
     "fingerprint IN (SELECT key FROM org_state WHERE kind = 'hide' AND value = '1')";
 const IS_FAVORITE: &str =
     "fingerprint IN (SELECT key FROM org_state WHERE kind = 'fav' AND value = '1')";
+/// Rows that can be listed: decodable, and not the video half of a Live Photo.
+const IS_LISTED: &str = "thumb_state != 2 AND live_part = 0";
 
 impl Listing {
     /// The `WHERE` clause and its one parameter (`?1`, NULL when unused).
-    /// Undecodable files (`thumb_state = 2`) are indexed but never listed, and
-    /// hidden photos appear only in the "Hidden" listing.
+    /// Undecodable files and Live Photo videos are indexed but never listed,
+    /// and hidden photos appear only in the "Hidden" listing.
     fn filter(&self) -> (String, Option<&str>) {
-        let visible = format!("thumb_state != 2 AND NOT {IS_HIDDEN}");
+        let visible = format!("{IS_LISTED} AND NOT {IS_HIDDEN}");
         match self {
             Listing::Library => (format!("WHERE {visible} AND ?1 IS NULL"), None),
             Listing::Folder { folder } => {
@@ -305,7 +398,7 @@ impl Listing {
                 Some(album),
             ),
             Listing::Hidden => (
-                format!("WHERE thumb_state != 2 AND {IS_HIDDEN} AND ?1 IS NULL"),
+                format!("WHERE {IS_LISTED} AND {IS_HIDDEN} AND ?1 IS NULL"),
                 None,
             ),
         }
@@ -353,6 +446,10 @@ pub struct PhotoItem {
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub favorite: bool,
+    pub video: bool,
+    pub duration_ms: Option<u64>,
+    /// For a Live Photo: the fingerprint of its video.
+    pub live_video: Option<String>,
 }
 
 /// A slice of the listing, newest first (ties broken by path).
@@ -364,7 +461,8 @@ pub fn photos_page(
 ) -> rusqlite::Result<Vec<PhotoItem>> {
     let (filter, param) = listing.filter();
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE}
+        "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE},
+                kind, duration_ms, live_video
          FROM photos {filter} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2"
     ))?;
     let rows = stmt.query_map(params![param, offset, limit], |row| {
@@ -375,6 +473,9 @@ pub fn photos_page(
             width: row.get(3)?,
             height: row.get(4)?,
             favorite: row.get(5)?,
+            video: row.get(6)?,
+            duration_ms: row.get::<_, Option<i64>>(7)?.map(|ms| ms as u64),
+            live_video: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -393,7 +494,7 @@ pub struct FolderEntry {
 pub fn folders(conn: &Connection) -> rusqlite::Result<Vec<FolderEntry>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT folder, COUNT(*) FROM photos
-         WHERE thumb_state != 2 AND NOT {IS_HIDDEN} GROUP BY folder ORDER BY folder"
+         WHERE {IS_LISTED} AND NOT {IS_HIDDEN} GROUP BY folder ORDER BY folder"
     ))?;
     let rows = stmt.query_map([], |row| {
         Ok(FolderEntry {
@@ -424,6 +525,10 @@ pub struct PhotoDetails {
     pub hidden: bool,
     /// Ids of the albums the photo is in.
     pub albums: Vec<String>,
+    pub video: bool,
+    pub duration_ms: Option<u64>,
+    /// For a Live Photo: the fingerprint of its video.
+    pub live_video: Option<String>,
 }
 
 pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Option<PhotoDetails>> {
@@ -432,7 +537,7 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
             &format!(
                 "SELECT rel_path, fingerprint, size, sort_date, date_source, width, height,
                         camera_make, camera_model, latitude, longitude,
-                        {IS_FAVORITE}, {IS_HIDDEN}
+                        {IS_FAVORITE}, {IS_HIDDEN}, kind, duration_ms, live_video
                  FROM photos WHERE rel_path = ?1"
             ),
             [rel_path],
@@ -452,6 +557,9 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
                     favorite: row.get(11)?,
                     hidden: row.get(12)?,
                     albums: Vec::new(),
+                    video: row.get(13)?,
+                    duration_ms: row.get::<_, Option<i64>>(14)?.map(|ms| ms as u64),
+                    live_video: row.get(15)?,
                 })
             },
         )
@@ -535,7 +643,7 @@ pub fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT a.key, a.value,
                 (SELECT COUNT(*) FROM photos
-                 WHERE thumb_state != 2 AND NOT {IS_HIDDEN}
+                 WHERE {IS_LISTED} AND NOT {IS_HIDDEN}
                    AND fingerprint IN (SELECT photo FROM org_state
                                        WHERE kind = 'member' AND key = a.key AND value = '1'))
          FROM org_state a
@@ -554,10 +662,13 @@ pub fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
     rows.collect()
 }
 
+/// How many photos and videos are indexed. A Live Photo counts once.
 pub fn count(conn: &Connection) -> rusqlite::Result<u64> {
-    conn.query_row("SELECT COUNT(*) FROM photos", [], |row| {
-        row.get::<_, i64>(0).map(|n| n as u64)
-    })
+    conn.query_row(
+        "SELECT COUNT(*) FROM photos WHERE live_part = 0",
+        [],
+        |row| row.get::<_, i64>(0).map(|n| n as u64),
+    )
 }
 
 #[cfg(test)]
@@ -579,6 +690,9 @@ mod tests {
             camera_model: None,
             latitude: Some(49.6),
             longitude: Some(6.1),
+            is_video: false,
+            duration_ms: None,
+            live_candidate: false,
         }
     }
 
@@ -736,6 +850,90 @@ mod tests {
             one.contains("COVERING INDEX photos_folder") && !one.contains("TEMP B-TREE"),
             "{one}"
         );
+    }
+
+    fn video(rel_path: &str, fingerprint: &str, live_candidate: bool) -> PhotoRow {
+        PhotoRow {
+            fingerprint: fingerprint.into(),
+            is_video: true,
+            duration_ms: Some(2800),
+            live_candidate,
+            ..row(rel_path, 1)
+        }
+    }
+
+    #[test]
+    fn live_photos_are_paired_by_name() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        upsert(&tx, &row("trip/IMG_1.HEIC", 1)).unwrap();
+        upsert(&tx, &video("trip/IMG_1.mov", "live1", true)).unwrap();
+        // Same name in another folder: not a pair.
+        upsert(&tx, &video("other/IMG_1.mov", "elsewhere", true)).unwrap();
+        // A normal video that happens to sit next to a photo of the same name.
+        upsert(&tx, &row("trip/party.jpg", 1)).unwrap();
+        upsert(&tx, &video("trip/party.mp4", "long", false)).unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(pair_live_photos(&mut conn).unwrap(), 2);
+        // Running it again changes nothing.
+        assert_eq!(pair_live_photos(&mut conn).unwrap(), 0);
+
+        let listed: Vec<(String, Option<String>, bool)> =
+            photos_page(&conn, &Listing::Library, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| (item.rel_path, item.live_video, item.video))
+                .collect();
+        assert_eq!(
+            listed,
+            [
+                ("other/IMG_1.mov".to_owned(), None, true),
+                (
+                    "trip/IMG_1.HEIC".to_owned(),
+                    Some("live1".to_owned()),
+                    false
+                ),
+                ("trip/party.jpg".to_owned(), None, false),
+                ("trip/party.mp4".to_owned(), None, true),
+            ]
+        );
+        // The Live Photo counts once, everywhere.
+        assert_eq!(count(&conn).unwrap(), 4);
+        let per_day: u32 = timeline(&conn, &Listing::Library)
+            .unwrap()
+            .iter()
+            .map(|group| group.count)
+            .sum();
+        assert_eq!(per_day, 4);
+        let in_trip = folders(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.folder == "trip")
+            .unwrap();
+        assert_eq!(in_trip.count, 3);
+        // Its video needs no thumbnail of its own.
+        assert!(pending_thumbs(&conn)
+            .unwrap()
+            .iter()
+            .all(|pending| pending.rel_path != "trip/IMG_1.mov"));
+        let details = photo_details(&conn, "trip/IMG_1.HEIC").unwrap().unwrap();
+        assert_eq!(details.live_video.as_deref(), Some("live1"));
+
+        // When the photo goes away, its video becomes a normal video again.
+        let tx = conn.transaction().unwrap();
+        delete(&tx, "trip/IMG_1.HEIC").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(pair_live_photos(&mut conn).unwrap(), 1);
+        assert_eq!(count(&conn).unwrap(), 4);
+    }
+
+    #[test]
+    fn stems() {
+        assert_eq!(stem_of("2024/Summer/IMG_1.HEIC"), "2024/summer/img_1");
+        assert_eq!(stem_of("IMG_1.mov"), "img_1");
+        assert_eq!(stem_of("a.b/noext"), "a.b/noext");
+        assert_eq!(stem_of("dir/.hidden"), "dir/.hidden");
     }
 
     #[test]

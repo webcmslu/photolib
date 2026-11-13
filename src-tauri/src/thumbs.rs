@@ -5,6 +5,9 @@
 //! - **preview**: long side about 1024 px, for the viewer and for browsing
 //!   while the library is offline.
 //!
+//! RAW files are thumbnailed from their embedded preview (see raw.rs), and
+//! videos from a frame grabbed by an external tool (see frames.rs).
+//!
 //! Files are named by content fingerprint, so the cache survives renames and is
 //! shared by every library on this computer. EXIF orientation is baked in:
 //! cached thumbnails are always upright.
@@ -25,7 +28,10 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 use crate::db::{self, ThumbState};
+use crate::frames::{self, FrameError};
 use crate::indexer::{Phase, Progress};
+use crate::metadata::{kind_of, Kind};
+use crate::raw;
 
 const GRID_SHORT_SIDE: u32 = 256;
 /// Caps the long side of grid thumbnails so panoramas stay small.
@@ -67,6 +73,10 @@ pub enum ThumbError {
     Io(io::Error),
     /// The file was read but is not an image we can decode. Retrying won't help.
     Decode(String),
+    /// A video, on a computer with no tool that can read videos.
+    NoVideoTool,
+    /// A video that the tool could not get a picture from.
+    NoFrame(String),
 }
 
 impl std::fmt::Display for ThumbError {
@@ -74,6 +84,8 @@ impl std::fmt::Display for ThumbError {
         match self {
             Self::Io(e) => write!(f, "read/write error: {e}"),
             Self::Decode(why) => write!(f, "can't decode image: {why}"),
+            Self::NoVideoTool => write!(f, "no tool to read videos (install ffmpeg)"),
+            Self::NoFrame(why) => write!(f, "can't get a frame from the video: {why}"),
         }
     }
 }
@@ -145,19 +157,34 @@ impl ThumbCache {
         let (w, h) = fit_long_side(width, height, PREVIEW_LONG_SIDE);
         let mut preview = DynamicImage::ImageRgb8(resize(decoded.pixels, w, h)?);
         preview.apply_orientation(orientation);
-        let preview = preview.into_rgb8();
-
-        let (w, h) = grid_size(preview.width(), preview.height());
-        let grid = resize(preview.clone(), w, h)?;
-
-        self.write(ThumbSize::Preview, fingerprint, &preview, PREVIEW_QUALITY)?;
-        self.write(ThumbSize::Grid, fingerprint, &grid, GRID_QUALITY)?;
+        self.store(fingerprint, preview.into_rgb8())?;
 
         Ok(if swaps_sides {
             (height, width)
         } else {
             (width, height)
         })
+    }
+
+    /// Writes both thumbnail sizes of a video, from a frame near its start.
+    pub fn generate_from_video(&self, source: &Path, fingerprint: &str) -> Result<(), ThumbError> {
+        // Tell "can't read the file" (worth retrying) from "can't decode it".
+        fs::File::open(source)?;
+        let frame = frames::grab(source, &self.root.join("tmp")).map_err(|e| match e {
+            FrameError::NoTool => ThumbError::NoVideoTool,
+            FrameError::Failed(why) => ThumbError::NoFrame(why),
+        })?;
+        let (w, h) = fit_long_side(frame.width(), frame.height(), PREVIEW_LONG_SIDE);
+        self.store(fingerprint, resize(frame, w, h)?)
+    }
+
+    /// Writes an upright preview-sized picture and the grid thumbnail made
+    /// from it.
+    fn store(&self, fingerprint: &str, preview: RgbImage) -> Result<(), ThumbError> {
+        let (w, h) = grid_size(preview.width(), preview.height());
+        let grid = resize(preview.clone(), w, h)?;
+        self.write(ThumbSize::Preview, fingerprint, &preview, PREVIEW_QUALITY)?;
+        self.write(ThumbSize::Grid, fingerprint, &grid, GRID_QUALITY)
     }
 
     /// Writes to a temp file and renames it, so a reader never sees half a JPEG.
@@ -205,8 +232,12 @@ pub fn is_web_image(path: &Path) -> Option<&'static str> {
 }
 
 /// Decodes `source` and re-encodes it as a full-size, upright JPEG, for
-/// formats the webview can't display (HEIC, TIFF).
+/// formats the webview can't display (HEIC, TIFF, RAW).
 pub fn render_jpeg(source: &Path, orientation: Option<u8>) -> Result<Vec<u8>, ThumbError> {
+    if kind_of(source) == Some(Kind::Raw) && orientation.is_none_or(|o| o == 1) {
+        // The embedded preview is a JPEG already: no need to re-encode it.
+        return raw_preview(&fs::read(source)?).map(<[u8]>::to_vec);
+    }
     let decoded = decode(source)?;
     let orientation = orientation
         .filter(|_| !decoded.upright)
@@ -225,12 +256,21 @@ fn probe_size(source: &Path, orientation: Option<u8>) -> Option<(u32, u32)> {
     if is_heic(source) {
         return probe_heic_size(source); // already upright
     }
-    let (width, height) = ImageReader::open(source)
-        .ok()?
-        .with_guessed_format()
-        .ok()?
-        .into_dimensions()
-        .ok()?;
+    let (width, height) = if kind_of(source) == Some(Kind::Raw) {
+        let file = fs::read(source).ok()?;
+        ImageReader::new(io::Cursor::new(raw::embedded_preview(&file)?))
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()?
+    } else {
+        ImageReader::open(source)
+            .ok()?
+            .with_guessed_format()
+            .ok()?
+            .into_dimensions()
+            .ok()?
+    };
     // EXIF orientations 5 to 8 turn the image on its side.
     Some(if orientation.is_some_and(|o| (5..=8).contains(&o)) {
         (height, width)
@@ -279,6 +319,16 @@ struct Decoded {
 fn decode(source: &Path) -> Result<Decoded, ThumbError> {
     if is_heic(source) {
         return decode_heic(source);
+    }
+    if kind_of(source) == Some(Kind::Raw) {
+        let file = fs::read(source)?;
+        // The preview is stored as the sensor saw it; the caller applies the
+        // RAW file's own orientation.
+        let image = image::load_from_memory(raw_preview(&file)?)?;
+        return Ok(Decoded {
+            pixels: image.into_rgb8(),
+            upright: false,
+        });
     }
 
     let image = ImageReader::open(source)?.with_guessed_format()?.decode()?;
@@ -334,6 +384,11 @@ fn decode_heic(source: &Path) -> Result<Decoded, ThumbError> {
 #[cfg(all(not(feature = "heic"), not(target_os = "macos")))]
 fn decode_heic(_source: &Path) -> Result<Decoded, ThumbError> {
     Err(ThumbError::Decode("this build has no HEIC support".into()))
+}
+
+fn raw_preview(file: &[u8]) -> Result<&[u8], ThumbError> {
+    raw::embedded_preview(file)
+        .ok_or_else(|| ThumbError::Decode("no embedded preview in this RAW file".into()))
 }
 
 /// Converts to 8-bit RGB, putting transparent images on a white background.
@@ -406,6 +461,8 @@ pub struct ThumbSummary {
     pub generated: u64,
     /// Files that are not decodable images. They are not retried.
     pub undecodable: u64,
+    /// Videos left without a thumbnail (they are still listed).
+    pub without_thumbnail: u64,
     /// Files that could not be read this time. They are retried on the next scan.
     pub unreadable: u64,
     pub cancelled: bool,
@@ -426,6 +483,10 @@ pub fn generate_missing(
 ) -> rusqlite::Result<ThumbSummary> {
     let started = Instant::now();
     let mut summary = ThumbSummary::default();
+    if frames::available() {
+        // A video tool may have been installed since the last pass.
+        db::retry_missing_thumbs(conn)?;
+    }
     let pending = db::pending_thumbs(conn)?;
     let total = pending.len() as u64;
     let mut done = 0u64;
@@ -455,7 +516,17 @@ pub fn generate_missing(
                 let source = root.join(&photo.rel_path);
                 let result = if cache.has_both(&photo.fingerprint) {
                     // E.g. a renamed file, a second copy, or a rebuilt index.
-                    Ok(probe_size(&source, photo.orientation))
+                    Ok(if photo.is_video {
+                        None
+                    } else {
+                        probe_size(&source, photo.orientation)
+                    })
+                } else if photo.is_video {
+                    generated.fetch_add(1, Ordering::Relaxed);
+                    // The size of a video comes from its metadata.
+                    cache
+                        .generate_from_video(&source, &photo.fingerprint)
+                        .map(|()| None)
                 } else {
                     generated.fetch_add(1, Ordering::Relaxed);
                     cache
@@ -477,6 +548,14 @@ pub fn generate_missing(
                     db::set_thumb_state(&tx, &rel_path, ThumbState::Failed, None)?;
                     summary.undecodable += 1;
                 }
+                Err(ThumbError::NoVideoTool) => {
+                    db::set_thumb_state(&tx, &rel_path, ThumbState::Missing, None)?;
+                    summary.without_thumbnail += 1;
+                }
+                Err(ThumbError::NoFrame(_)) => {
+                    db::set_thumb_state(&tx, &rel_path, ThumbState::NoFrame, None)?;
+                    summary.without_thumbnail += 1;
+                }
                 Err(ThumbError::Io(_)) => summary.unreadable += 1,
             }
             done += 1;
@@ -494,8 +573,10 @@ pub fn generate_missing(
         tx.commit()
     })?;
 
-    summary.generated =
-        generated.load(Ordering::Relaxed) - summary.undecodable - summary.unreadable;
+    summary.generated = generated.load(Ordering::Relaxed)
+        - summary.undecodable
+        - summary.unreadable
+        - summary.without_thumbnail;
     summary.cancelled = cancel.load(Ordering::Relaxed);
     summary.duration_ms = started.elapsed().as_millis() as u64;
     Ok(summary)
@@ -689,6 +770,133 @@ mod tests {
         assert!(db::pending_thumbs(&conn).unwrap().is_empty());
         let renamed = db::photo_details(&conn, "renamed.jpg").unwrap().unwrap();
         assert_eq!((renamed.width, renamed.height), (Some(300), Some(300)));
+    }
+
+    /// A stand-in for a RAW file: a TIFF header that says "rotated", some
+    /// sensor data, and an embedded preview JPEG.
+    fn fake_raw(preview: &[u8]) -> Vec<u8> {
+        let mut file =
+            crate::metadata::testing::tiff_with_exif(&[short_field(Tag::Orientation, 6)]);
+        file.extend_from_slice(&[0x55; 2000]);
+        file.extend_from_slice(preview);
+        file.extend_from_slice(&[0xAA; 500]);
+        file
+    }
+
+    #[test]
+    fn raw_files_use_their_embedded_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("shot.NEF");
+        let preview = red_blue_jpeg(400, 200);
+        fs::write(&source, fake_raw(&preview)).unwrap();
+        assert_eq!(crate::metadata::read(&source).orientation, Some(6));
+
+        let cache = cache(dir.path());
+        // Rotated a quarter turn, as the RAW file's orientation says.
+        assert_eq!(cache.generate(&source, FP, Some(6)).unwrap(), (200, 400));
+        let grid = image::open(cache.path(ThumbSize::Grid, FP))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(grid.dimensions(), (200, 400));
+        assert!(is_red(grid.get_pixel(100, 20)));
+        assert!(is_blue(grid.get_pixel(100, 380)));
+        assert_eq!(probe_size(&source, Some(6)), Some((200, 400)));
+
+        // The viewer gets the preview as it is when no rotation is needed...
+        assert_eq!(render_jpeg(&source, None).unwrap(), preview);
+        // ...and an upright copy otherwise.
+        let upright = image::load_from_memory(&render_jpeg(&source, Some(6)).unwrap()).unwrap();
+        assert_eq!((upright.width(), upright.height()), (200, 400));
+
+        // A RAW file without a preview is undecodable, not an I/O error.
+        let empty = dir.path().join("empty.cr2");
+        fs::write(&empty, [0x55; 3000]).unwrap();
+        assert!(matches!(
+            cache.generate(&empty, FP, None),
+            Err(ThumbError::Decode(_))
+        ));
+    }
+
+    /// Makes a small test video with ffmpeg. `None` where ffmpeg is missing:
+    /// the video tests then pass without checking anything.
+    fn test_video(path: &Path, size: &str, seconds: &str) -> Option<()> {
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg(format!(
+                "color=c=red:size={size}:rate=10:duration={seconds}"
+            ))
+            .args(["-pix_fmt", "yuv420p"])
+            .arg(path)
+            .status()
+            .ok()?
+            .success();
+        made.then_some(())
+    }
+
+    #[test]
+    fn videos_get_thumbnails_from_a_frame() {
+        use crate::indexer;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("library");
+        fs::create_dir(&root).unwrap();
+        if test_video(&root.join("long.mp4"), "640x360", "6").is_none() {
+            eprintln!("ffmpeg not found: skipping");
+            return;
+        }
+        // Shorter than the one second we normally skip.
+        test_video(&root.join("IMG_7.mov"), "320x240", "0.5").unwrap();
+        fs::write(root.join("IMG_7.jpg"), red_blue_jpeg(320, 240)).unwrap();
+        fs::write(root.join("broken.mp4"), b"not a video").unwrap();
+
+        let cache = cache(dir.path());
+        let never = AtomicBool::new(false);
+        let mut conn = db::open_in_memory().unwrap();
+        let scan = indexer::scan(&root, &mut conn, &never, &|_| {}).unwrap();
+        // The short video became the moving half of the photo next to it.
+        assert_eq!((scan.added, scan.total), (4, 3));
+
+        let summary = generate_missing(&root, &mut conn, &cache, &never, &|_| {}).unwrap();
+        assert_eq!(
+            (
+                summary.generated,
+                summary.without_thumbnail,
+                summary.undecodable
+            ),
+            (2, 1, 0),
+            "{summary:?}"
+        );
+
+        let long = db::photo_details(&conn, "long.mp4").unwrap().unwrap();
+        assert!(long.video);
+        assert_eq!((long.width, long.height), (Some(640), Some(360)));
+        assert_eq!(long.duration_ms, Some(6000));
+        let grid = image::open(cache.path(ThumbSize::Grid, &long.fingerprint))
+            .unwrap()
+            .into_rgb8();
+        assert_eq!(grid.dimensions(), (455, 256));
+        assert!(is_red(grid.get_pixel(200, 100)));
+
+        // The broken video is still listed, without a thumbnail, and is not
+        // tried again.
+        assert_eq!(
+            db::photos_page(&conn, &db::Listing::Library, 0, 10)
+                .unwrap()
+                .len(),
+            3
+        );
+        let again = generate_missing(&root, &mut conn, &cache, &never, &|_| {}).unwrap();
+        assert_eq!(again.generated + again.without_thumbnail, 0);
+
+        // A very short video still gives a frame (on demand: it is a Live
+        // Photo half here, so the background pass left it alone).
+        let live = db::photo_details(&conn, "IMG_7.jpg").unwrap().unwrap();
+        let live_video = live.live_video.unwrap();
+        assert!(!cache.has_both(&live_video));
+        cache
+            .generate_from_video(&root.join("IMG_7.mov"), &live_video)
+            .unwrap();
+        assert!(cache.has_both(&live_video));
     }
 
     #[test]
