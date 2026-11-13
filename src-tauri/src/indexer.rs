@@ -21,7 +21,7 @@ use serde::Serialize;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::db::{self, PhotoRow};
-use crate::{fingerprint, metadata};
+use crate::{fingerprint, metadata, places};
 
 /// Folders that NAS systems fill with their own thumbnails and trash.
 const SKIPPED_DIRS: &[&str] = &[
@@ -258,6 +258,10 @@ pub fn scan(
     // which photos.
     if !summary.cancelled {
         db::pair_live_photos(conn)?;
+        // Name the places of the photos that are new or moved.
+        db::fill_places(conn, |latitude, longitude| {
+            places::lookup(latitude, longitude).map(|place| (place.name, place.search))
+        })?;
     }
 
     summary.total = db::count(conn)?;

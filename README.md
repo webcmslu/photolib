@@ -35,6 +35,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 - Milestone 9 (browsing polish): Years / Months / All Photos views, a
   larger "featured" card for days with many photos, a thumbnail size slider
   (also Ctrl/Cmd + and -), and a resizable sidebar.
+- Milestone 10 (search): a search box that matches place, camera, folder
+  and file names, years (`2024`), months (`2024-07`, `july`) and kinds
+  (`video`, `live`, `raw`, `favorite`). Places are named offline from a
+  bundled GeoNames city list (`src-tauri/data/`).
 
 ## Develop
 
@@ -96,6 +100,7 @@ To build installers locally: `npm run tauri build`.
 - `raw.rs` finds the preview in RAW files; `video.rs` reads MP4/MOV
   metadata; `frames.rs` grabs a video frame for thumbnails; `media_server.rs`
   serves videos to the Linux webview, which can't play them from `photo://`.
+- `search.rs` turns a search into SQL; `places.rs` names the nearest town.
 - `geo.rs` clusters photo positions for the map (`MapView.svelte`, Leaflet).
 - `org.rs` is the shared organization: the `.photolib` log format and the
   merge. Its header comment describes the format.

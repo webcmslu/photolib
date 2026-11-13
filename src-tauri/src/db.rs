@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -52,7 +52,12 @@ CREATE TABLE photos (
     live_video    TEXT,
     -- 1 on the video of a Live Photo. It is shown through its photo, never
     -- listed by itself.
-    live_part     INTEGER NOT NULL DEFAULT 0
+    live_part     INTEGER NOT NULL DEFAULT 0,
+    -- The nearest town to latitude/longitude, such as 'Paris, France'. NULL
+    -- until it has been looked up; '' when no town is near. See places.rs.
+    place         TEXT,
+    -- The same in lowercase and without accents, for searching.
+    place_search  TEXT
 );
 -- The order the timeline and the folder view list photos in. Partial, to match
 -- their WHERE clause, so skipping to a far offset reads only the index.
@@ -140,6 +145,17 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if version == SCHEMA_VERSION {
         return Ok(());
     }
+    if version == 5 {
+        // Version 6 only added two columns that are filled in afterwards:
+        // not worth indexing a whole library again.
+        return conn.execute_batch(&format!(
+            "BEGIN;
+             ALTER TABLE photos ADD COLUMN place TEXT;
+             ALTER TABLE photos ADD COLUMN place_search TEXT;
+             PRAGMA user_version = {SCHEMA_VERSION};
+             COMMIT;"
+        ));
+    }
     // The index is only a cache, so any other version (older or from a newer
     // build) is simply rebuilt from scratch on the next scan.
     conn.execute_batch(&format!(
@@ -186,7 +202,14 @@ pub fn upsert(tx: &Transaction<'_>, row: &PhotoRow) -> rusqlite::Result<()> {
              camera_make = excluded.camera_make, camera_model = excluded.camera_model,
              latitude = excluded.latitude, longitude = excluded.longitude,
              kind = excluded.kind, duration_ms = excluded.duration_ms,
-             live_candidate = excluded.live_candidate",
+             live_candidate = excluded.live_candidate,
+             -- A new position needs its place looked up again.
+             place = CASE WHEN photos.latitude IS excluded.latitude
+                           AND photos.longitude IS excluded.longitude
+                          THEN photos.place END,
+             place_search = CASE WHEN photos.latitude IS excluded.latitude
+                                  AND photos.longitude IS excluded.longitude
+                                 THEN photos.place_search END",
     )?
     .execute(params![
         row.rel_path,
@@ -262,6 +285,33 @@ pub fn retry_missing_thumbs(conn: &Connection) -> rusqlite::Result<usize> {
         "UPDATE photos SET thumb_state = 0 WHERE thumb_state = 3",
         [],
     )
+}
+
+/// Names the place of every photo that has a position but no place yet.
+/// `lookup` gives the display name and the search text for a position.
+/// Returns how many photos were looked up.
+pub fn fill_places(
+    conn: &mut Connection,
+    lookup: impl Fn(f64, f64) -> Option<(String, String)>,
+) -> rusqlite::Result<usize> {
+    let pending: Vec<(i64, f64, f64)> = conn
+        .prepare(
+            "SELECT id, latitude, longitude FROM photos
+                  WHERE place IS NULL AND latitude IS NOT NULL AND longitude IS NOT NULL",
+        )?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let tx = conn.transaction()?;
+    {
+        let mut update =
+            tx.prepare("UPDATE photos SET place = ?2, place_search = ?3 WHERE id = ?1")?;
+        for (id, latitude, longitude) in &pending {
+            let (place, search) = lookup(*latitude, *longitude).unwrap_or_default();
+            update.execute(params![id, place, search])?;
+        }
+    }
+    tx.commit()?;
+    Ok(pending.len())
 }
 
 /// Pairs each Live Photo's video with its photo: a short (or Apple-tagged)
@@ -366,6 +416,10 @@ pub enum Listing {
         album: String,
     },
     Hidden,
+    /// The photos that match what was typed in the search box.
+    Search {
+        query: String,
+    },
     /// The photos taken inside a rectangle on the map.
     Area {
         south: f64,
@@ -406,6 +460,13 @@ impl Listing {
             ),
             Listing::Hidden => (
                 format!("WHERE {IS_LISTED} AND {IS_HIDDEN} AND ?1 IS NULL"),
+                None,
+            ),
+            Listing::Search { query } => (
+                format!(
+                    "WHERE {visible} AND ({}) AND ?1 IS NULL",
+                    crate::search::condition(query)
+                ),
                 None,
             ),
             Listing::Area {
@@ -614,6 +675,8 @@ pub struct PhotoDetails {
     pub duration_ms: Option<u64>,
     /// For a Live Photo: the fingerprint of its video.
     pub live_video: Option<String>,
+    /// The nearest town, such as "Paris, France".
+    pub place: Option<String>,
 }
 
 pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Option<PhotoDetails>> {
@@ -622,7 +685,8 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
             &format!(
                 "SELECT rel_path, fingerprint, size, sort_date, date_source, width, height,
                         camera_make, camera_model, latitude, longitude,
-                        {IS_FAVORITE}, {IS_HIDDEN}, kind, duration_ms, live_video
+                        {IS_FAVORITE}, {IS_HIDDEN}, kind, duration_ms, live_video,
+                        NULLIF(place, '')
                  FROM photos WHERE rel_path = ?1"
             ),
             [rel_path],
@@ -645,6 +709,7 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
                     video: row.get(13)?,
                     duration_ms: row.get::<_, Option<i64>>(14)?.map(|ms| ms as u64),
                     live_video: row.get(15)?,
+                    place: row.get(16)?,
                 })
             },
         )
@@ -1143,6 +1208,89 @@ mod tests {
             }
         );
         assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);
+    }
+
+    #[test]
+    fn search_by_words_dates_and_places() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        // 2024-07-14 and 2023-12-31 as wall-clock milliseconds.
+        let mut paris = dated("trips/eiffel.jpg", 1_720_915_200_000);
+        paris.fingerprint = "p".into();
+        paris.latitude = Some(48.8584);
+        paris.longitude = Some(2.2945);
+        upsert(&tx, &paris).unwrap();
+        let mut zurich = dated("trips/lake.heic", 1_703_980_800_000);
+        zurich.fingerprint = "z".into();
+        zurich.latitude = Some(30.0); // nowhere near a town
+        zurich.camera_make = Some("Apple".into());
+        zurich.camera_model = Some("iPhone 15".into());
+        upsert(&tx, &zurich).unwrap();
+        let mut clip = video("2024 clips/party.mp4", "v", false);
+        clip.sort_date = 1_600_000_000_000;
+        clip.latitude = None;
+        upsert(&tx, &clip).unwrap();
+        tx.commit().unwrap();
+
+        let looked_up = fill_places(&mut conn, |latitude, _| {
+            (latitude > 48.0).then(|| ("Paris, France".to_owned(), "paris france".to_owned()))
+        })
+        .unwrap();
+        assert_eq!(looked_up, 2);
+        // Nothing is looked up twice, found or not.
+        assert_eq!(fill_places(&mut conn, |_, _| panic!("again")).unwrap(), 0);
+
+        let find = |query: &str| {
+            let listing = Listing::Search {
+                query: query.into(),
+            };
+            let mut names: Vec<String> = photos_page(&conn, &listing, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.rel_path)
+                .collect();
+            names.sort();
+            names.join(" ")
+        };
+        assert_eq!(find("paris"), "trips/eiffel.jpg");
+        assert_eq!(find("FRANCE eiffel"), "trips/eiffel.jpg");
+        assert_eq!(find("iphone"), "trips/lake.heic");
+        assert_eq!(find("canon trips"), "trips/eiffel.jpg");
+        // A year matches the date taken, or the text.
+        assert_eq!(find("2024"), "2024 clips/party.mp4 trips/eiffel.jpg");
+        assert_eq!(find("2023-12"), "trips/lake.heic");
+        assert_eq!(find("july"), "trips/eiffel.jpg");
+        assert_eq!(find("video"), "2024 clips/party.mp4");
+        assert_eq!(find("trips video"), "");
+        assert_eq!(find("100%"), "");
+        assert_eq!(find(""), "");
+
+        let details = photo_details(&conn, "trips/eiffel.jpg").unwrap().unwrap();
+        assert_eq!(details.place.as_deref(), Some("Paris, France"));
+        let nowhere = photo_details(&conn, "trips/lake.heic").unwrap().unwrap();
+        assert_eq!(nowhere.place, None);
+    }
+
+    #[test]
+    fn version_5_is_upgraded_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.db");
+        {
+            let mut conn = open(&path).unwrap();
+            let tx = conn.transaction().unwrap();
+            upsert(&tx, &row("a.jpg", 1)).unwrap();
+            tx.commit().unwrap();
+            // Make it look like a version 5 index.
+            conn.execute_batch(
+                "ALTER TABLE photos DROP COLUMN place;
+                 ALTER TABLE photos DROP COLUMN place_search;
+                 PRAGMA user_version = 5;",
+            )
+            .unwrap();
+        }
+        let mut conn = open(&path).unwrap();
+        assert_eq!(count(&conn).unwrap(), 1);
+        assert_eq!(fill_places(&mut conn, |_, _| None).unwrap(), 1);
     }
 
     #[test]

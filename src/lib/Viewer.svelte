@@ -445,7 +445,10 @@
           {/if}
           {#if details.latitude !== null && details.longitude !== null}
             <dt>Location</dt>
-            <dd>{details.latitude.toFixed(5)}, {details.longitude.toFixed(5)}</dd>
+            <dd>
+              {#if details.place}{details.place}<br />{/if}
+              <small>{details.latitude.toFixed(5)}, {details.longitude.toFixed(5)}</small>
+            </dd>
           {/if}
         {/if}
       </dl>

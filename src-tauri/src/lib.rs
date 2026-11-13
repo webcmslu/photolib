@@ -8,8 +8,10 @@ mod indexer;
 mod media_server;
 mod metadata;
 mod org;
+mod places;
 mod raw;
 mod recents;
+mod search;
 mod thumbs;
 mod video;
 

@@ -175,6 +175,8 @@ export interface PhotoDetails {
   video: boolean;
   durationMs: number | null;
   liveVideo: string | null;
+  /** The nearest town, such as "Paris, France". */
+  place: string | null;
 }
 
 /** What a photo listing shows. Mirrors `Listing` in src-tauri/src/db.rs. */
@@ -186,6 +188,8 @@ export type Listing =
   | { kind: "favorites" }
   | { kind: "album"; album: string }
   | { kind: "hidden" }
+  /** The photos that match what was typed in the search box. */
+  | { kind: "search"; query: string }
   /** The photos taken inside a rectangle on the map. */
   | { kind: "area"; south: number; west: number; north: number; east: number };
 

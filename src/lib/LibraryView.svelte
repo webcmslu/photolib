@@ -252,7 +252,42 @@
         return listing.folder || "Top level";
       case "area":
         return "Photos from the map";
+      case "search":
+        return `Search: ${listing.query}`;
     }
+  });
+
+  // --- Search -------------------------------------------------------------------
+
+  let searchText = $state("");
+  /** What was listed before the search, to go back to when it is cleared. */
+  let beforeSearch: Listing = { kind: "library" };
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Lists the matches a moment after the user stops typing. */
+  function onSearchInput() {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      const query = searchText.trim();
+      if (query === "") {
+        if (listing.kind === "search") listing = beforeSearch;
+        return;
+      }
+      if (listing.kind !== "search") beforeSearch = listing;
+      listing = { kind: "search", query };
+      showMap = false;
+    }, 250);
+  }
+
+  function clearSearch() {
+    clearTimeout(searchTimer);
+    searchText = "";
+    if (listing.kind === "search") listing = beforeSearch;
+  }
+
+  // Choosing something in the sidebar ends the search.
+  $effect(() => {
+    if (listing.kind !== "search") searchText = "";
   });
 
   const emptyText = $derived.by(() => {
@@ -263,6 +298,8 @@
         return "No hidden photos.";
       case "album":
         return "This album is empty. Select photos in the grid and choose “Add to album”.";
+      case "search":
+        return "Nothing matches. Try a place, a camera, a folder or file name, a year (2024), a month (july) or “video”.";
       default:
         return scanning ? "Looking for photos…" : "No photos found in this folder.";
     }
@@ -504,6 +541,16 @@
   <header>
     <button class="link" onclick={onclose}>‹ Libraries</button>
     <strong class="name" title={library.path}>{library.name}</strong>
+    <div class="search">
+      <input
+        type="search"
+        bind:value={searchText}
+        oninput={onSearchInput}
+        onkeydown={(event) => event.key === "Escape" && clearSearch()}
+        placeholder="Search: place, camera, name, 2024, july, video…"
+        aria-label="Search photos"
+      />
+    </div>
     <div class="status" role="status">
       {#if scanning && progress && progress.phase !== "scanning" && progress.total > 0}
         <progress value={progress.done} max={progress.total}></progress>
@@ -829,7 +876,7 @@
   }
 
   .name {
-    flex: 1;
+    flex: 0 1 auto;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -909,6 +956,25 @@
     padding: 8px 0 16px;
     overflow-y: auto;
     background: var(--surface);
+  }
+
+  .search {
+    flex: 1;
+    display: flex;
+    justify-content: center;
+    min-width: 0;
+  }
+
+  .search input {
+    width: 100%;
+    max-width: 420px;
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
   }
 
   /* The line between the sidebar and the photos; drag it to resize. */
