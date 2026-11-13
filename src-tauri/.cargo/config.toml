@@ -1,0 +1,3 @@
+# Debian ships Rust 1.85: pick dependency versions that support it.
+[resolver]
+incompatible-rust-versions = "fallback"

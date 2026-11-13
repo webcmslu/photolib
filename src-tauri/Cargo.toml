@@ -19,6 +19,12 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+walkdir = "2.5.0"
+blake3 = "1.8.7"
+kamadak-exif = "0.6.2"
+rayon = "1.12.0"
+chrono = "0.4.45"
 
 [dev-dependencies]
 tempfile = "3"

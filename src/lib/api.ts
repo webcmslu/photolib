@@ -1,5 +1,6 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 /** An opened library folder. Mirrors `LibraryInfo` in Rust. */
@@ -40,4 +41,57 @@ export function listRecentLibraries(): Promise<RecentLibrary[]> {
 
 export function removeRecentLibrary(path: string): Promise<RecentLibrary[]> {
   return invoke("remove_recent_library", { path });
+}
+
+// --- Indexing ---------------------------------------------------------------
+
+/** Mirrors `Progress` in src-tauri/src/indexer.rs. */
+export interface ScanProgress {
+  phase: "scanning" | "indexing";
+  /** Image files found so far by the folder walk. */
+  discovered: number;
+  /** New or changed files that need indexing. */
+  toIndex: number;
+  indexed: number;
+}
+
+/** Mirrors `ScanSummary` in src-tauri/src/indexer.rs. */
+export interface ScanSummary {
+  total: number;
+  added: number;
+  updated: number;
+  removed: number;
+  unchanged: number;
+  failed: number;
+  unreadableDirs: number;
+  cancelled: boolean;
+  durationMs: number;
+}
+
+/** Mirrors `IndexEvent` in src-tauri/src/lib.rs. */
+export type IndexEvent =
+  | { state: "running"; libraryPath: string; progress: ScanProgress }
+  | { state: "finished"; libraryPath: string; summary: ScanSummary }
+  | { state: "failed"; libraryPath: string; message: string };
+
+export interface LibraryStats {
+  photoCount: number;
+  scanning: boolean;
+}
+
+/** Subscribes to scan events. Resolves to a function that unsubscribes. */
+export function onIndexEvent(handler: (event: IndexEvent) => void): Promise<UnlistenFn> {
+  return listen<IndexEvent>("index-event", (e) => handler(e.payload));
+}
+
+export function rescanLibrary(path: string): Promise<void> {
+  return invoke("rescan_library", { path });
+}
+
+export function closeLibrary(path: string): Promise<void> {
+  return invoke("close_library", { path });
+}
+
+export function libraryStats(path: string): Promise<LibraryStats> {
+  return invoke("library_stats", { path });
 }

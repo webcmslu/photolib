@@ -1,20 +1,92 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
+    closeLibrary as stopLibraryScan,
+    libraryStats,
     listRecentLibraries,
+    onIndexEvent,
     openLibrary,
     pickLibraryFolder,
     removeRecentLibrary,
+    rescanLibrary,
+    type IndexEvent,
     type LibraryInfo,
     type RecentLibrary,
+    type ScanProgress,
+    type ScanSummary,
   } from "./lib/api";
+
+  /** How often an open library is rescanned for changes made outside the app. */
+  const RESCAN_INTERVAL_MS = 15 * 60 * 1000;
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
   let error = $state<string | null>(null);
   let busy = $state(false);
 
-  onMount(refreshRecents);
+  // Index state of the open library.
+  let photoCount = $state<number | null>(null);
+  let progress = $state<ScanProgress | null>(null);
+  let scanning = $state(false);
+  let lastScan = $state<ScanSummary | null>(null);
+  let scanError = $state<string | null>(null);
+
+  onMount(() => {
+    refreshRecents();
+    const unlisten = onIndexEvent(handleIndexEvent);
+    const timer = setInterval(() => {
+      if (library && !scanning) rescan();
+    }, RESCAN_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+      unlisten.then((stop) => stop());
+    };
+  });
+
+  function handleIndexEvent(event: IndexEvent) {
+    // Ignore events from a library that has been closed in the meantime.
+    if (event.libraryPath !== library?.path) return;
+    if (event.state === "running") {
+      scanning = true;
+      progress = event.progress;
+    } else if (event.state === "finished") {
+      scanning = false;
+      progress = null;
+      lastScan = event.summary;
+      photoCount = event.summary.total;
+    } else {
+      scanning = false;
+      progress = null;
+      scanError = event.message;
+    }
+  }
+
+  async function rescan() {
+    if (!library) return;
+    scanError = null;
+    scanning = true;
+    try {
+      await rescanLibrary(library.path);
+    } catch (e) {
+      scanning = false;
+      scanError = String(e);
+    }
+  }
+
+  const numberFormat = new Intl.NumberFormat();
+  const n = (value: number) => numberFormat.format(value);
+
+  /** One-line description of what the last scan changed. */
+  function describe(summary: ScanSummary): string {
+    const parts = [
+      summary.added && `${n(summary.added)} added`,
+      summary.updated && `${n(summary.updated)} updated`,
+      summary.removed && `${n(summary.removed)} removed`,
+    ].filter(Boolean);
+    const changes = parts.length > 0 ? parts.join(", ") : "No changes";
+    const seconds = (summary.durationMs / 1000).toFixed(1);
+    return `${summary.cancelled ? "Scan stopped" : "Up to date"} · ${changes} · ${seconds} s`;
+  }
 
   async function refreshRecents() {
     try {
@@ -28,7 +100,20 @@
     busy = true;
     error = null;
     try {
-      library = await openLibrary(path);
+      const opened = await openLibrary(path);
+      photoCount = null;
+      progress = null;
+      lastScan = null;
+      scanError = null;
+      scanning = true; // open_library starts a scan
+      library = opened;
+      // Show the count from the previous session while the scan runs.
+      const stats = await libraryStats(opened.path);
+      if (library?.path === opened.path) {
+        photoCount ??= stats.photoCount;
+        // In case the scan finished before `library` was set and its events were dropped.
+        if (!stats.scanning && !progress) scanning = false;
+      }
     } catch (e) {
       error = String(e);
     } finally {
@@ -56,7 +141,9 @@
   }
 
   function closeLibrary() {
+    if (library) stopLibraryScan(library.path).catch(() => {});
     library = null;
+    scanning = false;
     refreshRecents();
   }
 
@@ -74,6 +161,7 @@
         <strong>{library.name}</strong>
         <span class="path">{library.path}</span>
       </div>
+      <button class="secondary" onclick={rescan} disabled={scanning}>Rescan</button>
     </header>
     {#if !library.writable}
       <p class="banner">
@@ -81,9 +169,49 @@
         will be kept on this computer only.
       </p>
     {/if}
+    {#if lastScan && lastScan.unreadableDirs > 0}
+      <p class="banner">
+        {n(lastScan.unreadableDirs)}
+        {lastScan.unreadableDirs === 1 ? "folder" : "folders"} could not be read, so photos
+        that may have been deleted were kept in the index.
+      </p>
+    {/if}
     <main class="empty">
-      <p>Library opened.</p>
-      <p class="dim">Indexing and the photo grid arrive in the next milestones.</p>
+      <p class="count">
+        {#if photoCount === null}
+          …
+        {:else}
+          {n(photoCount)} {photoCount === 1 ? "photo" : "photos"}
+        {/if}
+      </p>
+
+      {#if scanning}
+        <div class="scan" role="status">
+          {#if progress?.phase === "indexing" && progress.toIndex > 0}
+            <progress value={progress.indexed} max={progress.toIndex}></progress>
+            <p class="dim">
+              Indexing {n(progress.indexed)} of {n(progress.toIndex)} new or changed photos
+            </p>
+          {:else}
+            <progress></progress>
+            <p class="dim">
+              Scanning folders…
+              {#if progress}{n(progress.discovered)} photos found{/if}
+            </p>
+          {/if}
+        </div>
+      {:else if scanError}
+        <p class="error" role="alert">{scanError}</p>
+      {:else if lastScan}
+        <p class="dim">{describe(lastScan)}</p>
+        {#if lastScan.failed > 0}
+          <p class="dim">
+            {n(lastScan.failed)} {lastScan.failed === 1 ? "file" : "files"} could not be read.
+          </p>
+        {/if}
+      {/if}
+
+      <p class="dim hint">The photo grid arrives in the next milestones.</p>
     </main>
   </div>
 {:else}
@@ -279,13 +407,49 @@
   }
 
   .title {
+    flex: 1;
     display: flex;
     align-items: baseline;
     gap: 10px;
     min-width: 0;
   }
 
+  .secondary {
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    cursor: pointer;
+  }
+
+  .secondary:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .count {
+    font-size: 22px;
+    font-weight: 600;
+  }
+
+  .scan {
+    display: grid;
+    justify-items: center;
+    gap: 6px;
+    margin-top: 12px;
+  }
+
+  progress {
+    width: 280px;
+    accent-color: var(--accent);
+  }
+
+  .hint {
+    margin-top: 32px !important;
+  }
+
   .banner {
+    border-bottom: 1px solid var(--border);
     margin: 0;
     padding: 8px 16px;
     background: var(--warn-bg);
