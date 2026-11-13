@@ -239,7 +239,18 @@ fn probe_size(source: &Path, orientation: Option<u8>) -> Option<(u32, u32)> {
     })
 }
 
-#[cfg(feature = "heic")]
+// HEIC is decoded by Apple's ImageIO on macOS (always available), and by
+// libheif elsewhere when the `heic` feature is on.
+
+#[cfg(target_os = "macos")]
+fn probe_heic_size(source: &Path) -> Option<(u32, u32)> {
+    // ImageIO only tells the upright size once it has decoded the image.
+    decode_heic(source)
+        .ok()
+        .map(|decoded| decoded.pixels.dimensions())
+}
+
+#[cfg(all(feature = "heic", not(target_os = "macos")))]
 fn probe_heic_size(source: &Path) -> Option<(u32, u32)> {
     let bytes = fs::read(source).ok()?;
     let context = libheif_rs::HeifContext::read_from_bytes(&bytes).ok()?;
@@ -247,7 +258,7 @@ fn probe_heic_size(source: &Path) -> Option<(u32, u32)> {
     Some((handle.width(), handle.height()))
 }
 
-#[cfg(not(feature = "heic"))]
+#[cfg(all(not(feature = "heic"), not(target_os = "macos")))]
 fn probe_heic_size(_source: &Path) -> Option<(u32, u32)> {
     None
 }
@@ -277,7 +288,17 @@ fn decode(source: &Path) -> Result<Decoded, ThumbError> {
     })
 }
 
-#[cfg(feature = "heic")]
+#[cfg(target_os = "macos")]
+fn decode_heic(source: &Path) -> Result<Decoded, ThumbError> {
+    let bytes = fs::read(source)?;
+    let pixels = crate::heic_macos::decode(&bytes).map_err(ThumbError::Decode)?;
+    Ok(Decoded {
+        pixels,
+        upright: true,
+    })
+}
+
+#[cfg(all(feature = "heic", not(target_os = "macos")))]
 fn decode_heic(source: &Path) -> Result<Decoded, ThumbError> {
     use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 
@@ -310,7 +331,7 @@ fn decode_heic(source: &Path) -> Result<Decoded, ThumbError> {
     })
 }
 
-#[cfg(not(feature = "heic"))]
+#[cfg(all(not(feature = "heic"), not(target_os = "macos")))]
 fn decode_heic(_source: &Path) -> Result<Decoded, ThumbError> {
     Err(ThumbError::Decode("this build has no HEIC support".into()))
 }
@@ -694,7 +715,7 @@ mod tests {
         assert!(is_blue(image.get_pixel(15, 55)));
     }
 
-    #[cfg(feature = "heic")]
+    #[cfg(any(feature = "heic", target_os = "macos"))]
     #[test]
     fn generates_from_heic() {
         let dir = tempfile::tempdir().unwrap();

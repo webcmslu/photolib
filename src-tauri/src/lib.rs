@@ -1,5 +1,7 @@
 mod db;
 mod fingerprint;
+#[cfg(target_os = "macos")]
+mod heic_macos;
 mod indexer;
 mod metadata;
 mod org;
