@@ -15,10 +15,21 @@
     /** Day groups, newest first. */
     groups: DayGroup[];
     pages: PhotoPages;
+    /** Listing indexes of the selected photos. */
+    selected: ReadonlySet<number>;
     /** Called with the listing index of the photo that was opened. */
     onopen: (index: number) => void;
+    /** Called to select or deselect a photo; `range` extends from the last one. */
+    ontoggle: (index: number, range: boolean) => void;
   }
-  let { groups, pages, onopen }: Props = $props();
+  let { groups, pages, selected, onopen, ontoggle }: Props = $props();
+
+  /** A plain click opens a photo, unless a selection is under way. */
+  function onclick(event: MouseEvent, index: number) {
+    if (event.shiftKey) ontoggle(index, true);
+    else if (event.ctrlKey || event.metaKey || selected.size > 0) ontoggle(index, false);
+    else onopen(index);
+  }
 
   const TARGET_CELL = 150;
   const GAP = 3;
@@ -173,16 +184,34 @@
 
     {#each visible.cells as cell (cell.index)}
       {@const photo = pages.get(cell.index)}
-      <button
+      {@const isSelected = selected.has(cell.index)}
+      <div
         class="cell"
+        class:selected={isSelected}
         style:transform="translate({cell.x}px, {cell.y}px)"
-        onclick={() => onopen(cell.index)}
-        aria-label={photo?.relPath ?? "Photo"}
       >
-        {#if photo}
-          <img src={thumbUrl(photo.fingerprint)} alt="" draggable="false" decoding="async" />
+        <button
+          class="open"
+          onclick={(event) => onclick(event, cell.index)}
+          aria-label={photo?.relPath ?? "Photo"}
+        >
+          {#if photo}
+            <img src={thumbUrl(photo.fingerprint)} alt="" draggable="false" decoding="async" />
+          {/if}
+        </button>
+        {#if photo?.favorite}
+          <span class="favorite" aria-label="Favorite">♥</span>
         {/if}
-      </button>
+        <button
+          class="check"
+          role="checkbox"
+          aria-checked={isSelected}
+          aria-label="Select"
+          onclick={(event) => ontoggle(cell.index, event.shiftKey)}
+        >
+          {isSelected ? "✓" : ""}
+        </button>
+      </div>
     {/each}
   </div>
 </div>
@@ -236,16 +265,71 @@
     left: 0;
     width: var(--cell);
     height: var(--cell);
+    background: var(--surface-hover);
+  }
+
+  .open {
+    display: block;
+    width: 100%;
+    height: 100%;
     padding: 0;
     border: none;
-    background: var(--surface-hover);
+    background: none;
     cursor: pointer;
     overflow: hidden;
   }
 
-  .cell:focus-visible {
+  .open:focus-visible {
     outline-offset: -2px;
-    z-index: 1;
+  }
+
+  .cell.selected .open {
+    outline: 3px solid var(--accent);
+    outline-offset: -3px;
+  }
+
+  .cell.selected img {
+    opacity: 0.8;
+  }
+
+  .favorite {
+    position: absolute;
+    left: 6px;
+    bottom: 4px;
+    color: #fff;
+    font-size: 15px;
+    text-shadow: 0 0 3px rgb(0 0 0 / 0.8);
+    pointer-events: none;
+  }
+
+  /* The round checkbox in the corner: shown on hover, and always once
+     anything is selected. */
+  .check {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.25);
+    color: #fff;
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+  }
+
+  .cell:hover .check,
+  .check:focus-visible,
+  .cell.selected .check {
+    opacity: 1;
+  }
+
+  .cell.selected .check {
+    border-color: var(--accent);
+    background: var(--accent);
   }
 
   img {

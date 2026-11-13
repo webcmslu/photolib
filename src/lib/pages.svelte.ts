@@ -1,6 +1,6 @@
-// Loads the photo listing in pages, on demand, so the grid never needs the
+// Loads a photo listing in pages, on demand, so the grid never needs the
 // whole library in memory.
-import { photosPage, type PhotoItem } from "./api";
+import { photosPage, type Listing, type PhotoItem } from "./api";
 
 const PAGE_SIZE = 200;
 /** Pages kept in memory (40,000 photos). The farthest ones are dropped first. */
@@ -10,20 +10,22 @@ export class PhotoPages {
   /** Bumped whenever a page arrives, so that readers of `get` re-render. */
   #version = $state(0);
   #pages = new Map<number, PhotoItem[]>();
+  /** Pages from before the last `refresh`, shown until their replacement arrives. */
+  #stale = new Map<number, PhotoItem[]>();
   #loading = new Map<number, Promise<void>>();
-  /** Bumped by `reset`; answers to requests made before it are thrown away. */
+  /** Bumped by `refresh`; answers to requests made before it are thrown away. */
   #generation = 0;
 
   constructor(
     readonly libraryPath: string,
-    /** Null lists the whole library. */
-    readonly folder: string | null,
+    readonly listing: Listing,
   ) {}
 
   /** The photo at `index` of the listing, if its page is loaded. Reactive. */
   get(index: number): PhotoItem | undefined {
     void this.#version;
-    return this.#pages.get(Math.floor(index / PAGE_SIZE))?.[index % PAGE_SIZE];
+    const page = Math.floor(index / PAGE_SIZE);
+    return (this.#pages.get(page) ?? this.#stale.get(page))?.[index % PAGE_SIZE];
   }
 
   /** Starts loading the pages that cover `first..=last`, unless already there. */
@@ -36,16 +38,22 @@ export class PhotoPages {
   /** Loads (if needed) and returns the photo at `index`. */
   async load(index: number): Promise<PhotoItem | undefined> {
     if (index < 0) return undefined;
-    await this.#load(Math.floor(index / PAGE_SIZE));
-    return this.get(index);
+    const page = Math.floor(index / PAGE_SIZE);
+    await this.#load(page);
+    return this.#pages.get(page)?.[index % PAGE_SIZE];
   }
 
-  /** Forgets everything, after the index changed. */
-  reset(): void {
+  /**
+   * Reloads after the index or the organization changed. What is on screen
+   * stays until the fresh pages arrive, so nothing flickers.
+   */
+  refresh(): void {
     this.#generation++;
-    this.#pages.clear();
+    const visible = [...this.#pages.keys()];
+    this.#stale = this.#pages;
+    this.#pages = new Map();
     this.#loading.clear();
-    this.#version++;
+    for (const page of visible) void this.#load(page);
   }
 
   #load(page: number): Promise<void> {
@@ -53,10 +61,11 @@ export class PhotoPages {
     let pending = this.#loading.get(page);
     if (!pending) {
       const generation = this.#generation;
-      pending = photosPage(this.libraryPath, this.folder, page * PAGE_SIZE, PAGE_SIZE)
+      pending = photosPage(this.libraryPath, this.listing, page * PAGE_SIZE, PAGE_SIZE)
         .then((items) => {
           if (generation !== this.#generation) return;
           this.#pages.set(page, items);
+          this.#stale.delete(page);
           this.#evictFarFrom(page);
           this.#version++;
         })

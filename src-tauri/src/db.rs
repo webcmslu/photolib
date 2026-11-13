@@ -9,7 +9,9 @@ use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
-const SCHEMA_VERSION: i64 = 3;
+use crate::org::{Event, Op};
+
+const SCHEMA_VERSION: i64 = 4;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -39,8 +41,38 @@ CREATE TABLE photos (
 );
 -- The order the timeline and the folder view list photos in. Partial, to match
 -- their WHERE clause, so skipping to a far offset reads only the index.
-CREATE INDEX photos_timeline ON photos (sort_date DESC, rel_path) WHERE thumb_state != 2;
-CREATE INDEX photos_folder ON photos (folder, sort_date DESC, rel_path) WHERE thumb_state != 2;
+-- (fingerprint and thumb_state are included only so that the filter can be
+-- evaluated from the index alone.)
+CREATE INDEX photos_timeline ON photos (sort_date DESC, rel_path, fingerprint, thumb_state)
+    WHERE thumb_state != 2;
+CREATE INDEX photos_folder
+    ON photos (folder, sort_date DESC, rel_path, fingerprint, thumb_state)
+    WHERE thumb_state != 2;
+
+-- The merged organization (favorites, hidden, albums): one row per value that
+-- the device logs set, holding the winning event. See org.rs.
+--   kind            key        photo      value
+--   'fav'           photo fp   ''         '1' / '0'
+--   'hide'          photo fp   ''         '1' / '0'
+--   'album_name'    album id   ''         the name
+--   'album_deleted' album id   ''         '1' / '0'
+--   'member'        album id   photo fp   '1' / '0'
+CREATE TABLE org_state (
+    kind    TEXT NOT NULL,
+    key     TEXT NOT NULL,
+    photo   TEXT NOT NULL,
+    value   TEXT NOT NULL,
+    -- The event that set the value. The greatest (ts, device) wins.
+    ts      INTEGER NOT NULL,
+    device  TEXT NOT NULL,
+    PRIMARY KEY (kind, key, photo)
+) WITHOUT ROWID;
+
+-- How far into each device log the merge has read.
+CREATE TABLE log_offsets (
+    source  TEXT PRIMARY KEY,
+    offset  INTEGER NOT NULL
+) WITHOUT ROWID;
 CREATE INDEX photos_fingerprint ON photos (fingerprint);
 ";
 
@@ -93,6 +125,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&format!(
         "BEGIN;
          DROP TABLE IF EXISTS photos;
+         DROP TABLE IF EXISTS org_state;
+         DROP TABLE IF EXISTS log_offsets;
          {SCHEMA}
          PRAGMA user_version = {SCHEMA_VERSION};
          COMMIT;"
@@ -226,14 +260,55 @@ fn folder_of(rel_path: &str) -> &str {
     rel_path.rsplit_once('/').map_or("", |(folder, _)| folder)
 }
 
-/// Undecodable files are indexed but never listed.
-const LISTED: &str = "thumb_state != 2";
+/// What a photo listing shows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Listing {
+    /// Every photo that is not hidden.
+    Library,
+    /// The photos directly inside one folder.
+    Folder {
+        folder: String,
+    },
+    Favorites,
+    Album {
+        album: String,
+    },
+    Hidden,
+}
 
-/// `WHERE` clause for listing either the whole library or one folder (`?1`).
-fn listing_filter(folder: Option<&str>) -> String {
-    match folder {
-        Some(_) => format!("WHERE {LISTED} AND folder = ?1"),
-        None => format!("WHERE {LISTED} AND ?1 IS NULL"),
+const IS_HIDDEN: &str =
+    "fingerprint IN (SELECT key FROM org_state WHERE kind = 'hide' AND value = '1')";
+const IS_FAVORITE: &str =
+    "fingerprint IN (SELECT key FROM org_state WHERE kind = 'fav' AND value = '1')";
+
+impl Listing {
+    /// The `WHERE` clause and its one parameter (`?1`, NULL when unused).
+    /// Undecodable files (`thumb_state = 2`) are indexed but never listed, and
+    /// hidden photos appear only in the "Hidden" listing.
+    fn filter(&self) -> (String, Option<&str>) {
+        let visible = format!("thumb_state != 2 AND NOT {IS_HIDDEN}");
+        match self {
+            Listing::Library => (format!("WHERE {visible} AND ?1 IS NULL"), None),
+            Listing::Folder { folder } => {
+                (format!("WHERE {visible} AND folder = ?1"), Some(folder))
+            }
+            Listing::Favorites => (
+                format!("WHERE {visible} AND {IS_FAVORITE} AND ?1 IS NULL"),
+                None,
+            ),
+            Listing::Album { album } => (
+                format!(
+                    "WHERE {visible} AND fingerprint IN (SELECT photo FROM org_state
+                         WHERE kind = 'member' AND key = ?1 AND value = '1')"
+                ),
+                Some(album),
+            ),
+            Listing::Hidden => (
+                format!("WHERE thumb_state != 2 AND {IS_HIDDEN} AND ?1 IS NULL"),
+                None,
+            ),
+        }
     }
 }
 
@@ -249,17 +324,17 @@ pub struct DayGroup {
 /// How many photos each day has, newest day first. Together with
 /// [`photos_page`] (same order) this is all the grid needs to lay itself out
 /// without loading every photo.
-pub fn timeline(conn: &Connection, folder: Option<&str>) -> rusqlite::Result<Vec<DayGroup>> {
+pub fn timeline(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<DayGroup>> {
+    let (filter, param) = listing.filter();
     // Integer division truncates toward zero, so shift pre-1970 dates down a
     // day first to get a floor.
     let mut stmt = conn.prepare(&format!(
         "SELECT (sort_date - 86400000 * (sort_date < 0 AND sort_date % 86400000 != 0))
                     / 86400000 AS day,
                 COUNT(*)
-         FROM photos {} GROUP BY day ORDER BY day DESC",
-        listing_filter(folder)
+         FROM photos {filter} GROUP BY day ORDER BY day DESC"
     ))?;
-    let rows = stmt.query_map([folder], |row| {
+    let rows = stmt.query_map([param], |row| {
         Ok(DayGroup {
             day: row.get(0)?,
             count: row.get(1)?,
@@ -277,27 +352,29 @@ pub struct PhotoItem {
     pub sort_date: i64,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub favorite: bool,
 }
 
 /// A slice of the listing, newest first (ties broken by path).
 pub fn photos_page(
     conn: &Connection,
-    folder: Option<&str>,
+    listing: &Listing,
     offset: u32,
     limit: u32,
 ) -> rusqlite::Result<Vec<PhotoItem>> {
+    let (filter, param) = listing.filter();
     let mut stmt = conn.prepare_cached(&format!(
-        "SELECT fingerprint, rel_path, sort_date, width, height
-         FROM photos {} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2",
-        listing_filter(folder)
+        "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE}
+         FROM photos {filter} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2"
     ))?;
-    let rows = stmt.query_map(params![folder, offset, limit], |row| {
+    let rows = stmt.query_map(params![param, offset, limit], |row| {
         Ok(PhotoItem {
             fingerprint: row.get(0)?,
             rel_path: row.get(1)?,
             sort_date: row.get(2)?,
             width: row.get(3)?,
             height: row.get(4)?,
+            favorite: row.get(5)?,
         })
     })?;
     rows.collect()
@@ -315,7 +392,8 @@ pub struct FolderEntry {
 /// Every folder that directly contains photos, sorted by path.
 pub fn folders(conn: &Connection) -> rusqlite::Result<Vec<FolderEntry>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT folder, COUNT(*) FROM photos WHERE {LISTED} GROUP BY folder ORDER BY folder"
+        "SELECT folder, COUNT(*) FROM photos
+         WHERE thumb_state != 2 AND NOT {IS_HIDDEN} GROUP BY folder ORDER BY folder"
     ))?;
     let rows = stmt.query_map([], |row| {
         Ok(FolderEntry {
@@ -342,31 +420,138 @@ pub struct PhotoDetails {
     pub camera_model: Option<String>,
     pub latitude: Option<f64>,
     pub longitude: Option<f64>,
+    pub favorite: bool,
+    pub hidden: bool,
+    /// Ids of the albums the photo is in.
+    pub albums: Vec<String>,
 }
 
 pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Option<PhotoDetails>> {
-    conn.query_row(
-        "SELECT rel_path, fingerprint, size, sort_date, date_source, width, height,
-                camera_make, camera_model, latitude, longitude
-         FROM photos WHERE rel_path = ?1",
-        [rel_path],
-        |row| {
-            Ok(PhotoDetails {
-                rel_path: row.get(0)?,
-                fingerprint: row.get(1)?,
-                size: row.get::<_, i64>(2)? as u64,
-                sort_date: row.get(3)?,
-                date_from_exif: row.get::<_, String>(4)? == "exif",
-                width: row.get(5)?,
-                height: row.get(6)?,
-                camera_make: row.get(7)?,
-                camera_model: row.get(8)?,
-                latitude: row.get(9)?,
-                longitude: row.get(10)?,
-            })
-        },
-    )
-    .optional()
+    let details = conn
+        .query_row(
+            &format!(
+                "SELECT rel_path, fingerprint, size, sort_date, date_source, width, height,
+                        camera_make, camera_model, latitude, longitude,
+                        {IS_FAVORITE}, {IS_HIDDEN}
+                 FROM photos WHERE rel_path = ?1"
+            ),
+            [rel_path],
+            |row| {
+                Ok(PhotoDetails {
+                    rel_path: row.get(0)?,
+                    fingerprint: row.get(1)?,
+                    size: row.get::<_, i64>(2)? as u64,
+                    sort_date: row.get(3)?,
+                    date_from_exif: row.get::<_, String>(4)? == "exif",
+                    width: row.get(5)?,
+                    height: row.get(6)?,
+                    camera_make: row.get(7)?,
+                    camera_model: row.get(8)?,
+                    latitude: row.get(9)?,
+                    longitude: row.get(10)?,
+                    favorite: row.get(11)?,
+                    hidden: row.get(12)?,
+                    albums: Vec::new(),
+                })
+            },
+        )
+        .optional()?;
+    let Some(mut details) = details else {
+        return Ok(None);
+    };
+    let mut stmt = conn.prepare_cached(
+        "SELECT key FROM org_state WHERE kind = 'member' AND photo = ?1 AND value = '1'",
+    )?;
+    details.albums = stmt
+        .query_map([&details.fingerprint], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(Some(details))
+}
+
+// --- Organization (see org.rs) ------------------------------------------------
+
+/// Applies one event from a device log: sets the value it names, unless a
+/// later event (greater `(ts, device)`) already did.
+pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlite::Result<()> {
+    let flag = |on: &bool| if *on { "1" } else { "0" };
+    let (kind, key, photo, value) = match &event.op {
+        Op::Fav { photo, on } => ("fav", photo.as_str(), "", flag(on)),
+        Op::Hide { photo, on } => ("hide", photo.as_str(), "", flag(on)),
+        Op::AlbumName { album, name } => ("album_name", album.as_str(), "", name.trim()),
+        Op::AlbumDeleted { album, on } => ("album_deleted", album.as_str(), "", flag(on)),
+        Op::AlbumMember { album, photo, on } => {
+            ("member", album.as_str(), photo.as_str(), flag(on))
+        }
+    };
+    tx.prepare_cached(
+        "INSERT INTO org_state (kind, key, photo, value, ts, device)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT (kind, key, photo) DO UPDATE SET
+             value = excluded.value, ts = excluded.ts, device = excluded.device
+         WHERE (excluded.ts, excluded.device) > (org_state.ts, org_state.device)",
+    )?
+    .execute(params![kind, key, photo, value, event.ts, device])?;
+    Ok(())
+}
+
+/// The newest event timestamp merged so far (0 if none), for the logical clock.
+pub fn max_event_ts(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("SELECT COALESCE(MAX(ts), 0) FROM org_state", [], |row| {
+        row.get(0)
+    })
+}
+
+pub fn log_offset(conn: &Connection, source: &str) -> rusqlite::Result<u64> {
+    let offset: Option<i64> = conn
+        .query_row(
+            "SELECT offset FROM log_offsets WHERE source = ?1",
+            [source],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(offset.unwrap_or(0) as u64)
+}
+
+pub fn set_log_offset(tx: &Transaction<'_>, source: &str, offset: u64) -> rusqlite::Result<()> {
+    tx.execute(
+        "INSERT INTO log_offsets (source, offset) VALUES (?1, ?2)
+         ON CONFLICT (source) DO UPDATE SET offset = excluded.offset",
+        params![source, offset as i64],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Album {
+    pub id: String,
+    pub name: String,
+    /// Photos of the album that are in the index and not hidden.
+    pub count: u32,
+}
+
+/// The albums that have not been deleted, by name.
+pub fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT a.key, a.value,
+                (SELECT COUNT(*) FROM photos
+                 WHERE thumb_state != 2 AND NOT {IS_HIDDEN}
+                   AND fingerprint IN (SELECT photo FROM org_state
+                                       WHERE kind = 'member' AND key = a.key AND value = '1'))
+         FROM org_state a
+         WHERE a.kind = 'album_name'
+           AND NOT EXISTS (SELECT 1 FROM org_state d
+                           WHERE d.kind = 'album_deleted' AND d.key = a.key AND d.value = '1')
+         ORDER BY a.value COLLATE NOCASE, a.key"
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Album {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            count: row.get(2)?,
+        })
+    })?;
+    rows.collect()
 }
 
 pub fn count(conn: &Connection) -> rusqlite::Result<u64> {
@@ -467,24 +652,28 @@ mod tests {
         set_thumb_state(&tx, "broken.jpg", ThumbState::Failed, None).unwrap();
         tx.commit().unwrap();
 
-        let days = |folder| -> Vec<(i64, u32)> {
-            timeline(&conn, folder)
+        let days = |listing: Listing| -> Vec<(i64, u32)> {
+            timeline(&conn, &listing)
                 .unwrap()
                 .into_iter()
                 .map(|g| (g.day, g.count))
                 .collect()
         };
-        let paths = |folder, offset, limit| -> Vec<String> {
-            photos_page(&conn, folder, offset, limit)
+        let paths = |listing: Listing, offset, limit| -> Vec<String> {
+            photos_page(&conn, &listing, offset, limit)
                 .unwrap()
                 .into_iter()
                 .map(|p| p.rel_path)
                 .collect()
         };
+        let all = || Listing::Library;
+        let in_folder = |folder: &str| Listing::Folder {
+            folder: folder.into(),
+        };
 
-        assert_eq!(days(None), [(10, 3), (3, 1), (-1, 1)]);
+        assert_eq!(days(all()), [(10, 3), (3, 1), (-1, 1)]);
         assert_eq!(
-            paths(None, 0, 10),
+            paths(all(), 0, 10),
             [
                 "trip/c.jpg",
                 "a.jpg",
@@ -493,13 +682,16 @@ mod tests {
                 "trip/deep/e.jpg"
             ]
         );
-        assert_eq!(paths(None, 1, 2), ["a.jpg", "b.jpg"]);
-        assert!(paths(None, 5, 10).is_empty());
+        assert_eq!(paths(all(), 1, 2), ["a.jpg", "b.jpg"]);
+        assert!(paths(all(), 5, 10).is_empty());
 
         // A folder lists only the photos directly inside it.
-        assert_eq!(days(Some("trip")), [(10, 1), (3, 1)]);
-        assert_eq!(paths(Some("trip"), 0, 10), ["trip/c.jpg", "trip/d.jpg"]);
-        assert_eq!(paths(Some(""), 0, 10), ["a.jpg", "b.jpg"]);
+        assert_eq!(days(in_folder("trip")), [(10, 1), (3, 1)]);
+        assert_eq!(
+            paths(in_folder("trip"), 0, 10),
+            ["trip/c.jpg", "trip/d.jpg"]
+        );
+        assert_eq!(paths(in_folder(""), 0, 10), ["a.jpg", "b.jpg"]);
 
         let listed: Vec<(String, u32)> = folders(&conn)
             .unwrap()
@@ -515,30 +707,33 @@ mod tests {
     #[test]
     fn listing_queries_use_their_indexes() {
         let conn = open_in_memory().unwrap();
-        let plan = |sql: &str, folder: Option<&str>| -> String {
-            conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+        let plan = |listing: Listing| -> String {
+            let (filter, param) = listing.filter();
+            let sql = format!(
+                "EXPLAIN QUERY PLAN SELECT fingerprint FROM photos {filter}
+                 ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2"
+            );
+            conn.prepare(&sql)
                 .unwrap()
-                .query_map(params![folder, 0, 10], |row| row.get::<_, String>(3))
+                .query_map(params![param, 0, 10], |row| row.get::<_, String>(3))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
                 .join(" | ")
         };
-        let page = |folder| {
-            format!(
-                "SELECT fingerprint FROM photos {} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2",
-                listing_filter(folder)
-            )
-        };
 
-        let all = plan(&page(None), None);
+        // Both must walk their index in order (no sort step), reading only the
+        // index while skipping to an offset.
+        let all = plan(Listing::Library);
         assert!(
-            all.contains("photos_timeline") && !all.contains("TEMP B-TREE"),
+            all.contains("COVERING INDEX photos_timeline") && !all.contains("TEMP B-TREE"),
             "{all}"
         );
-        let one = plan(&page(Some("trip")), Some("trip"));
+        let one = plan(Listing::Folder {
+            folder: "trip".into(),
+        });
         assert!(
-            one.contains("photos_folder") && !one.contains("TEMP B-TREE"),
+            one.contains("COVERING INDEX photos_folder") && !one.contains("TEMP B-TREE"),
             "{one}"
         );
     }

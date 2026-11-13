@@ -1,13 +1,22 @@
 <!--
   Full-window photo viewer: arrow keys to move, wheel / double-click / +/- to
-  zoom, drag to pan, "i" for the info panel, "f" for full screen, Esc to close.
+  zoom, drag to pan, "i" for the info panel, "f" for full screen, "." to
+  favorite, "h" to hide, Esc to close.
 
   It shows the cached preview at once and swaps in the full-size photo when it
   has loaded, so moving through photos stays fast on a slow network.
 -->
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { photoDetails, photoUrl, thumbUrl, type PhotoDetails, type PhotoItem } from "./api";
+  import {
+    photoDetails,
+    photoUrl,
+    thumbUrl,
+    type Album,
+    type Op,
+    type PhotoDetails,
+    type PhotoItem,
+  } from "./api";
   import { formatBytes, formatDateTime, formatNumber } from "./format";
   import type { PhotoPages } from "./pages.svelte";
 
@@ -17,9 +26,31 @@
     total: number;
     /** Listing index of the photo on screen. */
     index: number;
+    /** Changes whenever the listing was reloaded; the photo is then re-read. */
+    revision: number;
+    /** False while the library is offline: the organizing buttons are disabled. */
+    canEdit: boolean;
+    albums: Album[];
+    /** Id of the album being viewed, if the listing is an album. */
+    currentAlbum: string | null;
+    /** True when the listing is "Hidden". */
+    showingHidden: boolean;
+    /** Records organization changes, then reloads the listing. */
+    apply: (ops: Op[]) => Promise<void>;
     onclose: () => void;
   }
-  let { pages, total, index = $bindable(), onclose }: Props = $props();
+  let {
+    pages,
+    total,
+    index = $bindable(),
+    revision,
+    canEdit,
+    albums,
+    currentAlbum,
+    showingHidden,
+    apply,
+    onclose,
+  }: Props = $props();
 
   const MAX_SCALE = 10;
   const DOUBLE_CLICK_SCALE = 3;
@@ -39,12 +70,18 @@
   let stage: HTMLDivElement;
   let image = $state<HTMLImageElement>();
 
-  // Load the photo for the current index, then its neighbours' previews.
+  // A new photo starts fitted to the window.
   $effect(() => {
-    const wanted = index;
+    void index;
     scale = 1;
     x = 0;
     y = 0;
+  });
+
+  // Load the photo for the current index, then its neighbours' previews.
+  $effect(() => {
+    const wanted = index;
+    void revision;
     pages.load(wanted).then((loaded) => {
       if (wanted !== index) return;
       photo = loaded;
@@ -168,9 +205,37 @@
     onclose();
   }
 
+  function toggleFavorite() {
+    if (photo && canEdit) apply([{ op: "fav", photo: photo.fingerprint, on: !photo.favorite }]);
+  }
+
+  function toggleHidden() {
+    if (photo && canEdit) apply([{ op: "hide", photo: photo.fingerprint, on: !showingHidden }]);
+  }
+
+  function addToAlbum(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const album = select.value;
+    select.value = "";
+    if (photo && album) apply([{ op: "album_member", album, photo: photo.fingerprint, on: true }]);
+  }
+
+  function removeFromAlbum() {
+    if (photo && currentAlbum) {
+      apply([{ op: "album_member", album: currentAlbum, photo: photo.fingerprint, on: false }]);
+    }
+  }
+
   function onkeydown(event: KeyboardEvent) {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.target instanceof HTMLSelectElement && event.key !== "Escape") return;
     switch (event.key) {
+      case ".":
+        toggleFavorite();
+        break;
+      case "h":
+        toggleHidden();
+        break;
       case "ArrowLeft":
         go(-1);
         break;
@@ -220,6 +285,28 @@
         {#if photo}<span>{formatDateTime(photo.sortDate)}</span>{/if}
       </div>
       <span class="position">{formatNumber(index + 1)} of {formatNumber(total)}</span>
+      <button
+        onclick={toggleFavorite}
+        disabled={!canEdit || !photo}
+        aria-pressed={photo?.favorite ?? false}
+        title={photo?.favorite ? "Remove from favorites (.)" : "Add to favorites (.)"}
+      >
+        {photo?.favorite ? "♥" : "♡"}
+      </button>
+      {#if albums.length > 0}
+        <select onchange={addToAlbum} disabled={!canEdit || !photo} title="Add to album">
+          <option value="">Add to album…</option>
+          {#each albums as album (album.id)}
+            <option value={album.id}>{album.name}</option>
+          {/each}
+        </select>
+      {/if}
+      {#if currentAlbum}
+        <button onclick={removeFromAlbum} disabled={!canEdit || !photo}>Remove from album</button>
+      {/if}
+      <button onclick={toggleHidden} disabled={!canEdit || !photo} title="{showingHidden ? 'Unhide' : 'Hide'} (H)">
+        {showingHidden ? "Unhide" : "Hide"}
+      </button>
       <button onclick={() => zoomTo(scale / 1.5)} disabled={scale <= 1} title="Zoom out (-)">−</button>
       <button onclick={() => zoomTo(scale * 1.5)} disabled={scale >= MAX_SCALE} title="Zoom in (+)">+</button>
       <button onclick={toggleFullscreen} title="Full screen (F)">⛶</button>
@@ -336,6 +423,16 @@
   .bar button:hover:not(:disabled),
   .bar button[aria-pressed="true"] {
     background: #3a3a3d;
+  }
+
+  .bar select {
+    max-width: 150px;
+    padding: 4px 6px;
+    border: 1px solid #3d3d42;
+    border-radius: 6px;
+    background: #1c1c1e;
+    color: inherit;
+    font: inherit;
   }
 
   .bar button:disabled {

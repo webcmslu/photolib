@@ -17,6 +17,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 - Milestone 4 (browsing): virtualized timeline grid grouped by month and day,
   folder view, and a viewer with arrow keys, zoom, pan, full screen and an
   info panel.
+- Milestone 5 (shared organization): favorites, hidden photos and albums,
+  stored as per-device append-only logs in `<library>/.photolib/` and merged
+  on every computer that opens the folder. Works offline from the local cache
+  (read-only).
 
 ## Develop
 
@@ -44,5 +48,7 @@ npm run tauri build    # release bundle
 - `indexer.rs` walks the folder; `fingerprint.rs` and `metadata.rs` read each
   file; `db.rs` is the SQLite index; `thumbs.rs` makes and caches thumbnails;
   `recents.rs` is the recent libraries list.
+- `org.rs` is the shared organization: the `.photolib` log format and the
+  merge. Its header comment describes the format.
 - Per-machine state (recents now; index and thumbnails later) lives in the OS
   app-data dir, never in the library folder.

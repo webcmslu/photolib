@@ -9,6 +9,8 @@ export interface LibraryInfo {
   name: string;
   /** False when the folder is read-only: organization stays local-only. */
   writable: boolean;
+  /** False when the folder can't be reached and only cached data is shown. */
+  online: boolean;
 }
 
 /** One entry of the recent libraries list. Mirrors `RecentLibrary` in Rust. */
@@ -84,7 +86,13 @@ export type IndexEvent =
   | { state: "running"; libraryPath: string; progress: ScanProgress }
   | { state: "indexed"; libraryPath: string; summary: ScanSummary }
   | { state: "finished"; libraryPath: string; summary: ScanSummary; thumbnails: ThumbSummary }
-  | { state: "failed"; libraryPath: string; message: string };
+  | { state: "failed"; libraryPath: string; message: string }
+  /** The folder is reachable (again). Sent at the start of every scan. */
+  | { state: "online"; libraryPath: string; writable: boolean }
+  /** The folder can't be reached; cached data stays on screen. */
+  | { state: "offline"; libraryPath: string }
+  /** Changes made on other devices were merged in. */
+  | { state: "synced"; libraryPath: string };
 
 export interface LibraryStats {
   photoCount: number;
@@ -131,6 +139,7 @@ export interface PhotoItem {
   /** Upright size in pixels, when known. */
   width: number | null;
   height: number | null;
+  favorite: boolean;
 }
 
 /** Mirrors `FolderEntry` in src-tauri/src/db.rs. */
@@ -154,21 +163,35 @@ export interface PhotoDetails {
   cameraModel: string | null;
   latitude: number | null;
   longitude: number | null;
+  favorite: boolean;
+  hidden: boolean;
+  /** Ids of the albums the photo is in. */
+  albums: string[];
 }
 
-/** Day groups, newest first, of the whole library (`folder` null) or one folder. */
-export function timeline(path: string, folder: string | null): Promise<DayGroup[]> {
-  return invoke("timeline", { path, folder });
+/** What a photo listing shows. Mirrors `Listing` in src-tauri/src/db.rs. */
+export type Listing =
+  /** Every photo that is not hidden. */
+  | { kind: "library" }
+  /** The photos directly inside one folder ("" is the library root). */
+  | { kind: "folder"; folder: string }
+  | { kind: "favorites" }
+  | { kind: "album"; album: string }
+  | { kind: "hidden" };
+
+/** Day groups of a listing, newest first. */
+export function timeline(path: string, listing: Listing): Promise<DayGroup[]> {
+  return invoke("timeline", { path, listing });
 }
 
-/** A slice of the photo listing, in the same order as `timeline`. */
+/** A slice of a listing's photos, in the same order as `timeline`. */
 export function photosPage(
   path: string,
-  folder: string | null,
+  listing: Listing,
   offset: number,
   limit: number,
 ): Promise<PhotoItem[]> {
-  return invoke("photos_page", { path, folder, offset, limit });
+  return invoke("photos_page", { path, listing, offset, limit });
 }
 
 export function listFolders(path: string): Promise<FolderEntry[]> {
@@ -190,4 +213,45 @@ export function thumbUrl(fingerprint: string, size: "grid" | "preview" = "grid")
 /** URL of the full-size photo, served by the app's `photo://` protocol. */
 export function photoUrl(fingerprint: string): string {
   return convertFileSrc(fingerprint, "photo");
+}
+
+// --- Organization: favorites, hidden photos, albums ---------------------------
+//
+// These are shared by every computer that opens the library folder; see
+// src-tauri/src/org.rs for how.
+
+/** One change to the organization. Mirrors `Op` in src-tauri/src/org.rs. */
+export type Op =
+  | { op: "fav"; photo: string; on: boolean }
+  | { op: "hide"; photo: string; on: boolean }
+  /** Names or renames an album. */
+  | { op: "album_name"; album: string; name: string }
+  | { op: "album_deleted"; album: string; on: boolean }
+  | { op: "album_member"; album: string; photo: string; on: boolean };
+
+/** Mirrors `Album` in src-tauri/src/db.rs. */
+export interface Album {
+  id: string;
+  name: string;
+  /** Photos of the album that are indexed and not hidden. */
+  count: number;
+}
+
+export function listAlbums(path: string): Promise<Album[]> {
+  return invoke("albums", { path });
+}
+
+/** Records changes. Rejects if the library is offline. */
+export function applyOps(path: string, ops: Op[]): Promise<void> {
+  return invoke("apply_ops", { path, ops });
+}
+
+/** Creates an album and resolves to its id. */
+export function createAlbum(path: string, name: string): Promise<string> {
+  return invoke("create_album", { path, name });
+}
+
+/** Merges changes from other devices. Resolves to true if there were any. */
+export function syncLibrary(path: string): Promise<boolean> {
+  return invoke("sync_library", { path });
 }

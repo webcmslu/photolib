@@ -2,9 +2,11 @@ mod db;
 mod fingerprint;
 mod indexer;
 mod metadata;
+mod org;
 mod recents;
 mod thumbs;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +18,7 @@ use tauri::http::{header, Response, StatusCode};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use indexer::{Progress, ScanSummary};
+use org::OrgPaths;
 use recents::{RecentEntry, RecentStore};
 use thumbs::{ThumbCache, ThumbSize, ThumbSummary};
 
@@ -25,16 +28,82 @@ const INDEX_EVENT: &str = "index-event";
 /// Shared app state.
 struct AppState {
     data_dir: PathBuf,
+    /// This computer's id in the libraries' shared device logs.
+    device: String,
     /// The mutex serializes read-modify-write of the recents file.
     recents: Mutex<RecentStore>,
+    /// Which local index each library path uses: the library's id from its
+    /// `.photolib/library.json`. Remembered here so that the index is found
+    /// again while the library is offline.
+    keys: Mutex<HashMap<String, String>>,
     /// The scan that is running now, if any. At most one runs at a time.
     scan: Mutex<Option<RunningScan>>,
     thumbs: ThumbCache,
-    /// Path of the library that is open in the window, if any. The `thumb://`
-    /// protocol uses it to make a missing thumbnail on demand.
-    open_library: Mutex<Option<String>>,
+    /// The library that is open in the window, if any.
+    open_library: Mutex<Option<OpenLibrary>>,
     /// Limits on-demand image decoding (thumbnails and converted originals).
     on_demand: Limiter,
+}
+
+#[derive(Debug, Clone)]
+struct OpenLibrary {
+    path: String,
+    /// False while the folder can't be reached: the app then shows what it
+    /// has cached and makes no changes.
+    online: bool,
+    /// True if this device can write its log into the library folder.
+    writable: bool,
+}
+
+impl AppState {
+    /// The folder in the app-data dir that holds a library's local data.
+    fn library_dir(&self, library_path: &str) -> PathBuf {
+        let key = match self.keys.lock().unwrap().get(library_path) {
+            Some(id) => id.clone(),
+            // No `.photolib` yet (read-only folder): fall back to the path.
+            None => format!(
+                "path-{}",
+                &blake3::hash(library_path.as_bytes()).to_hex()[..16]
+            ),
+        };
+        self.data_dir.join("libraries").join(key)
+    }
+
+    fn index_db(&self, library_path: &str) -> PathBuf {
+        self.library_dir(library_path).join("index.db")
+    }
+
+    fn org_paths(&self, library_path: &str) -> OrgPaths {
+        OrgPaths::new(
+            Path::new(library_path),
+            &self.library_dir(library_path).join("local-log"),
+        )
+    }
+
+    fn keys_file(&self) -> PathBuf {
+        self.data_dir.join("library-keys.json")
+    }
+
+    fn remember_key(&self, library_path: &str, id: &str) {
+        let mut keys = self.keys.lock().unwrap();
+        if keys.get(library_path).map(String::as_str) == Some(id) {
+            return;
+        }
+        keys.insert(library_path.to_owned(), id.to_owned());
+        // Best effort: if this fails, only offline opening is affected.
+        if let Ok(json) = serde_json::to_vec_pretty(&*keys) {
+            let _ = fs::write(self.keys_file(), json);
+        }
+    }
+
+    /// Updates the state of the open library, if it is still `library_path`.
+    fn update_open(&self, library_path: &str, update: impl FnOnce(&mut OpenLibrary)) {
+        if let Some(open) = self.open_library.lock().unwrap().as_mut() {
+            if open.path == library_path {
+                update(open);
+            }
+        }
+    }
 }
 
 struct RunningScan {
@@ -69,6 +138,15 @@ enum IndexEvent {
         library_path: String,
         message: String,
     },
+    /// The folder is reachable (again). Sent at the start of every scan.
+    Online {
+        library_path: String,
+        writable: bool,
+    },
+    /// The folder can't be reached. The app keeps showing what it has cached.
+    Offline { library_path: String },
+    /// Changes made on other devices were merged in.
+    Synced { library_path: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -87,6 +165,8 @@ struct LibraryInfo {
     name: String,
     /// False when the folder is read-only: organization stays local-only.
     writable: bool,
+    /// False when the folder can't be reached and only cached data is shown.
+    online: bool,
 }
 
 /// A recents entry plus whether its folder can be reached right now.
@@ -115,37 +195,11 @@ fn library_name(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-/// Checks whether we can create files in `dir` by creating and deleting a probe
-/// file. Permission bits are not trustworthy on SMB/NFS/exFAT, so we try for real.
-fn is_writable(dir: &Path) -> bool {
-    let probe = dir.join(format!(".photolib-probe-{}", std::process::id()));
-    match fs::File::create(&probe) {
-        Ok(_) => {
-            let _ = fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
 fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_millis() as u64)
         .unwrap_or(0)
-}
-
-/// Where the local index of the library at `library_path` lives.
-///
-/// Keyed by a hash of the path for now. Once `.photolib/library.json` exists
-/// (milestone 5) the library id will be the key, so that the same library
-/// mounted at a different path reuses its index.
-fn index_db_path(data_dir: &Path, library_path: &str) -> PathBuf {
-    let key = blake3::hash(library_path.as_bytes()).to_hex();
-    data_dir
-        .join("libraries")
-        .join(&key.as_str()[..16])
-        .join("index.db")
 }
 
 /// Starts a background scan of `library_path` unless one is already running
@@ -169,10 +223,9 @@ fn start_scan(app: &AppHandle, library_path: &str) {
 
     let app = app.clone();
     let library_path = library_path.to_owned();
-    let db_path = index_db_path(&state.data_dir, &library_path);
     let cache = state.thumbs.clone();
     std::thread::spawn(move || {
-        let result = run_scan(&app, &library_path, &db_path, &cache, &cancel);
+        let result = run_scan(&app, &library_path, &cache, &cancel);
 
         // Clear the slot first (if it is still ours), so that by the time the
         // UI hears the scan is over, a new one can be started.
@@ -193,6 +246,11 @@ fn start_scan(app: &AppHandle, library_path: &str) {
                 summary,
                 thumbnails,
             },
+            Err(indexer::ScanError::RootUnreachable(_)) => {
+                app.state::<AppState>()
+                    .update_open(&library_path, |open| open.online = false);
+                IndexEvent::Offline { library_path }
+            }
             Err(e) => IndexEvent::Failed {
                 library_path,
                 message: e.to_string(),
@@ -202,38 +260,54 @@ fn start_scan(app: &AppHandle, library_path: &str) {
     });
 }
 
-/// The body of a background scan: index the folder, then make the missing
-/// thumbnails. Emits `Running` and `Indexed` events along the way.
+/// The body of a background scan: merge the organization logs, index the
+/// folder, then make the missing thumbnails. Emits events along the way.
 fn run_scan(
     app: &AppHandle,
     library_path: &str,
-    db_path: &Path,
     cache: &ThumbCache,
     cancel: &AtomicBool,
 ) -> Result<(ScanSummary, ThumbSummary), indexer::ScanError> {
+    let state = app.state::<AppState>();
     let root = Path::new(library_path);
+    let emit = |event: IndexEvent| {
+        let _ = app.emit(INDEX_EVENT, event);
+    };
     let on_progress = |progress| {
-        let _ = app.emit(
-            INDEX_EVENT,
-            IndexEvent::Running {
-                library_path: library_path.to_owned(),
-                progress,
-            },
-        );
+        emit(IndexEvent::Running {
+            library_path: library_path.to_owned(),
+            progress,
+        })
     };
 
-    let mut conn = db::open(db_path)?;
+    let mut conn = db::open(&state.index_db(library_path))?;
+
+    if root.is_dir() {
+        let paths = state.org_paths(library_path);
+        let writable = paths.shared_is_writable(&state.device);
+        state.update_open(library_path, |open| {
+            open.online = true;
+            open.writable = writable;
+        });
+        emit(IndexEvent::Online {
+            library_path: library_path.to_owned(),
+            writable,
+        });
+        if org::sync(&mut conn, &paths, &state.device, writable)? > 0 {
+            emit(IndexEvent::Synced {
+                library_path: library_path.to_owned(),
+            });
+        }
+    }
+
     let summary = indexer::scan(root, &mut conn, cancel, &on_progress)?;
     if summary.cancelled {
         return Ok((summary, ThumbSummary::default()));
     }
-    let _ = app.emit(
-        INDEX_EVENT,
-        IndexEvent::Indexed {
-            library_path: library_path.to_owned(),
-            summary: summary.clone(),
-        },
-    );
+    emit(IndexEvent::Indexed {
+        library_path: library_path.to_owned(),
+        summary: summary.clone(),
+    });
 
     let thumbnails = thumbs::generate_missing(root, &mut conn, cache, cancel, &on_progress)?;
     Ok((summary, thumbnails))
@@ -281,8 +355,14 @@ fn thumb_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
 /// Finds the original file of a photo of the open library, and its EXIF
 /// orientation. Only files that are in the index can be reached this way.
 fn find_original(state: &AppState, fingerprint: &str) -> Result<(PathBuf, Option<u8>), ()> {
-    let library_path = state.open_library.lock().unwrap().clone().ok_or(())?;
-    let conn = db::open(&index_db_path(&state.data_dir, &library_path)).map_err(drop)?;
+    let library_path = state
+        .open_library
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|open| open.path.clone())
+        .ok_or(())?;
+    let conn = db::open(&state.index_db(&library_path)).map_err(drop)?;
     let (rel_path, orientation) = db::find_by_fingerprint(&conn, fingerprint)
         .map_err(drop)?
         .ok_or(())?;
@@ -388,16 +468,23 @@ fn open_library(
     state: State<'_, AppState>,
 ) -> Result<LibraryInfo, String> {
     let dir = Path::new(&path);
-    if !dir.is_dir() {
+    // Listing it, not just seeing that it exists, is what proves it is reachable.
+    let online = dir.is_dir() && fs::read_dir(dir).is_ok();
+    let mut writable = false;
+    if online {
+        // Creates `.photolib/library.json` the first time, unless the folder
+        // is read-only.
+        if let Some(meta) = org::read_or_create_meta(dir).map_err(|e| e.to_string())? {
+            state.remember_key(&path, &meta.id);
+        }
+        writable = state.org_paths(&path).shared_is_writable(&state.device);
+    } else if !state.index_db(&path).is_file() {
         return Err(format!(
             "Can't open \"{path}\": the folder is not reachable."
         ));
     }
-    // Make sure we can actually list it, not just see that it exists.
-    fs::read_dir(dir).map_err(|e| format!("Can't read \"{path}\": {e}"))?;
 
     let name = library_name(dir);
-
     {
         let store = state.recents.lock().map_err(|e| e.to_string())?;
         let mut list = store.load();
@@ -407,13 +494,18 @@ fn open_library(
             .map_err(|e| format!("Couldn't save the recent libraries list: {e}"))?;
     }
 
-    *state.open_library.lock().unwrap() = Some(path.clone());
+    *state.open_library.lock().unwrap() = Some(OpenLibrary {
+        path: path.clone(),
+        online,
+        writable,
+    });
     start_scan(&app, &path);
 
     Ok(LibraryInfo {
-        writable: is_writable(dir),
         path,
         name,
+        writable,
+        online,
     })
 }
 
@@ -448,7 +540,7 @@ fn rescan_library(path: String, app: AppHandle) {
 fn close_library(path: String, state: State<'_, AppState>) {
     {
         let mut open = state.open_library.lock().unwrap();
-        if open.as_deref() == Some(path.as_str()) {
+        if open.as_ref().is_some_and(|open| open.path == path) {
             *open = None;
         }
     }
@@ -467,7 +559,7 @@ fn library_stats(path: String, state: State<'_, AppState>) -> Result<LibraryStat
         .unwrap()
         .as_ref()
         .is_some_and(|running| running.library_path == path);
-    let conn = db::open(&index_db_path(&state.data_dir, &path)).map_err(|e| e.to_string())?;
+    let conn = db::open(&state.index_db(&path)).map_err(|e| e.to_string())?;
     Ok(LibraryStats {
         photo_count: db::count(&conn).map_err(|e| e.to_string())?,
         scanning,
@@ -476,31 +568,31 @@ fn library_stats(path: String, state: State<'_, AppState>) -> Result<LibraryStat
 
 /// Opens the index of the library at `path` for a query from the UI.
 fn open_index(state: &AppState, path: &str) -> Result<rusqlite::Connection, String> {
-    db::open(&index_db_path(&state.data_dir, path)).map_err(|e| e.to_string())
+    db::open(&state.index_db(path)).map_err(|e| e.to_string())
 }
 
-/// Day groups of the whole library, or of one folder, newest first.
+/// Day groups of a listing, newest first.
 #[tauri::command(async)]
 fn timeline(
     path: String,
-    folder: Option<String>,
+    listing: db::Listing,
     state: State<'_, AppState>,
 ) -> Result<Vec<db::DayGroup>, String> {
-    db::timeline(&open_index(&state, &path)?, folder.as_deref()).map_err(|e| e.to_string())
+    db::timeline(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
 }
 
-/// A slice of the photo listing, in the same order as [`timeline`].
+/// A slice of a listing's photos, in the same order as [`timeline`].
 #[tauri::command(async)]
 fn photos_page(
     path: String,
-    folder: Option<String>,
+    listing: db::Listing,
     offset: u32,
     limit: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<db::PhotoItem>, String> {
     db::photos_page(
         &open_index(&state, &path)?,
-        folder.as_deref(),
+        &listing,
         offset,
         limit.min(1000),
     )
@@ -521,13 +613,85 @@ fn photo_details(
     db::photo_details(&open_index(&state, &path)?, &rel_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command(async)]
+fn albums(path: String, state: State<'_, AppState>) -> Result<Vec<db::Album>, String> {
+    db::albums(&open_index(&state, &path)?).map_err(|e| e.to_string())
+}
+
+/// The open library, if it is `path` and can take changes right now.
+fn editable_library(state: &AppState, path: &str) -> Result<OpenLibrary, String> {
+    let open = state.open_library.lock().unwrap().clone();
+    match open {
+        Some(open) if open.path == path && open.online => Ok(open),
+        Some(open) if open.path == path => {
+            Err("The library is offline, so changes can't be saved right now.".into())
+        }
+        _ => Err("This library is not open.".into()),
+    }
+}
+
+/// Records organization changes (favorite, hide, album edits) made in the UI.
+#[tauri::command(async)]
+fn apply_ops(path: String, ops: Vec<org::Op>, state: State<'_, AppState>) -> Result<(), String> {
+    let open = editable_library(&state, &path)?;
+    let mut conn = open_index(&state, &path)?;
+    org::record(
+        &mut conn,
+        &state.org_paths(&path),
+        &state.device,
+        open.writable,
+        ops,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Creates an album and returns its id.
+#[tauri::command(async)]
+fn create_album(path: String, name: String, state: State<'_, AppState>) -> Result<String, String> {
+    let album = org::new_id().map_err(|e| e.to_string())?;
+    apply_ops(
+        path,
+        vec![org::Op::AlbumName {
+            album: album.clone(),
+            name,
+        }],
+        state,
+    )?;
+    Ok(album)
+}
+
+/// Merges changes other devices made since the last look. Returns true if
+/// there were any. Cheap enough to call every minute.
+#[tauri::command(async)]
+fn sync_library(path: String, state: State<'_, AppState>) -> Result<bool, String> {
+    let Ok(open) = editable_library(&state, &path) else {
+        return Ok(false);
+    };
+    let mut conn = open_index(&state, &path)?;
+    org::sync(
+        &mut conn,
+        &state.org_paths(&path),
+        &state.device,
+        open.writable,
+    )
+    .map(|read| read > 0)
+    .map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
+            let device = org::device_id(&data_dir)?;
+            let keys = fs::read(data_dir.join("library-keys.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
             app.manage(AppState {
+                device,
+                keys: Mutex::new(keys),
                 recents: Mutex::new(RecentStore::new(&data_dir)),
                 scan: Mutex::new(None),
                 thumbs: ThumbCache::new(&data_dir),
@@ -565,7 +729,11 @@ pub fn run() {
             timeline,
             photos_page,
             folders,
-            photo_details
+            photo_details,
+            albums,
+            apply_ops,
+            create_album,
+            sync_library
         ])
         .run(tauri::generate_context!())
         .expect("error while running the app");
@@ -579,13 +747,5 @@ mod tests {
     fn library_name_is_the_folder_name() {
         assert_eq!(library_name(Path::new("/mnt/nas/Photos")), "Photos");
         assert_eq!(library_name(Path::new("/")), "/");
-    }
-
-    #[test]
-    fn writable_probe_leaves_nothing_behind() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(is_writable(dir.path()));
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 0);
-        assert!(!is_writable(&dir.path().join("does-not-exist")));
     }
 }

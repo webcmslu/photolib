@@ -30,6 +30,7 @@ fast_image_resize = "5.1.4"
 # Only the oldest API level we need, so the build accepts any libheif >= 1.17
 # (Homebrew, Debian and vcpkg ship different versions).
 libheif-rs = { version = "3.0.0", optional = true, default-features = false, features = ["v1_17"] }
+getrandom = "0.3"
 
 [features]
 default = ["heic"]

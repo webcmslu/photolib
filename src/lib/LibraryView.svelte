@@ -1,20 +1,29 @@
 <!--
-  An open library: the timeline ("Library") and the folder view, the scan
-  status, and the viewer on top.
+  An open library: a sidebar (Library, Favorites, Hidden, albums, folders),
+  the photo grid for whatever is selected there, the scan status, and the
+  viewer on top.
 -->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import {
+    applyOps,
     closeLibrary,
+    createAlbum,
     libraryStats,
+    listAlbums,
     listFolders,
     onIndexEvent,
     rescanLibrary,
+    syncLibrary,
     timeline,
+    type Album,
     type DayGroup,
     type FolderEntry,
     type IndexEvent,
     type LibraryInfo,
+    type Listing,
+    type Op,
     type ScanProgress,
     type ScanSummary,
     type ThumbSummary,
@@ -32,24 +41,43 @@
 
   /** How often an open library is rescanned for changes made outside the app. */
   const RESCAN_INTERVAL_MS = 15 * 60 * 1000;
+  /** How often an offline library is tried again. */
+  const OFFLINE_RETRY_MS = 30 * 1000;
+  /** How often changes made on other computers are picked up. */
+  const SYNC_INTERVAL_MS = 60 * 1000;
   /** How often the grid picks up newly indexed photos during a long first scan. */
   const LIVE_REFRESH_MS = 3000;
 
-  // --- Scan status ----------------------------------------------------------
+  // --- Scan and connection status ------------------------------------------
 
   let photoTotal = $state<number | null>(null);
   let scanning = $state(true); // opening a library starts a scan
   let progress = $state<ScanProgress | null>(null);
   let lastScan = $state<ScanSummary | null>(null);
   let lastThumbs = $state<ThumbSummary | null>(null);
-  let scanError = $state<string | null>(null);
+  let error = $state<string | null>(null);
+  // Initial values only: this component is re-created for another library.
+  // svelte-ignore state_referenced_locally
+  let online = $state(library.online);
+  // svelte-ignore state_referenced_locally
+  let writable = $state(library.writable);
   let lastLiveRefresh = 0;
+  let lastScanStart = Date.now();
 
   onMount(() => {
     const unlisten = onIndexEvent(handleIndexEvent);
-    const timer = setInterval(() => {
-      if (!scanning) rescan();
-    }, RESCAN_INTERVAL_MS);
+    const scanTimer = setInterval(() => {
+      const due = online ? RESCAN_INTERVAL_MS : OFFLINE_RETRY_MS;
+      if (!scanning && Date.now() - lastScanStart >= due) rescan();
+    }, 5000);
+    const syncTimer = setInterval(async () => {
+      if (!online) return;
+      try {
+        if (await syncLibrary(library.path)) refreshAll();
+      } catch {
+        // Not reachable this time; the next round tries again.
+      }
+    }, SYNC_INTERVAL_MS);
 
     // What the index already holds from an earlier session shows at once.
     libraryStats(library.path)
@@ -58,10 +86,12 @@
         // The scan may have finished before we were listening.
         if (!stats.scanning && !progress) scanning = false;
       })
-      .catch((e) => (scanError = String(e)));
+      .catch((e) => (error = String(e)));
+    loadSidebar();
 
     return () => {
-      clearInterval(timer);
+      clearInterval(scanTimer);
+      clearInterval(syncTimer);
       unlisten.then((stop) => stop());
       closeLibrary(library.path).catch(() => {});
     };
@@ -69,42 +99,61 @@
 
   function handleIndexEvent(event: IndexEvent) {
     if (event.libraryPath !== library.path) return;
-    if (event.state === "running") {
-      scanning = true;
-      progress = event.progress;
-      const now = Date.now();
-      if (event.progress.phase === "indexing" && now - lastLiveRefresh > LIVE_REFRESH_MS) {
-        lastLiveRefresh = now;
-        refreshListing();
+    switch (event.state) {
+      case "running": {
+        scanning = true;
+        progress = event.progress;
+        const now = Date.now();
+        if (event.progress.phase === "indexing" && now - lastLiveRefresh > LIVE_REFRESH_MS) {
+          lastLiveRefresh = now;
+          refreshAll();
+        }
+        break;
       }
-    } else if (event.state === "indexed") {
-      // The index is complete; thumbnails are still being made.
-      lastScan = event.summary;
-      photoTotal = event.summary.total;
-      refreshListing();
-    } else if (event.state === "finished") {
-      scanning = false;
-      progress = null;
-      lastScan = event.summary;
-      lastThumbs = event.thumbnails;
-      photoTotal = event.summary.total;
-      // Thumbnail making may have found files that are not images after all.
-      if (event.thumbnails.undecodable > 0) refreshListing();
-    } else {
-      scanning = false;
-      progress = null;
-      scanError = event.message;
+      case "online":
+        online = true;
+        writable = event.writable;
+        break;
+      case "offline":
+        online = false;
+        scanning = false;
+        progress = null;
+        break;
+      case "synced":
+        refreshAll();
+        break;
+      case "indexed":
+        // The index is complete; thumbnails are still being made.
+        lastScan = event.summary;
+        photoTotal = event.summary.total;
+        refreshAll();
+        break;
+      case "finished":
+        scanning = false;
+        progress = null;
+        lastScan = event.summary;
+        lastThumbs = event.thumbnails;
+        photoTotal = event.summary.total;
+        // Thumbnail making may have found files that are not images after all.
+        if (event.thumbnails.undecodable > 0) refreshAll();
+        break;
+      case "failed":
+        scanning = false;
+        progress = null;
+        error = event.message;
+        break;
     }
   }
 
   async function rescan() {
-    scanError = null;
+    error = null;
     scanning = true;
+    lastScanStart = Date.now();
     try {
       await rescanLibrary(library.path);
     } catch (e) {
       scanning = false;
-      scanError = String(e);
+      error = String(e);
     }
   }
 
@@ -116,73 +165,32 @@
       if (progress?.phase === "thumbnails") {
         return `Making thumbnails: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
       }
-      return progress
-        ? `Scanning… ${formatNumber(progress.discovered)} found`
-        : "Scanning…";
+      return progress ? `Scanning… ${formatNumber(progress.discovered)} found` : "Scanning…";
     }
     return photoTotal === null ? "" : photoCount(photoTotal);
   });
 
   const unreadable = $derived((lastScan?.failed ?? 0) + (lastThumbs?.unreadable ?? 0));
 
-  // --- What is listed -------------------------------------------------------
+  // --- Sidebar: what can be listed ------------------------------------------
 
-  let view = $state<"library" | "folders">("library");
+  let albums = $state<Album[]>([]);
   let folders = $state<FolderEntry[]>([]);
-  let selectedFolder = $state<string | null>(null);
+  // Raw (not a deep proxy): it is passed to the backend as is.
+  let listing = $state.raw<Listing>({ kind: "library" });
 
-  /** The folder being listed, or null for the whole library. */
-  const listedFolder = $derived(view === "folders" ? (selectedFolder ?? "") : null);
-  const pages = $derived(new PhotoPages(library.path, listedFolder));
-  let groups = $state<DayGroup[]>([]);
-  /** False until the first timeline for the current listing has arrived. */
-  let groupsLoaded = $state(false);
-  const listedTotal = $derived(groups.reduce((sum, group) => sum + group.count, 0));
-
-  let grid = $state<PhotoGrid>();
-  let viewerIndex = $state<number | null>(null);
-
-  // Load the day groups whenever the listing changes.
-  $effect(() => {
-    const target = pages;
-    groups = [];
-    groupsLoaded = false;
-    viewerIndex = null;
-    loadGroups(target);
-  });
-
-  // Keep the folder list current while the folder view is showing.
-  $effect(() => {
-    if (view === "folders") loadFolders();
-  });
-
-  async function loadGroups(target: PhotoPages) {
+  async function loadSidebar() {
     try {
-      const loaded = await timeline(target.libraryPath, target.folder);
-      if (target !== pages) return; // the listing changed meanwhile
-      groups = loaded;
-      groupsLoaded = true;
+      [albums, folders] = await Promise.all([listAlbums(library.path), listFolders(library.path)]);
+      // The album or folder being shown may be gone (deleted on another computer).
+      const gone =
+        (listing.kind === "album" && !albums.some((a) => a.id === (listing as { album: string }).album)) ||
+        (listing.kind === "folder" &&
+          !folders.some((f) => f.folder === (listing as { folder: string }).folder));
+      if (gone) listing = { kind: "library" };
     } catch (e) {
-      scanError = String(e);
+      error = String(e);
     }
-  }
-
-  async function loadFolders() {
-    try {
-      folders = await listFolders(library.path);
-      if (selectedFolder === null || !folders.some((f) => f.folder === selectedFolder)) {
-        selectedFolder = folders[0]?.folder ?? null;
-      }
-    } catch (e) {
-      scanError = String(e);
-    }
-  }
-
-  /** Re-reads the listing after the index changed. */
-  function refreshListing() {
-    pages.reset();
-    loadGroups(pages);
-    if (view === "folders") loadFolders();
   }
 
   /** Folder rows for the sidebar: every folder with photos, plus its ancestors. */
@@ -215,15 +223,194 @@
         };
       });
     if (counts.has("")) {
-      rows.unshift({ path: "", name: library.name, depth: 0, count: counts.get("") ?? 0 });
+      rows.unshift({ path: "", name: "Top level", depth: 0, count: counts.get("") ?? 0 });
     }
     return rows;
   });
+
+  const currentAlbum = $derived(
+    listing.kind === "album" ? (albums.find((a) => a.id === (listing as { album: string }).album) ?? null) : null,
+  );
+
+  const title = $derived.by(() => {
+    switch (listing.kind) {
+      case "library":
+        return "Library";
+      case "favorites":
+        return "Favorites";
+      case "hidden":
+        return "Hidden";
+      case "album":
+        return currentAlbum?.name ?? "Album";
+      case "folder":
+        return listing.folder || "Top level";
+    }
+  });
+
+  const emptyText = $derived.by(() => {
+    switch (listing.kind) {
+      case "favorites":
+        return "No favorites yet. Open a photo and press the heart, or select photos in the grid.";
+      case "hidden":
+        return "No hidden photos.";
+      case "album":
+        return "This album is empty. Select photos in the grid and choose “Add to album”.";
+      default:
+        return scanning ? "Looking for photos…" : "No photos found in this folder.";
+    }
+  });
+
+  // --- The listing on screen ---------------------------------------------------
+
+  const pages = $derived(new PhotoPages(library.path, listing));
+  let groups = $state<DayGroup[]>([]);
+  /** False until the first timeline for the current listing has arrived. */
+  let groupsLoaded = $state(false);
+  const listedTotal = $derived(groups.reduce((sum, group) => sum + group.count, 0));
+  /** Bumped whenever the listing is reloaded. */
+  let revision = $state(0);
+
+  let grid = $state<PhotoGrid>();
+  let viewerIndex = $state<number | null>(null);
+  const selected = new SvelteSet<number>();
+  let selectionAnchor: number | null = null;
+
+  // Start afresh whenever something else is listed.
+  $effect(() => {
+    const target = pages;
+    // Only a change of `pages` may re-run this, not the state it resets.
+    untrack(() => {
+      groups = [];
+      groupsLoaded = false;
+      viewerIndex = null;
+      selected.clear();
+      selectionAnchor = null;
+      cancelAlbumEdits();
+      loadGroups(target);
+    });
+  });
+
+  // When photos leave the listing under the viewer (hidden, removed from the
+  // album), stay on a valid photo, or close when none is left.
+  $effect(() => {
+    if (viewerIndex === null || !groupsLoaded) return;
+    if (listedTotal === 0) viewerIndex = null;
+    else if (viewerIndex >= listedTotal) viewerIndex = listedTotal - 1;
+  });
+
+  async function loadGroups(target: PhotoPages) {
+    try {
+      const loaded = await timeline(target.libraryPath, target.listing);
+      if (target !== pages) return; // something else is listed by now
+      groups = loaded;
+      groupsLoaded = true;
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  /** Re-reads everything on screen after the index or the organization changed. */
+  function refreshAll() {
+    pages.refresh();
+    revision++;
+    // Indexes shift when photos come and go, so a selection can't be kept.
+    selected.clear();
+    selectionAnchor = null;
+    loadGroups(pages);
+    loadSidebar();
+  }
 
   function closeViewer() {
     const index = viewerIndex;
     viewerIndex = null;
     if (index !== null) grid?.reveal(index);
+  }
+
+  // --- Organizing ----------------------------------------------------------------
+
+  /** Records changes, then reloads what is on screen. */
+  async function apply(ops: Op[]) {
+    if (ops.length === 0) return;
+    error = null;
+    try {
+      await applyOps(library.path, ops);
+    } catch (e) {
+      error = String(e);
+    }
+    refreshAll();
+  }
+
+  function toggleSelected(index: number, range: boolean) {
+    if (range && selectionAnchor !== null) {
+      const from = Math.min(selectionAnchor, index);
+      const to = Math.max(selectionAnchor, index);
+      for (let i = from; i <= to; i++) selected.add(i);
+    } else if (selected.has(index)) {
+      selected.delete(index);
+    } else {
+      selected.add(index);
+    }
+    selectionAnchor = index;
+  }
+
+  /** Applies one change per selected photo. */
+  async function applyToSelection(makeOp: (fingerprint: string) => Op) {
+    const target = pages;
+    const photos = await Promise.all([...selected].map((index) => target.load(index)));
+    if (target !== pages) return;
+    await apply(photos.flatMap((photo) => (photo ? [makeOp(photo.fingerprint)] : [])));
+  }
+
+  function addSelectionToAlbum(event: Event) {
+    const select = event.currentTarget as HTMLSelectElement;
+    const album = select.value;
+    select.value = "";
+    if (album) applyToSelection((photo) => ({ op: "album_member", album, photo, on: true }));
+  }
+
+  let newAlbumName = $state<string | null>(null);
+  let renaming = $state<string | null>(null);
+  let confirmingDelete = $state(false);
+
+  function cancelAlbumEdits() {
+    renaming = null;
+    confirmingDelete = false;
+  }
+
+  async function submitNewAlbum(event: SubmitEvent) {
+    event.preventDefault();
+    const name = newAlbumName?.trim();
+    newAlbumName = null;
+    if (!name) return;
+    try {
+      const album = await createAlbum(library.path, name);
+      await loadSidebar();
+      listing = { kind: "album", album };
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function submitRename(event: SubmitEvent) {
+    event.preventDefault();
+    const name = renaming?.trim();
+    renaming = null;
+    if (name && currentAlbum && name !== currentAlbum.name) {
+      await apply([{ op: "album_name", album: currentAlbum.id, name }]);
+    }
+  }
+
+  async function deleteAlbum() {
+    if (!currentAlbum) return;
+    const album = currentAlbum.id;
+    listing = { kind: "library" };
+    await apply([{ op: "album_deleted", album, on: true }]);
+  }
+
+  /** Puts the cursor in a text field as soon as it appears. */
+  function focus(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 </script>
 
@@ -231,16 +418,6 @@
   <header>
     <button class="link" onclick={onclose}>‹ Libraries</button>
     <strong class="name" title={library.path}>{library.name}</strong>
-
-    <div class="tabs" role="tablist">
-      <button role="tab" aria-selected={view === "library"} onclick={() => (view = "library")}>
-        Library
-      </button>
-      <button role="tab" aria-selected={view === "folders"} onclick={() => (view = "folders")}>
-        Folders
-      </button>
-    </div>
-
     <div class="status" role="status">
       {#if scanning && progress && progress.phase !== "scanning" && progress.total > 0}
         <progress value={progress.done} max={progress.total}></progress>
@@ -250,14 +427,22 @@
     <button class="secondary" onclick={rescan} disabled={scanning}>Rescan</button>
   </header>
 
-  {#if !library.writable}
+  {#if !online}
     <p class="banner">
-      This folder is read-only. You can browse it, but albums and favorites will be kept on
-      this computer only.
+      This library can't be reached right now. You are browsing what this computer has cached;
+      full-size photos and changes are unavailable until it is back.
+    </p>
+  {:else if !writable}
+    <p class="banner">
+      This folder is read-only. Favorites, albums and hidden photos are kept on this computer
+      only.
     </p>
   {/if}
-  {#if scanError}
-    <p class="banner error" role="alert">{scanError}</p>
+  {#if error}
+    <p class="banner error" role="alert">
+      {error}
+      <button class="dismiss" onclick={() => (error = null)} aria-label="Dismiss">×</button>
+    </p>
   {/if}
   {#if lastScan && lastScan.unreadableDirs > 0}
     <p class="banner">
@@ -275,42 +460,182 @@
   {/if}
 
   <div class="body">
-    {#if view === "folders"}
-      <nav aria-label="Folders">
-        {#each folderRows as row (row.path)}
-          <button
-            class="folder"
-            class:selected={row.path === selectedFolder}
-            style:padding-left="{12 + row.depth * 14}px"
-            disabled={row.count === 0}
-            onclick={() => (selectedFolder = row.path)}
-            title={row.path || library.name}
-          >
-            <span class="folder-name">{row.name}</span>
-            {#if row.count > 0}<span class="folder-count">{formatNumber(row.count)}</span>{/if}
-          </button>
-        {/each}
-      </nav>
-    {/if}
+    <nav aria-label="Library sections">
+      {#snippet row(target: Listing, label: string, count: number | null, depth = 0, enabled = true)}
+        <button
+          class="row"
+          class:selected={JSON.stringify(target) === JSON.stringify(listing)}
+          style:padding-left="{12 + depth * 14}px"
+          disabled={!enabled}
+          onclick={() => (listing = target)}
+          title={label}
+        >
+          <span class="row-name">{label}</span>
+          {#if count !== null && count > 0}<span class="row-count">{formatNumber(count)}</span>{/if}
+        </button>
+      {/snippet}
+
+      {@render row({ kind: "library" }, "Library", null)}
+      {@render row({ kind: "favorites" }, "Favorites", null)}
+      {@render row({ kind: "hidden" }, "Hidden", null)}
+
+      <h2>
+        Albums
+        <button
+          class="add"
+          onclick={() => (newAlbumName = "")}
+          disabled={!online}
+          aria-label="New album"
+          title="New album"
+        >
+          +
+        </button>
+      </h2>
+      {#if newAlbumName !== null}
+        <form onsubmit={submitNewAlbum}>
+          <input
+            bind:value={newAlbumName}
+            use:focus
+            placeholder="Album name"
+            maxlength="200"
+            onblur={() => (newAlbumName = null)}
+            onkeydown={(event) => event.key === "Escape" && (newAlbumName = null)}
+          />
+        </form>
+      {/if}
+      {#each albums as album (album.id)}
+        {@render row({ kind: "album", album: album.id }, album.name, album.count)}
+      {:else}
+        {#if newAlbumName === null}<p class="hint">No albums yet</p>{/if}
+      {/each}
+
+      <h2>Folders</h2>
+      {#each folderRows as folder (folder.path)}
+        {@render row(
+          { kind: "folder", folder: folder.path },
+          folder.name,
+          folder.count,
+          folder.depth,
+          folder.count > 0,
+        )}
+      {/each}
+    </nav>
 
     <main>
-      {#if groups.length > 0}
-        <PhotoGrid bind:this={grid} {groups} {pages} onopen={(index) => (viewerIndex = index)} />
-      {:else if groupsLoaded}
-        <p class="empty">
-          {#if scanning}
-            Looking for photos…
-          {:else}
-            No photos found in this folder.
+      <div class="toolbar">
+        {#if selected.size > 0}
+          <strong>{formatNumber(selected.size)} selected</strong>
+          <span class="spacer"></span>
+          <button
+            class="secondary"
+            disabled={!online}
+            onclick={() => applyToSelection((photo) => ({ op: "fav", photo, on: true }))}
+          >
+            ♥ Favorite
+          </button>
+          {#if listing.kind === "favorites"}
+            <button
+              class="secondary"
+              disabled={!online}
+              onclick={() => applyToSelection((photo) => ({ op: "fav", photo, on: false }))}
+            >
+              Remove from favorites
+            </button>
           {/if}
-        </p>
-      {/if}
+          {#if albums.length > 0}
+            <select onchange={addSelectionToAlbum} disabled={!online}>
+              <option value="">Add to album…</option>
+              {#each albums as album (album.id)}
+                <option value={album.id}>{album.name}</option>
+              {/each}
+            </select>
+          {/if}
+          {#if currentAlbum}
+            {@const album = currentAlbum.id}
+            <button
+              class="secondary"
+              disabled={!online}
+              onclick={() =>
+                applyToSelection((photo) => ({ op: "album_member", album, photo, on: false }))}
+            >
+              Remove from album
+            </button>
+          {/if}
+          <button
+            class="secondary"
+            disabled={!online}
+            onclick={() =>
+              applyToSelection((photo) => ({ op: "hide", photo, on: listing.kind !== "hidden" }))}
+          >
+            {listing.kind === "hidden" ? "Unhide" : "Hide"}
+          </button>
+          <button class="secondary" onclick={() => selected.clear()}>Clear</button>
+        {:else if renaming !== null}
+          <form onsubmit={submitRename}>
+            <input
+              bind:value={renaming}
+              use:focus
+              maxlength="200"
+              onblur={() => (renaming = null)}
+              onkeydown={(event) => event.key === "Escape" && (renaming = null)}
+            />
+          </form>
+        {:else}
+          <strong class="title">{title}</strong>
+          {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
+          <span class="spacer"></span>
+          {#if currentAlbum}
+            {#if confirmingDelete}
+              <span class="dim">Delete this album? The photos stay in the library.</span>
+              <button class="secondary danger" onclick={deleteAlbum}>Delete</button>
+              <button class="secondary" onclick={() => (confirmingDelete = false)}>Cancel</button>
+            {:else}
+              <button
+                class="secondary"
+                disabled={!online}
+                onclick={() => (renaming = currentAlbum?.name ?? "")}
+              >
+                Rename
+              </button>
+              <button class="secondary" disabled={!online} onclick={() => (confirmingDelete = true)}>
+                Delete album
+              </button>
+            {/if}
+          {/if}
+        {/if}
+      </div>
+
+      <div class="grid">
+        {#if groups.length > 0}
+          <PhotoGrid
+            bind:this={grid}
+            {groups}
+            {pages}
+            {selected}
+            onopen={(index) => (viewerIndex = index)}
+            ontoggle={toggleSelected}
+          />
+        {:else if groupsLoaded}
+          <p class="empty">{emptyText}</p>
+        {/if}
+      </div>
     </main>
   </div>
 </div>
 
 {#if viewerIndex !== null}
-  <Viewer {pages} total={listedTotal} bind:index={viewerIndex} onclose={closeViewer} />
+  <Viewer
+    {pages}
+    total={listedTotal}
+    bind:index={viewerIndex}
+    {revision}
+    canEdit={online}
+    {albums}
+    currentAlbum={currentAlbum?.id ?? null}
+    showingHidden={listing.kind === "hidden"}
+    {apply}
+    onclose={closeViewer}
+  />
 {/if}
 
 <style>
@@ -339,32 +664,11 @@
   }
 
   .name {
+    flex: 1;
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-
-  .tabs {
-    display: flex;
-    margin: 0 auto;
-    padding: 2px;
-    border-radius: 8px;
-    background: var(--surface-hover);
-  }
-
-  .tabs button {
-    padding: 4px 16px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    cursor: pointer;
-  }
-
-  .tabs button[aria-selected="true"] {
-    background: var(--surface);
-    font-weight: 600;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.15);
   }
 
   .status {
@@ -381,17 +685,27 @@
     accent-color: var(--accent);
   }
 
-  .secondary {
+  .secondary,
+  select {
     padding: 5px 12px;
     border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--surface);
+    color: inherit;
+    font: inherit;
     cursor: pointer;
+    white-space: nowrap;
   }
 
-  .secondary:disabled {
+  .secondary:disabled,
+  select:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+
+  .danger {
+    border-color: var(--danger);
+    color: var(--danger);
   }
 
   .banner {
@@ -403,9 +717,20 @@
   }
 
   .banner.error {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
     color: var(--danger);
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  .dismiss {
+    border: none;
+    background: none;
+    font-size: 16px;
+    cursor: pointer;
   }
 
   .body {
@@ -415,15 +740,50 @@
   }
 
   nav {
-    width: 240px;
+    width: 220px;
     flex-shrink: 0;
-    padding: 8px 0;
+    padding: 8px 0 16px;
     overflow-y: auto;
     border-right: 1px solid var(--border);
     background: var(--surface);
   }
 
-  .folder {
+  nav h2 {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin: 18px 12px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+
+  .add {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    font-size: 16px;
+    line-height: 1;
+    color: var(--text-dim);
+    cursor: pointer;
+  }
+
+  .add:hover:not(:disabled) {
+    background: var(--surface-hover);
+  }
+
+  .hint {
+    margin: 2px 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .row {
     display: flex;
     align-items: baseline;
     gap: 8px;
@@ -435,22 +795,22 @@
     cursor: pointer;
   }
 
-  .folder:disabled {
+  .row:disabled {
     color: var(--text-dim);
     cursor: default;
   }
 
-  .folder:hover:not(:disabled) {
+  .row:hover:not(:disabled) {
     background: var(--surface-hover);
   }
 
-  .folder.selected,
-  .folder.selected:hover {
+  .row.selected,
+  .row.selected:hover {
     background: var(--accent);
     color: var(--accent-text);
   }
 
-  .folder-name {
+  .row-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -458,19 +818,77 @@
     white-space: nowrap;
   }
 
-  .folder-count {
+  .row-count {
     font-size: 12px;
     opacity: 0.7;
+  }
+
+  form {
+    display: contents;
+  }
+
+  input {
+    padding: 4px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    background: var(--bg);
+    color: inherit;
+    font: inherit;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  nav input {
+    width: calc(100% - 24px);
+    margin: 2px 12px;
   }
 
   main {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 46px;
+    padding: 6px 16px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .toolbar input {
+    width: 280px;
+  }
+
+  .title {
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dim {
+    font-size: 12px;
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .grid {
+    flex: 1;
+    min-height: 0;
   }
 
   .empty {
-    margin: 0;
-    padding-top: 120px;
+    max-width: 380px;
+    margin: 0 auto;
+    padding-top: 100px;
     text-align: center;
     color: var(--text-dim);
   }
