@@ -1,5 +1,6 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import type { Edit } from "./edit";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -145,6 +146,8 @@ export interface PhotoItem {
   durationMs: number | null;
   /** For a Live Photo: the fingerprint of its video. */
   liveVideo: string | null;
+  /** How the photo is shown, if it was edited. */
+  edit: Edit | null;
 }
 
 /** Mirrors `FolderEntry` in src-tauri/src/db.rs. */
@@ -295,7 +298,9 @@ export type Op =
   /** Names or renames an album. */
   | { op: "album_name"; album: string; name: string }
   | { op: "album_deleted"; album: string; on: boolean }
-  | { op: "album_member"; album: string; photo: string; on: boolean };
+  | { op: "album_member"; album: string; photo: string; on: boolean }
+  /** Sets how a photo is shown; `null` shows it as it is again. */
+  | { op: "edit"; photo: string; edit: Edit | null };
 
 /** Mirrors `Album` in src-tauri/src/db.rs. */
 export interface Album {

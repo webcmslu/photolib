@@ -39,6 +39,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   and file names, years (`2024`), months (`2024-07`, `july`) and kinds
   (`video`, `live`, `raw`, `favorite`). Places are named offline from a
   bundled GeoNames city list (`src-tauri/data/`).
+- Milestone 11 (basic editing): rotate, mirror, crop and brightness /
+  contrast / color adjustments in the viewer. Edits are instructions stored
+  in the shared organization log and applied when a photo is drawn; the
+  original files are never changed.
 
 ## Develop
 
@@ -100,6 +104,7 @@ To build installers locally: `npm run tauri build`.
 - `raw.rs` finds the preview in RAW files; `video.rs` reads MP4/MOV
   metadata; `frames.rs` grabs a video frame for thumbnails; `media_server.rs`
   serves videos to the Linux webview, which can't play them from `photo://`.
+- `edit.ts`, `EditedImage.svelte` and `CropBox.svelte` draw and make edits.
 - `search.rs` turns a search into SQL; `places.rs` names the nearest town.
 - `geo.rs` clusters photo positions for the map (`MapView.svelte`, Leaflet).
 - `org.rs` is the shared organization: the `.photolib` log format and the

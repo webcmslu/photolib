@@ -2,7 +2,8 @@
   Full-window photo viewer: arrow keys to move, wheel / double-click / +/- to
   zoom, drag to pan, "i" for the info panel, "f" for full screen, "." to
   favorite, "h" to hide, Esc to close. Videos play in place (space to pause);
-  a Live Photo plays its short video with the LIVE button or "l".
+  a Live Photo plays its short video with the LIVE button or "l". "e" opens
+  the editing panel: rotate, mirror, crop and adjust, without changing the file.
 
   It shows the cached preview at once and swaps in the full-size photo when it
   has loaded, so moving through photos stays fast on a slow network.
@@ -19,6 +20,9 @@
     type PhotoDetails,
     type PhotoItem,
   } from "./api";
+  import CropBox from "./CropBox.svelte";
+  import { editedSize, isNeutral, NO_EDIT, type Edit } from "./edit";
+  import EditedImage from "./EditedImage.svelte";
   import { formatBytes, formatDateTime, formatDuration, formatNumber } from "./format";
   import type { PhotoPages } from "./pages.svelte";
 
@@ -84,7 +88,123 @@
     x = 0;
     y = 0;
     livePlaying = false;
+    editing = false;
   });
+
+  // --- Editing ---------------------------------------------------------------
+
+  const ASPECTS = [
+    ["free", "Free", null],
+    ["original", "Original", 0],
+    ["1:1", "Square", 1],
+    ["4:3", "4:3", 4 / 3],
+    ["3:2", "3:2", 3 / 2],
+    ["16:9", "16:9", 16 / 9],
+  ] as const;
+
+  let editing = $state(false);
+  let draft = $state<Edit>({ ...NO_EDIT });
+  let aspect = $state<(typeof ASPECTS)[number][0]>("free");
+  let stageWidth = $state(0);
+  let stageHeight = $state(0);
+  /** The photo's proportions when the index does not know its size. */
+  let probed = $state<{ fingerprint: string; width: number; height: number } | null>(null);
+
+  $effect(() => {
+    const current = photo;
+    if (!current || current.video || (current.width && current.height)) return;
+    const probe = new Image();
+    probe.onload = () => {
+      probed = {
+        fingerprint: current.fingerprint,
+        width: probe.naturalWidth,
+        height: probe.naturalHeight,
+      };
+    };
+    probe.src = thumbUrl(current.fingerprint, "preview");
+  });
+
+  /** The photo's upright size (only its proportions matter here). */
+  const natural = $derived.by(() => {
+    if (!photo) return null;
+    if (photo.width && photo.height) return { width: photo.width, height: photo.height };
+    return probed?.fingerprint === photo.fingerprint ? probed : null;
+  });
+
+  /** What is drawn: while editing, the draft without its crop (the crop box shows that). */
+  const shownEdit = $derived<Edit | null>(
+    editing ? { ...draft, crop: null } : (photo?.edit ?? null),
+  );
+
+  /** Where the whole (rotated) picture is on the stage while editing. */
+  const editArea = $derived.by(() => {
+    if (!editing || !natural || stageWidth === 0 || stageHeight === 0) return null;
+    const [width, height] = editedSize({ ...draft, crop: null }, natural.width, natural.height);
+    const fit = Math.min(stageWidth / width, stageHeight / height);
+    return {
+      width: width * fit,
+      height: height * fit,
+      left: (stageWidth - width * fit) / 2,
+      top: (stageHeight - height * fit) / 2,
+    };
+  });
+
+  /** The ratio the crop box keeps, in the box's own fractions of the picture. */
+  const cropRatio = $derived.by(() => {
+    const wanted = ASPECTS.find(([id]) => id === aspect)?.[2] ?? null;
+    if (wanted === null || !editArea) return null;
+    return wanted === 0 ? 1 : (wanted * editArea.height) / editArea.width;
+  });
+
+  const cropFractions = $derived<[number, number, number, number]>(
+    draft.crop ? (draft.crop.map((value) => value / 10_000) as [number, number, number, number]) : [0, 0, 1, 1],
+  );
+
+  function setCrop([left, top, width, height]: [number, number, number, number]) {
+    const whole = left <= 0.0005 && top <= 0.0005 && width >= 0.999 && height >= 0.999;
+    const units = (value: number) => Math.round(value * 10_000);
+    // Rounding must not push the box past the edge.
+    const l = units(left);
+    const t = units(top);
+    draft.crop = whole
+      ? null
+      : [l, t, Math.min(units(width), 10_000 - l), Math.min(units(height), 10_000 - t)];
+  }
+
+  function startEditing() {
+    if (!photo || photo.video || !canEdit) return;
+    draft = { ...NO_EDIT, ...(photo.edit ?? {}) };
+    aspect = "free";
+    showInfo = false;
+    scale = 1;
+    x = 0;
+    y = 0;
+    editing = true;
+  }
+
+  /** A new shape: the largest centered crop of that shape. */
+  function chooseAspect(id: typeof aspect) {
+    aspect = id;
+    const ratio = cropRatio;
+    if (ratio === null) return;
+    const width = ratio >= 1 ? 1 : ratio;
+    const height = ratio >= 1 ? 1 / ratio : 1;
+    setCrop([(1 - width) / 2, (1 - height) / 2, width, height]);
+  }
+
+  /** Turning or mirroring starts again from the whole picture. */
+  function turn(degrees: number) {
+    draft.rotate = (draft.rotate + degrees + 360) % 360;
+    draft.crop = null;
+    aspect = "free";
+  }
+
+  async function saveEdit() {
+    if (!photo) return;
+    const edit = isNeutral(draft) ? null : $state.snapshot(draft);
+    editing = false;
+    await apply([{ op: "edit", photo: photo.fingerprint, edit }]);
+  }
 
   // Load the photo for the current index, then its neighbours' previews.
   $effect(() => {
@@ -146,21 +266,22 @@
 
   /** Keeps the image from being dragged further than its own edge. */
   function clampPan() {
-    if (!image || !image.naturalWidth) return;
+    // The size of what is shown: the edited picture, or the image itself.
+    let size: [number, number] | null = null;
+    if (shownEdit && natural) size = editedSize(shownEdit, natural.width, natural.height);
+    else if (image?.naturalWidth) size = [image.naturalWidth, image.naturalHeight];
+    if (!size) return;
     // Size of the photo on screen at scale 1 (it is fitted into the stage).
-    const fit = Math.min(
-      stage.clientWidth / image.naturalWidth,
-      stage.clientHeight / image.naturalHeight,
-    );
-    const maxX = Math.max(0, (image.naturalWidth * fit * scale - stage.clientWidth) / 2);
-    const maxY = Math.max(0, (image.naturalHeight * fit * scale - stage.clientHeight) / 2);
+    const fit = Math.min(stage.clientWidth / size[0], stage.clientHeight / size[1]);
+    const maxX = Math.max(0, (size[0] * fit * scale - stage.clientWidth) / 2);
+    const maxY = Math.max(0, (size[1] * fit * scale - stage.clientHeight) / 2);
     x = Math.min(maxX, Math.max(-maxX, x));
     y = Math.min(maxY, Math.max(-maxY, y));
   }
 
   /** Zooms to `target`, keeping the point under (clientX, clientY) in place. */
   function zoomTo(target: number, clientX?: number, clientY?: number) {
-    if (photo?.video) return; // videos stay fitted to the window
+    if (photo?.video || editing) return; // these stay fitted to the window
     const next = Math.min(MAX_SCALE, Math.max(1, target));
     const box = stage.getBoundingClientRect();
     const px = (clientX ?? box.left + box.width / 2) - (box.left + box.width / 2);
@@ -247,6 +368,14 @@
   function onkeydown(event: KeyboardEvent) {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.target instanceof HTMLSelectElement && event.key !== "Escape") return;
+    if (editing) {
+      // Only Escape (cancel) and Enter (save) while editing.
+      if (event.key === "Escape") editing = false;
+      else if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) saveEdit();
+      else return;
+      event.preventDefault();
+      return;
+    }
     switch (event.key) {
       case ".":
         toggleFavorite();
@@ -274,6 +403,9 @@
         break;
       case "f":
         toggleFullscreen();
+        break;
+      case "e":
+        startEditing();
         break;
       case " ":
       case "l":
@@ -329,6 +461,14 @@
       <button onclick={toggleHidden} disabled={!canEdit || !photo} title="{showingHidden ? 'Unhide' : 'Hide'} (H)">
         {showingHidden ? "Unhide" : "Hide"}
       </button>
+      <button
+        onclick={() => (editing ? (editing = false) : startEditing())}
+        disabled={!canEdit || !photo || photo.video}
+        aria-pressed={editing}
+        title="Edit (E)"
+      >
+        Edit
+      </button>
       {#if photo?.liveVideo}
         <button onclick={togglePlay} aria-pressed={livePlaying} title="Play the Live Photo (L)">
           LIVE
@@ -348,6 +488,8 @@
       class="stage"
       class:zoomed={scale > 1}
       bind:this={stage}
+      bind:clientWidth={stageWidth}
+      bind:clientHeight={stageHeight}
       {onwheel}
       {ondblclick}
       {onpointerdown}
@@ -373,6 +515,28 @@
         {#if unplayable === photo.fingerprint}
           <p class="notice">This video can't be played here.</p>
         {/if}
+      {:else if src && shownEdit}
+        <div class="edited" style:transform="translate({x}px, {y}px) scale({scale})">
+          <EditedImage
+            {src}
+            alt={fileName}
+            edit={shownEdit}
+            width={natural?.width ?? null}
+            height={natural?.height ?? null}
+            fit="contain"
+          />
+        </div>
+        {#if editArea}
+          <div
+            class="crop-area"
+            style:left="{editArea.left}px"
+            style:top="{editArea.top}px"
+            style:width="{editArea.width}px"
+            style:height="{editArea.height}px"
+          >
+            <CropBox crop={cropFractions} ratio={cropRatio} onchange={setCrop} />
+          </div>
+        {/if}
       {:else if src}
         <img
           bind:this={image}
@@ -395,7 +559,7 @@
         {/if}
       {/if}
 
-      {#if index > 0}
+      {#if index > 0 && !editing}
         <button class="nav previous" onclick={() => go(-1)} aria-label="Previous photo">‹</button>
       {/if}
       {#if index < total - 1}
@@ -404,7 +568,59 @@
     </div>
   </div>
 
-  {#if showInfo}
+  {#if editing}
+    <aside class="edit">
+      <h2>Edit</h2>
+      <p class="note">The original file is not changed.</p>
+
+      <h3>Turn</h3>
+      <div class="buttons">
+        <button onclick={() => turn(-90)} title="Turn left">⟲ Left</button>
+        <button onclick={() => turn(90)} title="Turn right">⟳ Right</button>
+        <button
+          onclick={() => {
+            draft.flip = !draft.flip;
+            draft.crop = null;
+          }}
+          aria-pressed={draft.flip}
+        >
+          Mirror
+        </button>
+      </div>
+
+      <h3>Crop</h3>
+      <p class="note">Drag the box or its corners on the photo.</p>
+      <div class="buttons">
+        {#each ASPECTS as [id, label] (id)}
+          <button onclick={() => chooseAspect(id)} aria-pressed={aspect === id}>{label}</button>
+        {/each}
+      </div>
+
+      <h3>Adjust</h3>
+      {#each [["brightness", "Brightness"], ["contrast", "Contrast"], ["saturation", "Color"]] as const as [key, label] (key)}
+        <label>
+          <span>{label}</span>
+          <input type="range" min="-100" max="100" step="5" bind:value={draft[key]} />
+          <output>{draft[key]}</output>
+        </label>
+      {/each}
+
+      <div class="buttons end">
+        <button
+          onclick={() => {
+            draft = { ...NO_EDIT };
+            aspect = "free";
+          }}
+          disabled={isNeutral(draft)}
+        >
+          Reset all
+        </button>
+        <span class="spacer"></span>
+        <button onclick={() => (editing = false)}>Cancel</button>
+        <button class="primary" onclick={saveEdit}>Done</button>
+      </div>
+    </aside>
+  {:else if showInfo}
     <aside>
       <h2>Info</h2>
       <dl>
@@ -614,6 +830,82 @@
 
   .next {
     right: 12px;
+  }
+
+  .edited {
+    position: absolute;
+    inset: 0;
+    will-change: transform;
+  }
+
+  .crop-area {
+    position: absolute;
+  }
+
+  aside.edit h3 {
+    margin: 18px 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #a1a1a6;
+  }
+
+  .note {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: #a1a1a6;
+  }
+
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .buttons.end {
+    margin-top: 24px;
+  }
+
+  .buttons .spacer {
+    flex: 1;
+  }
+
+  aside.edit button {
+    padding: 5px 10px;
+    border: 1px solid #4a4a50;
+    border-radius: 6px;
+    background: #2c2c2e;
+    color: inherit;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  aside.edit button[aria-pressed="true"],
+  aside.edit button.primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+  }
+
+  aside.edit button:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  aside.edit label {
+    display: grid;
+    grid-template-columns: 80px 1fr 34px;
+    align-items: center;
+    gap: 8px;
+    margin: 6px 0;
+    font-size: 13px;
+  }
+
+  aside.edit output {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    color: #a1a1a6;
   }
 
   aside {

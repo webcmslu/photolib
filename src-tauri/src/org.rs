@@ -70,6 +70,52 @@ pub enum Op {
         photo: String,
         on: bool,
     },
+    /// Sets how a photo is shown (rotation, crop, light and color), or
+    /// with `edit: null` shows it as it is again. The file is never changed.
+    Edit {
+        photo: String,
+        edit: Option<Edit>,
+    },
+}
+
+/// Adjustments to how a photo is shown. They are applied when the photo is
+/// displayed; the original file stays as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Edit {
+    /// Clockwise quarter turns: 0, 90, 180 or 270 degrees.
+    #[serde(default)]
+    pub rotate: u16,
+    /// Mirrored left to right (before the rotation).
+    #[serde(default)]
+    pub flip: bool,
+    /// The part to keep, as left, top, width and height in ten-thousandths
+    /// of the rotated picture. `None` keeps all of it.
+    #[serde(default)]
+    pub crop: Option<[u16; 4]>,
+    /// From -100 to 100; 0 changes nothing.
+    #[serde(default)]
+    pub brightness: i8,
+    #[serde(default)]
+    pub contrast: i8,
+    #[serde(default)]
+    pub saturation: i8,
+}
+
+impl Edit {
+    fn is_valid(&self) -> bool {
+        let crop_ok = self.crop.is_none_or(|[left, top, width, height]| {
+            width >= 100
+                && height >= 100
+                && u32::from(left) + u32::from(width) <= 10_000
+                && u32::from(top) + u32::from(height) <= 10_000
+        });
+        let in_range = |value: i8| (-100..=100).contains(&value);
+        matches!(self.rotate, 0 | 90 | 180 | 270)
+            && crop_ok
+            && in_range(self.brightness)
+            && in_range(self.contrast)
+            && in_range(self.saturation)
+    }
 }
 
 impl Op {
@@ -85,6 +131,7 @@ impl Op {
             }
             Op::AlbumDeleted { album, .. } => is_id(album, 32),
             Op::AlbumMember { album, photo, .. } => is_id(album, 32) && is_id(photo, 64),
+            Op::Edit { photo, edit } => is_id(photo, 64) && edit.is_none_or(|edit| edit.is_valid()),
         }
     }
 }

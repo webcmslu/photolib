@@ -12,6 +12,7 @@
 <script lang="ts">
   import { thumbUrl, type DayGroup } from "./api";
   import { formatDay, formatDuration, formatMonth, formatNumber, monthKey } from "./format";
+  import EditedImage from "./EditedImage.svelte";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -299,7 +300,15 @@
           onclick={(event) => onclick(event, cell.index)}
           aria-label={photo?.relPath ?? "Photo"}
         >
-          {#if photo}
+          {#if photo?.edit}
+            <EditedImage
+              src={thumbUrl(photo.fingerprint, cell.width > 320 ? "preview" : "grid")}
+              edit={photo.edit}
+              width={photo.width}
+              height={photo.height}
+              fit="cover"
+            />
+          {:else if photo}
             <!-- A video without a thumbnail keeps the cell's plain background. -->
             <img
               src={thumbUrl(photo.fingerprint, cell.width > 320 ? "preview" : "grid")}

@@ -79,6 +79,7 @@ CREATE INDEX photos_stem ON photos (stem);
 --   'album_name'    album id   ''         the name
 --   'album_deleted' album id   ''         '1' / '0'
 --   'member'        album id   photo fp   '1' / '0'
+--   'edit'          photo fp   ''         the edit as JSON, or '' for none
 CREATE TABLE org_state (
     kind    TEXT NOT NULL,
     key     TEXT NOT NULL,
@@ -596,6 +597,8 @@ pub struct PhotoItem {
     pub duration_ms: Option<u64>,
     /// For a Live Photo: the fingerprint of its video.
     pub live_video: Option<String>,
+    /// How the photo is shown, if it was edited.
+    pub edit: Option<crate::org::Edit>,
 }
 
 /// A slice of the listing, newest first (ties broken by path).
@@ -608,7 +611,8 @@ pub fn photos_page(
     let (filter, param) = listing.filter();
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE},
-                kind, duration_ms, live_video
+                kind, duration_ms, live_video,
+                (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint)
          FROM photos {filter} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2"
     ))?;
     let rows = stmt.query_map(params![param, offset, limit], |row| {
@@ -622,6 +626,9 @@ pub fn photos_page(
             video: row.get(6)?,
             duration_ms: row.get::<_, Option<i64>>(7)?.map(|ms| ms as u64),
             live_video: row.get(8)?,
+            edit: row
+                .get::<_, Option<String>>(9)?
+                .and_then(|json| serde_json::from_str(&json).ok()),
         })
     })?;
     rows.collect()
@@ -765,6 +772,7 @@ pub fn geo_points(
 /// later event (greater `(ts, device)`) already did.
 pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlite::Result<()> {
     let flag = |on: &bool| if *on { "1" } else { "0" };
+    let edit_json: String;
     let (kind, key, photo, value) = match &event.op {
         Op::Fav { photo, on } => ("fav", photo.as_str(), "", flag(on)),
         Op::Hide { photo, on } => ("hide", photo.as_str(), "", flag(on)),
@@ -772,6 +780,13 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
         Op::AlbumDeleted { album, on } => ("album_deleted", album.as_str(), "", flag(on)),
         Op::AlbumMember { album, photo, on } => {
             ("member", album.as_str(), photo.as_str(), flag(on))
+        }
+        Op::Edit { photo, edit } => {
+            // The edit as JSON; an empty value means "not edited".
+            edit_json = edit
+                .and_then(|edit| serde_json::to_string(&edit).ok())
+                .unwrap_or_default();
+            ("edit", photo.as_str(), "", edit_json.as_str())
         }
     };
     tx.prepare_cached(
@@ -1291,6 +1306,75 @@ mod tests {
         let mut conn = open(&path).unwrap();
         assert_eq!(count(&conn).unwrap(), 1);
         assert_eq!(fill_places(&mut conn, |_, _| None).unwrap(), 1);
+    }
+
+    #[test]
+    fn edits_are_stored_and_listed() {
+        use crate::org::Edit;
+
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        upsert(&tx, &row("a.jpg", 1)).unwrap();
+        let wanted = Edit {
+            rotate: 90,
+            crop: Some([1000, 0, 5000, 10_000]),
+            contrast: 20,
+            ..Edit::default()
+        };
+        let edit = |ts, edit| Event {
+            ts,
+            op: Op::Edit {
+                photo: "f".into(),
+                edit,
+            },
+        };
+        apply_event(&tx, "device", &edit(5, Some(wanted))).unwrap();
+        // An older event from another computer does not win.
+        apply_event(&tx, "other", &edit(3, None)).unwrap();
+        tx.commit().unwrap();
+        let listed = photos_page(&conn, &Listing::Library, 0, 1).unwrap();
+        assert_eq!(listed[0].edit, Some(wanted));
+
+        // A newer "no edit" shows the photo as it is again.
+        let tx = conn.transaction().unwrap();
+        apply_event(&tx, "other", &edit(9, None)).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(
+            photos_page(&conn, &Listing::Library, 0, 1).unwrap()[0].edit,
+            None
+        );
+
+        // What the log looks like, and what is refused.
+        let line = serde_json::to_string(&edit(5, Some(wanted))).unwrap();
+        assert!(
+            line.contains(r#""op":"edit""#) && line.contains(r#""rotate":90"#),
+            "{line}"
+        );
+        let op = |edit| Op::Edit {
+            photo: "ab".repeat(32),
+            edit: Some(edit),
+        };
+        assert!(op(wanted).is_valid());
+        for bad in [
+            Edit {
+                rotate: 45,
+                ..wanted
+            },
+            Edit {
+                crop: Some([6000, 0, 5000, 100]),
+                ..wanted
+            },
+            Edit {
+                crop: Some([0, 0, 10, 10]),
+                ..wanted
+            },
+            Edit {
+                brightness: 120,
+                ..wanted
+            },
+        ] {
+            assert!(!op(bad).is_valid(), "{bad:?}");
+        }
     }
 
     #[test]
