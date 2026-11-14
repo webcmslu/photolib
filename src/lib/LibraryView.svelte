@@ -7,6 +7,8 @@
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
+    appleImport,
+    appleImportPreview,
     applyOps,
     closeLibrary,
     createAlbum,
@@ -15,12 +17,14 @@
     listFolders,
     listMonths,
     onIndexEvent,
+    pickPhotosLibrary,
     rescanLibrary,
     syncLibrary,
     timeline,
     type Album,
     type DayGroup,
     type FolderEntry,
+    type ImportSummary,
     type IndexEvent,
     type LibraryInfo,
     type Listing,
@@ -264,6 +268,41 @@
         return `Search: ${listing.query}`;
     }
   });
+
+  // --- Import from Apple Photos ---------------------------------------------------
+
+  /** The import being confirmed: which library, and what it would do. */
+  let importing = $state<{ library: string; summary: ImportSummary; busy: boolean } | null>(null);
+  /** What the last import did, shown once. */
+  let imported = $state<ImportSummary | null>(null);
+
+  async function chooseAppleLibrary() {
+    error = null;
+    imported = null;
+    try {
+      const chosen = await pickPhotosLibrary();
+      if (!chosen) return;
+      importing = {
+        library: chosen,
+        summary: await appleImportPreview(library.path, chosen),
+        busy: false,
+      };
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function confirmImport() {
+    if (!importing) return;
+    importing.busy = true;
+    try {
+      imported = await appleImport(library.path, importing.library);
+      refreshAll();
+    } catch (e) {
+      error = String(e);
+    }
+    importing = null;
+  }
 
   // --- Search -------------------------------------------------------------------
 
@@ -579,6 +618,14 @@
       only.
     </p>
   {/if}
+  {#if imported}
+    <p class="banner">
+      Imported from Apple Photos: {formatNumber(imported.favorites)} favorites,
+      {formatNumber(imported.hidden)} hidden,
+      {formatNumber(imported.albums.filter((album) => album.matched > 0).length)} album(s).
+      <button class="dismiss" onclick={() => (imported = null)} aria-label="Dismiss">×</button>
+    </p>
+  {/if}
   {#if error}
     <p class="banner error" role="alert">
       {error}
@@ -666,6 +713,10 @@
       {:else}
         {#if newAlbumName === null}<p class="hint">No albums yet</p>{/if}
       {/each}
+
+      <button class="import" onclick={chooseAppleLibrary} disabled={!online}>
+        Import from Apple Photos…
+      </button>
 
       <h2>Folders</h2>
       {#each folderRows as folder (folder.path)}
@@ -799,18 +850,20 @@
             {/each}
           </div>
           <span class="spacer"></span>
-          {#if viewMode === "all"}
-            <input
-              class="zoom"
-              type="range"
-              min={CELL_MIN}
-              max={CELL_MAX}
-              step="10"
-              bind:value={cellSize}
-              aria-label="Thumbnail size"
-              title="Thumbnail size (Ctrl/Cmd + and -)"
-            />
-          {/if}
+          <!-- Kept in place (only hidden) in the overviews, so that the
+               view switch beside it does not move under the pointer. -->
+          <input
+            class="zoom"
+            class:unused={viewMode !== "all"}
+            disabled={viewMode !== "all"}
+            type="range"
+            min={CELL_MIN}
+            max={CELL_MAX}
+            step="10"
+            bind:value={cellSize}
+            aria-label="Thumbnail size"
+            title="Thumbnail size (Ctrl/Cmd + and -)"
+          />
           {#if currentAlbum}
             {#if confirmingDelete}
               <span class="dim">Delete this album? The photos stay in the library.</span>
@@ -867,6 +920,53 @@
   </div>
 </div>
 
+{#if importing}
+  {@const summary = importing.summary}
+  <div class="backdrop">
+    <div class="dialog" role="dialog" aria-modal="true" aria-label="Import from Apple Photos">
+      <h2>Import from Apple Photos</h2>
+      <p>
+        {formatNumber(summary.matched)} of the {formatNumber(summary.assets)} photos in that
+        library were found in this one. Importing will:
+      </p>
+      <ul>
+        <li>mark {formatNumber(summary.favorites)} as favorites;</li>
+        <li>hide {formatNumber(summary.hidden)};</li>
+        <li>
+          create or fill {formatNumber(summary.albums.filter((album) => album.matched > 0).length)}
+          {summary.albums.filter((album) => album.matched > 0).length === 1 ? "album" : "albums"}:
+        </li>
+      </ul>
+      {#if summary.albums.length > 0}
+        <div class="albums">
+          {#each summary.albums as album (album.name)}
+            <div class:dim={album.matched === 0}>
+              <span>{album.name}</span>
+              <span>{formatNumber(album.matched)} of {formatNumber(album.photos)}</span>
+            </div>
+          {/each}
+        </div>
+      {/if}
+      <p class="dim small">
+        Nothing is removed, and the Apple Photos library is only read. Photos that are not in
+        this folder are skipped.
+      </p>
+      <div class="actions">
+        <button class="secondary" onclick={() => (importing = null)} disabled={importing.busy}>
+          Cancel
+        </button>
+        <button
+          class="secondary default"
+          onclick={confirmImport}
+          disabled={importing.busy || summary.matched === 0}
+        >
+          {importing.busy ? "Importing…" : "Import"}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if viewerIndex !== null}
   <Viewer
     {pages}
@@ -922,6 +1022,12 @@
     font-size: 12px;
     color: var(--text-dim);
     white-space: nowrap;
+    /* A fixed width with digits of equal width: the counter changes many
+       times a second during a scan and must not push the search box around. */
+    justify-content: flex-end;
+    width: 260px;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
   }
 
   progress {
@@ -1028,6 +1134,8 @@
 
   .segmented {
     display: flex;
+    flex-shrink: 0;
+    white-space: nowrap;
     border: 1px solid var(--border);
     border-radius: 6px;
     overflow: hidden;
@@ -1052,6 +1160,10 @@
 
   .toolbar input.zoom {
     width: 120px;
+  }
+
+  .toolbar input.zoom.unused {
+    visibility: hidden;
   }
 
   nav h2 {
@@ -1081,6 +1193,85 @@
 
   .add:hover:not(:disabled) {
     background: var(--surface-hover);
+  }
+
+  .import {
+    margin: 6px 12px 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .import:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .backdrop {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(0 0 0 / 0.4);
+    z-index: 20;
+  }
+
+  .dialog {
+    width: min(460px, calc(100vw - 40px));
+    max-height: calc(100vh - 80px);
+    overflow-y: auto;
+    padding: 20px 24px;
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: 0 10px 40px rgb(0 0 0 / 0.35);
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  .dialog h2 {
+    margin: 0 0 8px;
+    font-size: 17px;
+  }
+
+  .dialog ul {
+    margin: 8px 0;
+    padding-left: 20px;
+  }
+
+  .dialog .albums {
+    max-height: 180px;
+    overflow-y: auto;
+    margin: 0 0 8px 20px;
+    font-size: 13px;
+  }
+
+  .dialog .albums div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 2px 0;
+  }
+
+  .dialog .small {
+    font-size: 12px;
+    white-space: normal;
+  }
+
+  .dialog .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+
+  .dialog .default {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--accent-text);
   }
 
   .hint {

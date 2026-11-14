@@ -34,6 +34,42 @@ export async function pickLibraryFolder(): Promise<string | null> {
   return typeof picked === "string" ? picked : null;
 }
 
+/**
+ * Lets the user choose an Apple Photos library. On macOS it is a "package":
+ * a folder that the file picker shows as one file.
+ */
+export async function pickPhotosLibrary(): Promise<string | null> {
+  const onMac = navigator.userAgent.includes("Mac");
+  const picked = await open({
+    directory: !onMac,
+    multiple: false,
+    title: "Choose an Apple Photos library",
+    filters: onMac ? [{ name: "Photos Library", extensions: ["photoslibrary"] }] : undefined,
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** Mirrors `ImportSummary` in src-tauri/src/apple.rs. */
+export interface ImportSummary {
+  /** Photos and videos in the Apple Photos library. */
+  assets: number;
+  /** How many of them were found in this library. */
+  matched: number;
+  favorites: number;
+  hidden: number;
+  albums: { name: string; photos: number; matched: number }[];
+}
+
+/** Says what importing an Apple Photos library would do. */
+export function appleImportPreview(path: string, photosLibrary: string): Promise<ImportSummary> {
+  return invoke("apple_import_preview", { path, photosLibrary });
+}
+
+/** Imports favorites, hidden photos and albums from an Apple Photos library. */
+export function appleImport(path: string, photosLibrary: string): Promise<ImportSummary> {
+  return invoke("apple_import", { path, photosLibrary });
+}
+
 export function openLibrary(path: string): Promise<LibraryInfo> {
   return invoke("open_library", { path });
 }

@@ -1,3 +1,4 @@
+mod apple;
 mod db;
 mod faces;
 mod fingerprint;
@@ -813,6 +814,40 @@ fn name_person(
     .map_err(|e| e.to_string())
 }
 
+/// Says what importing an Apple Photos library would do, without doing it.
+#[tauri::command(async)]
+fn apple_import_preview(
+    path: String,
+    photos_library: String,
+    state: State<'_, AppState>,
+) -> Result<apple::ImportSummary, String> {
+    let conn = open_index(&state, &path)?;
+    Ok(apple::plan(&conn, Path::new(&photos_library))?.summary)
+}
+
+/// Imports favorites, hidden photos and albums from an Apple Photos library.
+/// The Photos library is only read.
+#[tauri::command(async)]
+fn apple_import(
+    path: String,
+    photos_library: String,
+    state: State<'_, AppState>,
+) -> Result<apple::ImportSummary, String> {
+    let open = editable_library(&state, &path)?;
+    let mut conn = open_index(&state, &path)?;
+    let plan = apple::plan(&conn, Path::new(&photos_library))?;
+    let ops = apple::ops(&conn, &plan)?;
+    org::record(
+        &mut conn,
+        &state.org_paths(&path),
+        &state.device,
+        open.writable,
+        ops,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(plan.summary)
+}
+
 /// Records organization changes (favorite, hide, album edits) made in the UI.
 #[tauri::command(async)]
 fn apply_ops(path: String, ops: Vec<org::Op>, state: State<'_, AppState>) -> Result<(), String> {
@@ -937,6 +972,8 @@ pub fn run() {
             photos_page,
             folders,
             photo_details,
+            apple_import_preview,
+            apple_import,
             faces_status,
             enable_faces,
             people,

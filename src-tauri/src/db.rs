@@ -818,6 +818,16 @@ pub fn geo_points(
     rows.collect()
 }
 
+/// Every listed file: `(rel_path, size, fingerprint)`.
+pub fn files(conn: &Connection) -> rusqlite::Result<Vec<(String, u64, String)>> {
+    let mut stmt =
+        conn.prepare("SELECT rel_path, size, fingerprint FROM photos WHERE live_part = 0")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get(0)?, row.get::<_, i64>(1)? as u64, row.get(2)?))
+    })?;
+    rows.collect()
+}
+
 // --- Faces and people (see faces.rs and people.rs) ------------------------------
 
 /// The photos (not videos) that have a preview and have not been searched

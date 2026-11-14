@@ -48,6 +48,9 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   the OpenCV zoo, 39 MB) are downloaded on first use and run with `tract`,
   a pure-Rust runtime. Names are shared through the library's log; giving
   two groups the same name merges them.
+- Milestone 13 (Apple Photos import): "Import from Apple Photos…" reads a
+  `.photoslibrary` (read-only) and brings its favorites, hidden photos and
+  albums over, for the photos that are also in the library folder.
 
 ## Develop
 
@@ -114,6 +117,7 @@ To build installers locally: `npm run tauri build`.
 - `faces.rs` runs the face models; `people.rs` searches photos, groups faces
   and names people (`PeopleView.svelte`). Faces are stored in `faces.db`
   next to the index, so rebuilding the index keeps them.
+- `apple.rs` reads an Apple Photos library for the import.
 - `search.rs` turns a search into SQL; `places.rs` names the nearest town.
 - `geo.rs` clusters photo positions for the map (`MapView.svelte`, Leaflet).
 - `org.rs` is the shared organization: the `.photolib` log format and the

@@ -63,5 +63,5 @@ q "SELECT 'assets with an original file size: ' || COUNT(*) FROM ZADDITIONALASSE
 
 echo
 echo "== How the original files are stored (folder depth and extensions only)"
-q "SELECT 'directory length ' || LENGTH(ZDIRECTORY) || ', extension ' || LOWER(SUBSTR(ZFILENAME, INSTR(ZFILENAME, '.'))) || ': ' || COUNT(*) FROM ZASSET GROUP BY 1 ORDER BY COUNT(*) DESC LIMIT 12;"
+q "SELECT 'directory length ' || len || ', extension ' || ext || ': ' || COUNT(*) FROM (SELECT LENGTH(ZDIRECTORY) AS len, LOWER(SUBSTR(ZFILENAME, INSTR(ZFILENAME, '.'))) AS ext FROM ZASSET) GROUP BY len, ext ORDER BY COUNT(*) DESC LIMIT 12;"
 ls "$LIBRARY" 2>&1 | head -20
