@@ -40,6 +40,7 @@ pub enum Phase {
     Scanning,
     Indexing,
     Thumbnails,
+    Faces,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

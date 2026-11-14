@@ -70,6 +70,16 @@ pub enum Op {
         photo: String,
         on: bool,
     },
+    /// Names the person whose face is at a point of a photo (x and y in
+    /// ten-thousandths of the upright photo); an empty name removes it.
+    /// Every computer groups faces by itself; a group takes the name of the
+    /// named faces in it, and groups with the same name are one person.
+    FaceName {
+        photo: String,
+        x: u16,
+        y: u16,
+        name: String,
+    },
     /// Sets how a photo is shown (rotation, crop, light and color), or
     /// with `edit: null` shows it as it is again. The file is never changed.
     Edit {
@@ -131,6 +141,12 @@ impl Op {
             }
             Op::AlbumDeleted { album, .. } => is_id(album, 32),
             Op::AlbumMember { album, photo, .. } => is_id(album, 32) && is_id(photo, 64),
+            Op::FaceName { photo, x, y, name } => {
+                is_id(photo, 64)
+                    && *x <= 10_000
+                    && *y <= 10_000
+                    && name.chars().count() <= MAX_ALBUM_NAME_CHARS
+            }
             Op::Edit { photo, edit } => is_id(photo, 64) && edit.is_none_or(|edit| edit.is_valid()),
         }
     }

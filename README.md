@@ -43,6 +43,11 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   contrast / color adjustments in the viewer. Edits are instructions stored
   in the shared organization log and applied when a photo is drawn; the
   original files are never changed.
+- Milestone 12 (people): faces are found in the cached previews and grouped
+  by person, entirely on this computer. The two models (YuNet and SFace from
+  the OpenCV zoo, 39 MB) are downloaded on first use and run with `tract`,
+  a pure-Rust runtime. Names are shared through the library's log; giving
+  two groups the same name merges them.
 
 ## Develop
 
@@ -64,6 +69,7 @@ npm run tauri dev      # run the app with hot reload
 npm run check          # type-check the UI
 cd src-tauri && cargo test
 cargo test --release benchmark -- --ignored --nocapture   # 10k-file indexing benchmark
+# (`tools/photos-schema.sh` prints an Apple Photos database's structure)
 # check RAW support against your own camera files:
 PHOTOLIB_RAW_SAMPLES=/some/folder cargo test real_raw -- --ignored --nocapture
 npm run tauri build    # release bundle
@@ -105,6 +111,9 @@ To build installers locally: `npm run tauri build`.
   metadata; `frames.rs` grabs a video frame for thumbnails; `media_server.rs`
   serves videos to the Linux webview, which can't play them from `photo://`.
 - `edit.ts`, `EditedImage.svelte` and `CropBox.svelte` draw and make edits.
+- `faces.rs` runs the face models; `people.rs` searches photos, groups faces
+  and names people (`PeopleView.svelte`). Faces are stored in `faces.db`
+  next to the index, so rebuilding the index keeps them.
 - `search.rs` turns a search into SQL; `places.rs` names the nearest town.
 - `geo.rs` clusters photo positions for the map (`MapView.svelte`, Leaflet).
 - `org.rs` is the shared organization: the `.photolib` log format and the

@@ -50,7 +50,7 @@ export function removeRecentLibrary(path: string): Promise<RecentLibrary[]> {
 
 /** Mirrors `Progress` in src-tauri/src/indexer.rs. */
 export interface ScanProgress {
-  phase: "scanning" | "indexing" | "thumbnails";
+  phase: "scanning" | "indexing" | "thumbnails" | "faces";
   /** Image files found so far by the folder walk. */
   discovered: number;
   /** Items the current phase has to process, and how many are done. */
@@ -191,6 +191,8 @@ export type Listing =
   | { kind: "favorites" }
   | { kind: "album"; album: string }
   | { kind: "hidden" }
+  /** The photos that show one person: the given groups of faces. */
+  | { kind: "person"; clusters: number[] }
   /** The photos that match what was typed in the search box. */
   | { kind: "search"; query: string }
   /** The photos taken inside a rectangle on the map. */
@@ -274,6 +276,54 @@ export function mapClusters(
   return invoke("map_clusters", { path, ...bounds, zoom });
 }
 
+// --- People (face grouping) ------------------------------------------------------
+
+/** Mirrors `FacesStatus` in src-tauri/src/lib.rs. */
+export interface FacesStatus {
+  /** True once the face models are on this computer. */
+  enabled: boolean;
+  /** Size of the download that switching it on needs. */
+  downloadBytes: number;
+}
+
+/** Mirrors `Person` in src-tauri/src/people.rs. */
+export interface Person {
+  /** `null` until someone names them. */
+  name: string | null;
+  /** The face groups that make up this person on this computer. */
+  clusters: number[];
+  /** Photos they appear in (approximate for merged people). */
+  photos: number;
+  /** The photo to show them with, and the square around their face in it. */
+  cover: string;
+  coverCrop: [number, number, number, number];
+  coverWidth: number | null;
+  coverHeight: number | null;
+}
+
+export function facesStatus(): Promise<FacesStatus> {
+  return invoke("faces_status");
+}
+
+/** Downloads the face models, then searches the open library for faces. */
+export function enableFaces(): Promise<void> {
+  return invoke("enable_faces");
+}
+
+/** Calls `handler` with the bytes received so far while the models download. */
+export function onFacesDownload(handler: (received: number) => void): Promise<UnlistenFn> {
+  return listen<number>("faces-download", (event) => handler(event.payload));
+}
+
+export function listPeople(path: string): Promise<Person[]> {
+  return invoke("people", { path });
+}
+
+/** Names a person; an empty name removes it. The same name merges two people. */
+export function namePerson(path: string, clusters: number[], name: string): Promise<void> {
+  return invoke("name_person", { path, clusters, name });
+}
+
 // The Linux webview can't play video from `photo://`; there the app serves
 // videos over local HTTP instead (see src-tauri/src/media_server.rs).
 let mediaBase: string | null = null;
@@ -300,7 +350,9 @@ export type Op =
   | { op: "album_deleted"; album: string; on: boolean }
   | { op: "album_member"; album: string; photo: string; on: boolean }
   /** Sets how a photo is shown; `null` shows it as it is again. */
-  | { op: "edit"; photo: string; edit: Edit | null };
+  | { op: "edit"; photo: string; edit: Edit | null }
+  /** Names the person whose face is at a point of a photo. */
+  | { op: "face_name"; photo: string; x: number; y: number; name: string };
 
 /** Mirrors `Album` in src-tauri/src/db.rs. */
 export interface Album {

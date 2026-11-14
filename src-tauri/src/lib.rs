@@ -1,4 +1,5 @@
 mod db;
+mod faces;
 mod fingerprint;
 mod frames;
 mod geo;
@@ -8,6 +9,7 @@ mod indexer;
 mod media_server;
 mod metadata;
 mod org;
+mod people;
 mod places;
 mod raw;
 mod recents;
@@ -52,6 +54,8 @@ struct AppState {
     open_library: Mutex<Option<OpenLibrary>>,
     /// Limits on-demand image decoding (thumbnails and converted originals).
     on_demand: Limiter,
+    /// The face models, loaded the first time they are needed.
+    face_finder: Mutex<Option<Arc<faces::FaceFinder>>>,
     /// Where the viewer loads videos from when the webview can't play them
     /// from `photo://` (Linux; see media_server.rs). `None` elsewhere.
     media_base: Option<String>,
@@ -322,7 +326,31 @@ fn run_scan(
     });
 
     let thumbnails = thumbs::generate_missing(root, &mut conn, cache, cancel, &on_progress)?;
+
+    // Last, and only if the user switched it on: look for faces in the new
+    // photos and put them into groups.
+    if !thumbnails.cancelled {
+        if let Some(finder) = face_finder(&state) {
+            let searched = people::find_faces(&mut conn, cache, &finder, cancel, &on_progress)?;
+            if people::group_faces(&mut conn)? > 0 || searched > 0 {
+                // Makes the UI read the people again.
+                emit(IndexEvent::Synced {
+                    library_path: library_path.to_owned(),
+                });
+            }
+        }
+    }
     Ok((summary, thumbnails))
+}
+
+/// The loaded face models, or `None` if face grouping is not switched on
+/// (the models were never downloaded) or they can't be loaded.
+fn face_finder(state: &AppState) -> Option<Arc<faces::FaceFinder>> {
+    let mut slot = state.face_finder.lock().unwrap();
+    if slot.is_none() && faces::models_present(&state.data_dir) {
+        *slot = faces::FaceFinder::load(&state.data_dir).ok().map(Arc::new);
+    }
+    slot.clone()
 }
 
 /// Answers a `thumb://localhost/<grid|preview>/<fingerprint>` request with the
@@ -725,6 +753,66 @@ fn editable_library(state: &AppState, path: &str) -> Result<OpenLibrary, String>
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FacesStatus {
+    /// True once the face models are on this computer.
+    enabled: bool,
+    /// Size of the download that switching it on needs.
+    download_bytes: u64,
+}
+
+#[tauri::command(async)]
+fn faces_status(state: State<'_, AppState>) -> FacesStatus {
+    FacesStatus {
+        enabled: faces::models_present(&state.data_dir),
+        download_bytes: faces::DOWNLOAD_BYTES,
+    }
+}
+
+/// Switches face grouping on: downloads the models (the UI hears the bytes
+/// received so far in `faces-download` events), then scans the open library
+/// again so that its photos are searched for faces.
+#[tauri::command(async)]
+fn enable_faces(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    faces::download_models(&state.data_dir, &|received| {
+        let _ = app.emit("faces-download", received);
+    })
+    .map_err(|e| format!("Couldn't download the face models: {e}"))?;
+    let open = state.open_library.lock().unwrap().clone();
+    if let Some(open) = open {
+        start_scan(&app, &open.path);
+    }
+    Ok(())
+}
+
+/// The people found in a library.
+#[tauri::command(async)]
+fn people(path: String, state: State<'_, AppState>) -> Result<Vec<people::Person>, String> {
+    people::people(&open_index(&state, &path)?).map_err(|e| e.to_string())
+}
+
+/// Names (or with an empty name, un-names) the person made of `clusters`.
+#[tauri::command(async)]
+fn name_person(
+    path: String,
+    clusters: Vec<i64>,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let open = editable_library(&state, &path)?;
+    let mut conn = open_index(&state, &path)?;
+    let ops = people::naming_ops(&conn, &clusters, name.trim()).map_err(|e| e.to_string())?;
+    org::record(
+        &mut conn,
+        &state.org_paths(&path),
+        &state.device,
+        open.writable,
+        ops,
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Records organization changes (favorite, hide, album edits) made in the UI.
 #[tauri::command(async)]
 fn apply_ops(path: String, ops: Vec<org::Op>, state: State<'_, AppState>) -> Result<(), String> {
@@ -801,6 +889,7 @@ pub fn run() {
                 None
             };
             app.manage(AppState {
+                face_finder: Mutex::new(None),
                 media_base,
                 device,
                 keys: Mutex::new(keys),
@@ -848,6 +937,10 @@ pub fn run() {
             photos_page,
             folders,
             photo_details,
+            faces_status,
+            enable_faces,
+            people,
+            name_person,
             months,
             map_clusters,
             albums,

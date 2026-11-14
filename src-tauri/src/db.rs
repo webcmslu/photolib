@@ -80,6 +80,8 @@ CREATE INDEX photos_stem ON photos (stem);
 --   'album_deleted' album id   ''         '1' / '0'
 --   'member'        album id   photo fp   '1' / '0'
 --   'edit'          photo fp   ''         the edit as JSON, or '' for none
+--   'face_name'     photo fp   'x,y'      the name of the person whose face
+--                                         is at that point, or '' for none
 CREATE TABLE org_state (
     kind    TEXT NOT NULL,
     key     TEXT NOT NULL,
@@ -131,13 +133,48 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     migrate(&conn)?;
+    attach_faces(&conn, &path.with_file_name("faces.db").to_string_lossy())?;
     Ok(conn)
+}
+
+/// The faces found in the photos live in a second database file next to the
+/// index, reachable as `faces.…` from the same connection. It is kept apart
+/// because finding faces takes hours for a large library: rebuilding the
+/// index must not throw that work away. Rows are keyed by photo fingerprint.
+const FACES_SCHEMA: &str = "
+-- The photos that have been looked at (most have no face at all).
+CREATE TABLE IF NOT EXISTS faces.scanned (
+    fingerprint TEXT PRIMARY KEY
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS faces.face (
+    id          INTEGER PRIMARY KEY,
+    fingerprint TEXT NOT NULL,
+    -- The box around the face, as fractions of the upright photo.
+    left REAL NOT NULL, top REAL NOT NULL, width REAL NOT NULL, height REAL NOT NULL,
+    score       REAL NOT NULL,
+    -- 128 little-endian 32-bit floats; see faces.rs.
+    embedding   BLOB NOT NULL,
+    -- The group of look-alike faces this one was put in; NULL until grouped.
+    cluster     INTEGER
+);
+CREATE INDEX IF NOT EXISTS faces.face_fingerprint ON face (fingerprint);
+CREATE INDEX IF NOT EXISTS faces.face_cluster ON face (cluster);
+";
+
+fn attach_faces(conn: &Connection, file: &str) -> rusqlite::Result<()> {
+    conn.execute("ATTACH DATABASE ?1 AS faces", [file])?;
+    if file != ":memory:" {
+        // The statement answers with the new mode, hence a query.
+        conn.query_row("PRAGMA faces.journal_mode = WAL", [], |_| Ok(()))?;
+    }
+    conn.execute_batch(FACES_SCHEMA)
 }
 
 #[cfg(test)]
 pub fn open_in_memory() -> rusqlite::Result<Connection> {
     let conn = Connection::open_in_memory()?;
     migrate(&conn)?;
+    attach_faces(&conn, ":memory:")?;
     Ok(conn)
 }
 
@@ -417,6 +454,10 @@ pub enum Listing {
         album: String,
     },
     Hidden,
+    /// The photos that show one person: the given groups of faces.
+    Person {
+        clusters: Vec<i64>,
+    },
     /// The photos that match what was typed in the search box.
     Search {
         query: String,
@@ -463,6 +504,17 @@ impl Listing {
                 format!("WHERE {IS_LISTED} AND {IS_HIDDEN} AND ?1 IS NULL"),
                 None,
             ),
+            Listing::Person { clusters } => {
+                let ids: Vec<String> = clusters.iter().map(i64::to_string).collect();
+                (
+                    format!(
+                        "WHERE {visible} AND fingerprint IN (SELECT fingerprint FROM faces.face
+                             WHERE cluster IN ({})) AND ?1 IS NULL",
+                        ids.join(", ")
+                    ),
+                    None,
+                )
+            }
             Listing::Search { query } => (
                 format!(
                     "WHERE {visible} AND ({}) AND ?1 IS NULL",
@@ -766,6 +818,171 @@ pub fn geo_points(
     rows.collect()
 }
 
+// --- Faces and people (see faces.rs and people.rs) ------------------------------
+
+/// The photos (not videos) that have a preview and have not been searched
+/// for faces yet: fingerprints, newest first.
+pub fn pending_faces(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT fingerprint FROM photos
+         WHERE kind = 0 AND thumb_state = 1 AND live_part = 0
+           AND fingerprint NOT IN (SELECT fingerprint FROM faces.scanned)
+         ORDER BY sort_date DESC",
+    )?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// A face as it is stored: its box, how sure the detector was, its embedding.
+pub struct NewFace<'a> {
+    pub bounds: [f32; 4],
+    pub score: f32,
+    pub embedding: &'a [f32],
+}
+
+/// Records that a photo was searched, and the faces found in it.
+pub fn save_faces(
+    tx: &Transaction<'_>,
+    fingerprint: &str,
+    faces: &[NewFace<'_>],
+) -> rusqlite::Result<()> {
+    tx.prepare_cached("INSERT OR IGNORE INTO faces.scanned (fingerprint) VALUES (?1)")?
+        .execute([fingerprint])?;
+    let mut insert = tx.prepare_cached(
+        "INSERT INTO faces.face (fingerprint, left, top, width, height, score, embedding)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    )?;
+    for face in faces {
+        let bytes: Vec<u8> = face
+            .embedding
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect();
+        let [left, top, width, height] = face.bounds;
+        insert.execute(params![
+            fingerprint,
+            left,
+            top,
+            width,
+            height,
+            face.score,
+            bytes
+        ])?;
+    }
+    Ok(())
+}
+
+/// A face's id, its group (if any) and its embedding.
+pub type StoredFace = (i64, Option<i64>, Vec<f32>);
+
+/// Every face, for grouping.
+pub fn face_embeddings(conn: &Connection) -> rusqlite::Result<Vec<StoredFace>> {
+    let mut stmt = conn.prepare("SELECT id, cluster, embedding FROM faces.face ORDER BY id")?;
+    let rows = stmt.query_map([], |row| {
+        let bytes: Vec<u8> = row.get(2)?;
+        let embedding = bytes
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+            .collect();
+        Ok((row.get(0)?, row.get(1)?, embedding))
+    })?;
+    rows.collect()
+}
+
+pub fn set_face_clusters(conn: &mut Connection, groups: &[(i64, i64)]) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    {
+        let mut update = tx.prepare("UPDATE faces.face SET cluster = ?2 WHERE id = ?1")?;
+        for (face, cluster) in groups {
+            update.execute(params![face, cluster])?;
+        }
+    }
+    tx.commit()
+}
+
+/// One group of look-alike faces, as far as the listed photos go.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FaceGroup {
+    pub cluster: i64,
+    /// Photos (not hidden) the group appears in.
+    pub photos: u32,
+    /// The group's largest, clearest face: its photo, the photo's upright
+    /// size when known, and the face's box.
+    pub cover: String,
+    pub cover_size: Option<(u32, u32)>,
+    pub cover_bounds: [f64; 4],
+}
+
+pub fn face_groups(conn: &Connection) -> rusqlite::Result<Vec<FaceGroup>> {
+    // With a single MAX(), SQLite takes the other columns from the row that
+    // holds the maximum: the cover face.
+    let mut stmt = conn.prepare(&format!(
+        "SELECT f.cluster, COUNT(DISTINCT f.fingerprint), MAX(f.width * f.height * f.score),
+                f.fingerprint, p.width, p.height, f.left, f.top, f.width, f.height
+         FROM faces.face f JOIN photos p ON p.fingerprint = f.fingerprint
+         WHERE f.cluster IS NOT NULL
+           AND p.thumb_state != 2 AND p.live_part = 0
+           AND NOT p.{IS_HIDDEN}
+         GROUP BY f.cluster"
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        let size: (Option<u32>, Option<u32>) = (row.get(4)?, row.get(5)?);
+        Ok(FaceGroup {
+            cluster: row.get(0)?,
+            photos: row.get(1)?,
+            cover: row.get(3)?,
+            cover_size: size.0.zip(size.1),
+            cover_bounds: [row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?],
+        })
+    })?;
+    rows.collect()
+}
+
+/// The names given to faces: `(photo fingerprint, x, y, name)`, where x and
+/// y are a point inside the face in ten-thousandths of the photo.
+pub fn face_names(conn: &Connection) -> rusqlite::Result<Vec<(String, f64, f64, String)>> {
+    let mut stmt = conn.prepare(
+        "SELECT key, photo, value FROM org_state WHERE kind = 'face_name' AND value != ''",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut names = Vec::new();
+    for row in rows {
+        let (fingerprint, point, name) = row?;
+        let parsed = point
+            .split_once(',')
+            .and_then(|(x, y)| Some((x.parse::<f64>().ok()?, y.parse::<f64>().ok()?)));
+        if let Some((x, y)) = parsed {
+            names.push((fingerprint, x / 10_000.0, y / 10_000.0, name));
+        }
+    }
+    Ok(names)
+}
+
+/// The group of the face in `fingerprint` that contains the point (x, y),
+/// given as fractions of the photo.
+pub fn cluster_at(
+    conn: &Connection,
+    fingerprint: &str,
+    x: f64,
+    y: f64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT cluster FROM faces.face
+         WHERE fingerprint = ?1 AND cluster IS NOT NULL
+           AND ?2 BETWEEN left AND left + width AND ?3 BETWEEN top AND top + height
+         ORDER BY width * height DESC LIMIT 1",
+        params![fingerprint, x, y],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 // --- Organization (see org.rs) ------------------------------------------------
 
 /// Applies one event from a device log: sets the value it names, unless a
@@ -773,6 +990,7 @@ pub fn geo_points(
 pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlite::Result<()> {
     let flag = |on: &bool| if *on { "1" } else { "0" };
     let edit_json: String;
+    let face_point: String;
     let (kind, key, photo, value) = match &event.op {
         Op::Fav { photo, on } => ("fav", photo.as_str(), "", flag(on)),
         Op::Hide { photo, on } => ("hide", photo.as_str(), "", flag(on)),
@@ -780,6 +998,15 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
         Op::AlbumDeleted { album, on } => ("album_deleted", album.as_str(), "", flag(on)),
         Op::AlbumMember { album, photo, on } => {
             ("member", album.as_str(), photo.as_str(), flag(on))
+        }
+        Op::FaceName { photo, x, y, name } => {
+            face_point = format!("{x},{y}");
+            (
+                "face_name",
+                photo.as_str(),
+                face_point.as_str(),
+                name.trim(),
+            )
         }
         Op::Edit { photo, edit } => {
             // The edit as JSON; an empty value means "not edited".

@@ -33,6 +33,7 @@
   import { formatNumber, photoCount } from "./format";
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
+  import PeopleView from "./PeopleView.svelte";
   import { PhotoPages } from "./pages.svelte";
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
@@ -166,6 +167,9 @@
       if (progress?.phase === "indexing" && progress.total > 0) {
         return `Indexing ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
       }
+      if (progress?.phase === "faces") {
+        return `Finding faces: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+      }
       if (progress?.phase === "thumbnails") {
         return `Making thumbnails: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
       }
@@ -182,8 +186,10 @@
   let folders = $state<FolderEntry[]>([]);
   // Raw (not a deep proxy): it is passed to the backend as is.
   let listing = $state.raw<Listing>({ kind: "library" });
-  /** True while the map is shown instead of a photo grid. */
-  let showMap = $state(false);
+  /** What the main area shows: a photo grid, the map or the people. */
+  let section = $state<"photos" | "map" | "people">("photos");
+  /** The name of the person whose photos are listed. */
+  let personName = $state<string | null>(null);
 
   async function loadSidebar() {
     try {
@@ -252,6 +258,8 @@
         return listing.folder || "Top level";
       case "area":
         return "Photos from the map";
+      case "person":
+        return personName ?? "Unnamed person";
       case "search":
         return `Search: ${listing.query}`;
     }
@@ -275,7 +283,7 @@
       }
       if (listing.kind !== "search") beforeSearch = listing;
       listing = { kind: "search", query };
-      showMap = false;
+      section = "photos";
     }, 250);
   }
 
@@ -597,12 +605,12 @@
       {#snippet row(target: Listing, label: string, count: number | null, depth = 0, enabled = true)}
         <button
           class="row"
-          class:selected={!showMap && JSON.stringify(target) === JSON.stringify(listing)}
+          class:selected={section === "photos" && JSON.stringify(target) === JSON.stringify(listing)}
           style:padding-left="{12 + depth * 14}px"
           disabled={!enabled}
           onclick={() => {
             listing = target;
-            showMap = false;
+            section = "photos";
           }}
           title={label}
         >
@@ -616,10 +624,17 @@
       {@render row({ kind: "hidden" }, "Hidden", null)}
       <button
         class="row"
-        class:selected={showMap || listing.kind === "area"}
-        onclick={() => (showMap = true)}
+        class:selected={section === "map" || (section === "photos" && listing.kind === "area")}
+        onclick={() => (section = "map")}
       >
         <span class="row-name">Map</span>
+      </button>
+      <button
+        class="row"
+        class:selected={section === "people" || (section === "photos" && listing.kind === "person")}
+        onclick={() => (section = "people")}
+      >
+        <span class="row-name">People</span>
       </button>
 
       <h2>
@@ -682,14 +697,28 @@
     ></div>
 
     <main>
-      {#if showMap}
+      {#if section === "map"}
         <div class="map">
           <MapView
             libraryPath={library.path}
             {revision}
             onopen={(area) => {
               listing = area;
-              showMap = false;
+              section = "photos";
+            }}
+          />
+        </div>
+      {:else if section === "people"}
+        <div class="map">
+          <PeopleView
+            libraryPath={library.path}
+            {revision}
+            canEdit={online}
+            searching={scanning && progress?.phase === "faces"}
+            onopen={(person) => {
+              personName = person.name;
+              listing = { kind: "person", clusters: person.clusters };
+              section = "photos";
             }}
           />
         </div>
@@ -753,8 +782,11 @@
             />
           </form>
         {:else}
+          {#if listing.kind === "person"}
+            <button class="secondary" onclick={() => (section = "people")}>‹ People</button>
+          {/if}
           {#if listing.kind === "area"}
-            <button class="secondary" onclick={() => (showMap = true)}>‹ Map</button>
+            <button class="secondary" onclick={() => (section = "map")}>‹ Map</button>
           {/if}
           <strong class="title">{title}</strong>
           {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
