@@ -183,6 +183,77 @@
     return low;
   }
 
+  // --- The year scrubber on the right, as in Windows Photos -----------------
+
+  let railHeight = $state(0);
+  /** Month under the pointer while it is over the scrubber. */
+  let railHover = $state<{ y: number; label: string } | null>(null);
+  let railDragging = false;
+  const DAY_MS = 86_400_000;
+  const yearOf = (day: number) => new Date(day * DAY_MS).getUTCFullYear();
+
+  /** Worth showing only for a long grid that spans several years. */
+  const showRail = $derived(
+    layout.sections.length > 0 &&
+      layout.height > clientHeight * 3 &&
+      yearOf(layout.sections[0].day) !== yearOf(layout.sections[layout.sections.length - 1].day),
+  );
+
+  /** Where each year starts, as a fraction of the grid's height. */
+  const yearStarts = $derived.by(() => {
+    const starts: { year: number; top: number }[] = [];
+    for (const section of layout.sections) {
+      const year = yearOf(section.day);
+      if (starts[starts.length - 1]?.year !== year) starts.push({ year, top: section.top });
+    }
+    return starts;
+  });
+
+  /** The year labels that fit, at least 16 px apart. */
+  const railLabels = $derived.by(() => {
+    const labels: { year: number; y: number }[] = [];
+    if (layout.height <= 0) return labels;
+    for (const start of yearStarts) {
+      const y = (start.top / layout.height) * railHeight;
+      if (labels.length === 0 || y - labels[labels.length - 1].y >= 16) {
+        labels.push({ year: start.year, y });
+      }
+    }
+    return labels;
+  });
+
+  /** The section at a point of the scrubber. */
+  function sectionAtRail(y: number): Section | undefined {
+    const fraction = Math.min(1, Math.max(0, y / railHeight));
+    return layout.sections[sectionAt(fraction * layout.height)];
+  }
+
+  function railJump(event: PointerEvent) {
+    const y = event.clientY - (event.currentTarget as HTMLElement).getBoundingClientRect().top;
+    const fraction = Math.min(1, Math.max(0, y / railHeight));
+    scroller.scrollTop = fraction * layout.height - clientHeight / 2;
+  }
+
+  function railMove(event: PointerEvent) {
+    const y = event.clientY - (event.currentTarget as HTMLElement).getBoundingClientRect().top;
+    const section = sectionAtRail(y);
+    railHover = section ? { y, label: formatMonth(section.day) } : null;
+    if (railDragging) railJump(event);
+  }
+
+  /** The arrow keys move to the previous or next year. */
+  function railKey(event: KeyboardEvent) {
+    const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    if (step === 0) return;
+    event.preventDefault();
+    let current = 0;
+    yearStarts.forEach((start, index) => {
+      if (start.top <= scrollTop + 1) current = index;
+    });
+    const target = yearStarts[Math.min(yearStarts.length - 1, Math.max(0, current + step))];
+    if (target) scroller.scrollTop = target.top;
+  }
+
   /** The days on screen (the sections are newest first). */
   const shownDays = $derived.by(() => {
     const { sections } = layout;
@@ -313,6 +384,7 @@
   });
 </script>
 
+<div class="frame">
 <div class="scroller" bind:this={scroller} bind:clientWidth bind:clientHeight {onscroll}>
   <div class="canvas" style:height="{layout.height}px">
     {#each visible.headers as section (section.day)}
@@ -386,9 +458,100 @@
     {/each}
   </div>
 </div>
+  {#if showRail}
+    <div
+      class="rail"
+      role="slider"
+      tabindex="0"
+      aria-label="Years"
+      aria-orientation="vertical"
+      aria-valuemin={yearStarts[yearStarts.length - 1]?.year}
+      aria-valuemax={yearStarts[0]?.year}
+      aria-valuenow={yearOf(layout.sections[sectionAt(scrollTop)]?.day ?? 0)}
+      bind:clientHeight={railHeight}
+      onpointerdown={(event) => {
+        railDragging = true;
+        (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+        railJump(event);
+      }}
+      onpointermove={railMove}
+      onpointerup={() => (railDragging = false)}
+      onpointercancel={() => (railDragging = false)}
+      onpointerleave={() => (railHover = null)}
+      onkeydown={railKey}
+    >
+      <span
+        class="position"
+        style:top="{(scrollTop / layout.height) * railHeight}px"
+        style:height="{Math.max(3, (clientHeight / layout.height) * railHeight)}px"
+      ></span>
+      {#each railLabels as label (label.year)}
+        <span class="year" style:top="{label.y}px">{label.year}</span>
+      {/each}
+      {#if railHover}
+        <span class="hover" style:top="{railHover.y}px">{railHover.label}</span>
+      {/if}
+    </div>
+  {/if}
+</div>
 
 <style>
+  .rail {
+    position: relative;
+    flex: none;
+    width: 46px;
+    margin: 8px 0;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+  }
+
+  .rail:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .rail .position {
+    position: absolute;
+    right: 4px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0.7;
+  }
+
+  .rail .year {
+    position: absolute;
+    right: 12px;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1;
+    pointer-events: none;
+  }
+
+  .rail .hover {
+    position: absolute;
+    right: 50px;
+    z-index: 2;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: var(--surface);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.2);
+    color: var(--text);
+    font-size: 12px;
+    white-space: nowrap;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+
+  .frame {
+    display: flex;
+    height: 100%;
+  }
+
   .scroller {
+    flex: 1;
+    min-width: 0;
     height: 100%;
     overflow-y: auto;
     /* Keep the scroll position when content above changes size. */
