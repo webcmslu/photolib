@@ -626,31 +626,54 @@ pub struct MonthSummary {
     /// 1 to 12.
     pub month: u32,
     pub count: u32,
-    /// A few photos to show for the month: favorites first, then a sample
-    /// spread over the whole month.
-    pub covers: Vec<String>,
+    /// The days of the month with the most photos (at most `MONTH_DAYS`), in
+    /// date order: what the Months view shows as cards.
+    pub days: Vec<DaySummary>,
 }
 
-/// How many cover photos each month gets.
-const MONTH_COVERS: u32 = 7;
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaySummary {
+    /// Days since 1970-01-01, as in [`DayGroup`].
+    pub day: i64,
+    pub count: u32,
+    /// The photo that stands for the day: a favorite if there is one, a
+    /// photo rather than a video, otherwise a random-looking pick.
+    pub cover: String,
+}
+
+/// How many days of each month the Months view shows.
+const MONTH_DAYS: u32 = 4;
 
 /// The months of a listing, newest first.
 pub fn months(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<MonthSummary>> {
     let (filter, param) = listing.filter();
-    // Ordering by fingerprint (a hash) picks the same random-looking sample
-    // every time, instead of seven shots of the month's last event.
+    // Ordering by fingerprint (a hash) picks the same random-looking cover
+    // every time, instead of the day's first or last shot.
     let mut stmt = conn.prepare(&format!(
-        "SELECT ym, total, fingerprint FROM (
-             SELECT strftime('%Y-%m', sort_date / 1000, 'unixepoch') AS ym,
-                    COUNT(*) OVER (PARTITION BY strftime('%Y-%m', sort_date / 1000, 'unixepoch'))
+        "WITH listed AS (
+             SELECT (sort_date - 86400000 * (sort_date < 0 AND sort_date % 86400000 != 0))
+                        / 86400000 AS day,
+                    {IS_FAVORITE} AS favorite, kind, fingerprint
+             FROM photos {filter}),
+         days AS (
+             SELECT day, fingerprint,
+                    COUNT(*) OVER (PARTITION BY day) AS count,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY day ORDER BY favorite DESC, kind, fingerprint) AS pick
+             FROM listed),
+         ranked AS (
+             SELECT day, fingerprint, count,
+                    strftime('%Y-%m', day * 86400, 'unixepoch') AS ym,
+                    SUM(count) OVER (PARTITION BY strftime('%Y-%m', day * 86400, 'unixepoch'))
                         AS total,
                     ROW_NUMBER() OVER (
-                        PARTITION BY strftime('%Y-%m', sort_date / 1000, 'unixepoch')
-                        ORDER BY {IS_FAVORITE} DESC, kind, fingerprint) AS position,
-                    fingerprint
-             FROM photos {filter})
-         WHERE position <= {MONTH_COVERS}
-         ORDER BY ym DESC, position"
+                        PARTITION BY strftime('%Y-%m', day * 86400, 'unixepoch')
+                        ORDER BY count DESC, day DESC) AS rank
+             FROM days WHERE pick = 1)
+         SELECT ym, total, day, count, fingerprint FROM ranked
+         WHERE rank <= {MONTH_DAYS}
+         ORDER BY ym DESC, day"
     ))?;
     let mut months: Vec<MonthSummary> = Vec::new();
     let mut rows = stmt.query([param])?;
@@ -663,14 +686,18 @@ pub fn months(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<Mont
         let Some((year, month)) = parsed else {
             continue;
         };
-        let fingerprint: String = row.get(2)?;
+        let day = DaySummary {
+            day: row.get(2)?,
+            count: row.get(3)?,
+            cover: row.get(4)?,
+        };
         match months.last_mut() {
-            Some(last) if last.year == year && last.month == month => last.covers.push(fingerprint),
+            Some(last) if last.year == year && last.month == month => last.days.push(day),
             _ => months.push(MonthSummary {
                 year,
                 month,
                 count: row.get(1)?,
-                covers: vec![fingerprint],
+                days: vec![day],
             }),
         }
     }
@@ -1544,24 +1571,34 @@ mod tests {
     }
 
     #[test]
-    fn months_have_counts_and_covers() {
+    fn months_have_their_busiest_days() {
+        const DAY: i64 = 86_400_000;
         let mut conn = open_in_memory().unwrap();
         let tx = conn.transaction().unwrap();
         // 2024-07-14 and 2023-12-31 as wall-clock milliseconds.
-        let july = 1_720_915_200_000;
+        let july_14 = 1_720_915_200_000;
         let december = 1_703_980_800_000;
-        for n in 0..10 {
-            let mut photo = dated(&format!("july-{n}.jpg"), july + n * 1000);
-            photo.fingerprint = format!("j{n}");
+        // July: day 14 has 4 photos, days 1, 2, 3 and 20 have fewer.
+        let add = |name: &str, date: i64, video: bool| {
+            let mut photo = dated(name, date);
+            photo.fingerprint = name.into();
+            photo.is_video = video;
             upsert(&tx, &photo).unwrap();
+        };
+        for n in 0..4 {
+            add(&format!("j14-{n}"), july_14 + n * 1000, false);
         }
-        let mut old = dated("december.jpg", december);
-        old.fingerprint = "d".into();
-        upsert(&tx, &old).unwrap();
+        add("j01-video", july_14 - 13 * DAY, true);
+        add("j02", july_14 - 12 * DAY, false);
+        add("j02-video", july_14 - 12 * DAY + 1000, true);
+        add("j03", july_14 - 11 * DAY, false);
+        add("j20-a", july_14 + 6 * DAY, false);
+        add("j20-b", july_14 + 6 * DAY + 1000, false);
+        add("december", december, false);
         let fav = Event {
             ts: 1,
             op: Op::Fav {
-                photo: "j7".into(),
+                photo: "j14-2".into(),
                 on: true,
             },
         };
@@ -1574,16 +1611,34 @@ mod tests {
             (months[0].year, months[0].month, months[0].count),
             (2024, 7, 10)
         );
-        assert_eq!(months[0].covers.len(), 7);
-        // The favorite leads.
-        assert_eq!(months[0].covers[0], "j7");
+        let days: Vec<(i64, u32, &str)> = months[0]
+            .days
+            .iter()
+            .map(|day| (day.day - july_14 / DAY, day.count, day.cover.as_str()))
+            .collect();
+        // The four busiest days, in date order. Day 2 (two files) beats days
+        // 1 and 3 (one each); of those, the later one is kept. A favorite
+        // stands for its day, and a photo rather than a video.
+        assert_eq!(
+            days,
+            [
+                (-12, 2, "j02"),
+                (-11, 1, "j03"),
+                (0, 4, "j14-2"),
+                (6, 2, "j20-a")
+            ]
+        );
         assert_eq!(
             months[1],
             MonthSummary {
                 year: 2023,
                 month: 12,
                 count: 1,
-                covers: vec!["d".into()],
+                days: vec![DaySummary {
+                    day: december / DAY,
+                    count: 1,
+                    cover: "december".into(),
+                }],
             }
         );
         assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);

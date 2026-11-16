@@ -413,9 +413,9 @@
   /** Years and months are overviews; "all" is the photo grid. */
   let viewMode = $state<"years" | "months" | "all">("all");
   let months = $state<MonthSummary[]>([]);
-  /** Where the next view starts: a year for the months, a month for the grid. */
+  /** Where the next view starts: a year for the months, a day for the grid. */
   let startYear = $state<number | null>(null);
-  let startMonth = $state<number | null>(null);
+  let startDay = $state<number | null>(null);
 
   async function loadMonths(target: PhotoPages) {
     try {
@@ -433,7 +433,7 @@
 
   function setViewMode(mode: "years" | "months" | "all") {
     startYear = null;
-    startMonth = null;
+    startDay = null;
     viewMode = mode;
   }
 
@@ -459,7 +459,7 @@
       groups = [];
       months = [];
       startYear = null;
-      startMonth = null;
+      startDay = null;
       groupsLoaded = false;
       viewerIndex = null;
       selected.clear();
@@ -907,8 +907,8 @@
               startYear = year;
               viewMode = "months";
             }}
-            onmonth={(month) => {
-              startMonth = month;
+            onday={(day) => {
+              startDay = day;
               viewMode = "all";
             }}
           />
@@ -919,7 +919,7 @@
             {pages}
             {selected}
             {cellSize}
-            startAt={startMonth}
+            startAt={startDay}
             onopen={(index) => (viewerIndex = index)}
             ontoggle={toggleSelected}
           />

@@ -1,15 +1,17 @@
 <!--
   The Years and Months overviews of a listing.
 
-  - "years": one large card per year, with a cover photo.
-  - "months": one block per month, a mosaic of a few of its photos, the
-    first one large.
+  - "years": a square card per year, with a cover photo.
+  - "months": each month shows its busiest days (at most four) as cards with
+    the day of the month in the corner. The busiest day gets the large card
+    when there are three or four; one or two days share the width evenly.
 
-  Clicking a year opens the months at that year; clicking a month opens the
-  photo grid at that month.
+  Clicking a year zooms into the months at that year. Clicking a day, or a
+  month's title, opens the photo grid there.
 -->
 <script lang="ts">
-  import { thumbUrl, type MonthSummary } from "./api";
+  import { flushSync } from "svelte";
+  import { thumbUrl, type DaySummary, type MonthSummary } from "./api";
   import { formatMonth, photoCount } from "./format";
 
   interface Props {
@@ -18,24 +20,61 @@
     /** A year to start scrolled to, in the months mode. */
     startYear?: number | null;
     onyear: (year: number) => void;
-    /** Called with `year * 12 + month - 1`. */
-    onmonth: (month: number) => void;
+    /** Called with a day (days since 1970) to open the photo grid at. */
+    onday: (day: number) => void;
   }
-  let { mode, months, startYear = null, onyear, onmonth }: Props = $props();
+  let { mode, months, startYear = null, onyear, onday }: Props = $props();
 
   const DAY_MS = 86_400_000;
   const monthTitle = (entry: MonthSummary) =>
     formatMonth(Date.UTC(entry.year, entry.month - 1, 1) / DAY_MS);
+  /** The last day of a month: the grid lists newest first, so it starts there. */
+  const lastDay = (entry: MonthSummary) => Date.UTC(entry.year, entry.month, 0) / DAY_MS;
+  const dayOfMonth = (day: number) => new Date(day * DAY_MS).getUTCDate();
+
+  /** The cards of a month in the order they are laid out. */
+  function cards(entry: MonthSummary): DaySummary[] {
+    if (entry.days.length <= 2) return entry.days;
+    // The busiest day takes the large card; the rest follow in date order.
+    const busiest = entry.days.reduce((best, day) => (day.count > best.count ? day : best));
+    return [busiest, ...entry.days.filter((day) => day !== busiest)];
+  }
 
   const years = $derived.by(() => {
-    const byYear = new Map<number, { year: number; count: number; cover: string }>();
+    // Each year shows the cover of its busiest day.
+    const byYear = new Map<number, { year: number; count: number; cover: DaySummary }>();
     for (const entry of months) {
+      const busiest = entry.days.reduce((best, day) => (day.count > best.count ? day : best));
       const known = byYear.get(entry.year);
-      if (known) known.count += entry.count;
-      else byYear.set(entry.year, { year: entry.year, count: entry.count, cover: entry.covers[0] });
+      if (!known) {
+        byYear.set(entry.year, { year: entry.year, count: entry.count, cover: busiest });
+        continue;
+      }
+      known.count += entry.count;
+      if (busiest.count > known.cover.count) known.cover = busiest;
     }
     return [...byYear.values()];
   });
+
+  const reducedMotion =
+    typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /**
+   * Opens a year. Where the webview can animate between two states of the
+   * page, the year's card grows into its months, as in Apple Photos.
+   */
+  function openYear(year: number, card: HTMLElement) {
+    if (reducedMotion || !("startViewTransition" in document)) {
+      onyear(year);
+      return;
+    }
+    card.style.viewTransitionName = "zoom";
+    document.startViewTransition(() => {
+      card.style.viewTransitionName = "";
+      onyear(year);
+      flushSync();
+    });
+  }
 
   /** Scrolls the first month of `startYear` into view when it is rendered. */
   function scrollIfStart(node: HTMLElement, isStart: boolean) {
@@ -47,39 +86,37 @@
   {#if mode === "years"}
     <div class="years">
       {#each years as entry (entry.year)}
-        <button class="year" onclick={() => onyear(entry.year)}>
-          <img src={thumbUrl(entry.cover, "preview")} alt="" loading="lazy" draggable="false" />
-          <span class="label">
-            <strong>{entry.year}</strong>
-            <span>{photoCount(entry.count)}</span>
-          </span>
+        <button
+          class="card year"
+          onclick={(event) => openYear(entry.year, event.currentTarget)}
+          aria-label="{entry.year}, {photoCount(entry.count)}"
+        >
+          <img src={thumbUrl(entry.cover.cover, "preview")} alt="" loading="lazy" draggable="false" />
+          <span class="year-label">{entry.year}</span>
         </button>
       {/each}
     </div>
   {:else}
     {#each months as entry, index (entry.year * 12 + entry.month)}
-      <section
-        use:scrollIfStart={entry.year === startYear && months[index - 1]?.year !== startYear}
-      >
-        <button
-          class="month"
-          class:few={entry.covers.length < 7}
-          onclick={() => onmonth(entry.year * 12 + entry.month - 1)}
-          aria-label="{monthTitle(entry)}, {photoCount(entry.count)}"
-        >
-          {#each entry.covers.slice(0, entry.covers.length < 7 ? 1 : 7) as cover, position (cover)}
-            <img
-              src={thumbUrl(cover, position === 0 ? "preview" : "grid")}
-              alt=""
-              loading="lazy"
-              draggable="false"
-            />
+      {@const isStart = entry.year === startYear && months[index - 1]?.year !== startYear}
+      <section use:scrollIfStart={isStart} class:zoom-target={isStart}>
+        <h2>
+          <button class="title" onclick={() => onday(lastDay(entry))}>{monthTitle(entry)}</button>
+          <span class="count">{photoCount(entry.count)}</span>
+        </h2>
+        <div class="days" data-cards={entry.days.length}>
+          {#each cards(entry) as day, position (day.day)}
+            <button
+              class="card"
+              class:large={position === 0 && entry.days.length > 2}
+              onclick={() => onday(day.day)}
+              aria-label="{monthTitle(entry)} {dayOfMonth(day.day)}, {photoCount(day.count)}"
+            >
+              <img src={thumbUrl(day.cover, "preview")} alt="" loading="lazy" draggable="false" />
+              <span class="day-label">{dayOfMonth(day.day)}</span>
+            </button>
           {/each}
-          <span class="label">
-            <strong>{monthTitle(entry)}</strong>
-            <span>{photoCount(entry.count)}</span>
-          </span>
-        </button>
+        </div>
       </section>
     {/each}
   {/if}
@@ -89,28 +126,33 @@
   .scroller {
     height: 100%;
     overflow-y: auto;
-    padding: 16px;
+    padding: 20px 16px;
   }
 
-  .years {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-    gap: 16px;
+  /* Both overviews sit in a centered column, as in Apple Photos. */
+  .years,
+  section {
+    max-width: 1040px;
+    margin: 0 auto;
   }
 
-  button {
+  .card {
     position: relative;
     display: block;
     width: 100%;
+    height: 100%;
     padding: 0;
     border: none;
     border-radius: 12px;
     background: var(--surface-hover);
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 0.12),
+      0 6px 18px rgb(0 0 0 / 0.1);
     overflow: hidden;
     cursor: pointer;
   }
 
-  button:hover img {
+  .card:hover img {
     filter: brightness(1.08);
   }
 
@@ -121,64 +163,151 @@
     object-fit: cover;
   }
 
-  .year {
-    aspect-ratio: 3 / 2;
-  }
+  /* --- Years ------------------------------------------------------------- */
 
-  section {
-    max-width: 1100px;
-    margin: 0 auto 16px;
-    /* Lets the browser skip the months that are off screen. */
-    content-visibility: auto;
-    contain-intrinsic-size: auto 360px;
-  }
-
-  /* A mosaic 6 cells wide and 2 high: the first photo takes 3 by 2 on the
-     left, the next six fill the right half. */
-  .month {
+  .years {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    grid-template-rows: repeat(2, 1fr);
-    gap: 3px;
-    aspect-ratio: 3 / 1;
+    /* Three per row at full width, fewer when the window is narrow. */
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr));
+    gap: 32px;
   }
 
-  .month img:first-child {
-    grid-column: span 3;
-    grid-row: span 2;
+  .year {
+    aspect-ratio: 1;
   }
 
-  /* With only a few photos, one wide picture. */
-  .month.few {
-    display: block;
-    aspect-ratio: 3 / 1;
-  }
-
-  .label {
+  .year-label,
+  .day-label {
     position: absolute;
-    left: 0;
-    right: 0;
     top: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 14px 18px 40px;
-    background: linear-gradient(rgb(0 0 0 / 0.55), transparent);
+    left: 0;
     color: #fff;
-    text-align: left;
+    text-shadow: 0 1px 6px rgb(0 0 0 / 0.55);
     pointer-events: none;
   }
 
-  .label strong {
-    font-size: 22px;
+  .year-label {
+    padding: 18px 22px;
+    font-size: 28px;
     font-weight: 700;
   }
 
-  .label span {
-    font-size: 13px;
+  /* --- Months ------------------------------------------------------------ */
+
+  section {
+    margin-bottom: 40px;
+    /* Lets the browser skip the months that are off screen. */
+    content-visibility: auto;
+    contain-intrinsic-size: auto 600px;
   }
 
-  .year .label strong {
-    font-size: 30px;
+  /* The year card that was clicked grows into this month (see openYear). */
+  section.zoom-target .days {
+    view-transition-name: zoom;
+  }
+
+  h2 {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 0 0 12px;
+  }
+
+  .title {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 22px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .title:hover {
+    text-decoration: underline;
+  }
+
+  .count {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 400;
+  }
+
+  .days {
+    display: grid;
+    gap: 20px;
+  }
+
+  /* One day: a single wide card. */
+  .days[data-cards="1"] {
+    aspect-ratio: 5 / 2;
+  }
+
+  /* Two days: two squares side by side. */
+  .days[data-cards="2"] {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .days[data-cards="2"] .card {
+    aspect-ratio: 1;
+  }
+
+  /* Three or four: the busiest day large on the left, the others stacked
+     on the right. */
+  .days[data-cards="3"],
+  .days[data-cards="4"] {
+    grid-template-columns: 2.4fr 1fr;
+    aspect-ratio: 1.9 / 1;
+  }
+
+  .days[data-cards="3"] {
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+  }
+
+  .days[data-cards="4"] {
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+  }
+
+  .large {
+    grid-row: 1 / -1;
+  }
+
+  .day-label {
+    padding: 10px 12px;
+    font-size: 15px;
+    font-weight: 600;
+  }
+
+  .large .day-label,
+  .days[data-cards="1"] .day-label,
+  .days[data-cards="2"] .day-label {
+    padding: 14px 16px;
+    font-size: 17px;
+  }
+
+  /* On a narrow window the stacked cards would get too small: one column. */
+  @media (max-width: 640px) {
+    .days[data-cards="3"],
+    .days[data-cards="4"] {
+      grid-template-columns: 1fr;
+      grid-template-rows: none;
+      aspect-ratio: auto;
+    }
+
+    .days[data-cards="3"] .card,
+    .days[data-cards="4"] .card {
+      aspect-ratio: 3 / 2;
+    }
+
+    .large {
+      grid-row: auto;
+    }
+  }
+
+  /* The zoom from a year into its months. */
+  :global(::view-transition-group(zoom)) {
+    animation-duration: 0.35s;
+    animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 </style>

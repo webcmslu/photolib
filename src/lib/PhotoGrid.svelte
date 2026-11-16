@@ -27,7 +27,7 @@
     ontoggle: (index: number, range: boolean) => void;
     /** The width cells aim for, in pixels: smaller means more per row. */
     cellSize?: number;
-    /** A month (`year * 12 + month - 1`) to start scrolled to. */
+    /** A day (days since 1970) to start scrolled to. */
     startAt?: number | null;
   }
   let {
@@ -255,18 +255,18 @@
     }
   }
 
-  /** Scrolls to the first day of a month (`year * 12 + month - 1`). */
-  export function scrollToMonth(target: number) {
-    const section = layout.sections.find((candidate) => monthKey(candidate.day) <= target);
+  /** Scrolls to a day (days since 1970), or the nearest older one listed. */
+  export function scrollToDay(target: number) {
+    const section = layout.sections.find((candidate) => candidate.day <= target);
     if (section) scroller.scrollTop = section.top;
   }
 
-  // Start at the month asked for, once there is a layout to scroll in.
+  // Start at the day asked for, once there is a layout to scroll in.
   let started = false;
   $effect(() => {
     if (started || startAt === null || clientWidth === 0 || layout.sections.length === 0) return;
     started = true;
-    scrollToMonth(startAt);
+    scrollToDay(startAt);
     scrollTop = scroller.scrollTop;
   });
 </script>

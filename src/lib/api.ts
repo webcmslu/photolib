@@ -251,8 +251,17 @@ export interface MonthSummary {
   /** 1 to 12. */
   month: number;
   count: number;
-  /** Fingerprints of a few photos to show for the month. */
-  covers: string[];
+  /** Its busiest days (at most four), in date order. */
+  days: DaySummary[];
+}
+
+/** Mirrors `DaySummary` in src-tauri/src/db.rs. */
+export interface DaySummary {
+  /** Days since 1970-01-01, as in `DayGroup`. */
+  day: number;
+  count: number;
+  /** Fingerprint of the photo that stands for the day. */
+  cover: string;
 }
 
 /** The months of a listing with a few cover photos each, newest first. */
