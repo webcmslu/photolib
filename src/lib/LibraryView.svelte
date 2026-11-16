@@ -214,48 +214,89 @@
       // The album or folder being shown may be gone (deleted on another computer).
       const gone =
         (listing.kind === "album" && !albums.some((a) => a.id === (listing as { album: string }).album)) ||
-        (listing.kind === "folder" &&
-          !folders.some((f) => f.folder === (listing as { folder: string }).folder));
+        (listing.kind === "folder" && !folderTree.paths.has((listing as { folder: string }).folder));
       if (gone) listing = { kind: "library" };
     } catch (e) {
       error = String(e);
     }
   }
 
-  /** Folder rows for the sidebar: every folder with photos, plus its ancestors. */
-  const folderRows = $derived.by(() => {
-    const counts = new Map(folders.map((f) => [f.folder, f.count]));
-    const paths = new Set<string>();
-    for (const { folder } of folders) {
-      const parts = folder === "" ? [] : folder.split("/");
+  /** Folders whose subfolders are shown in the sidebar, kept per library. */
+  // svelte-ignore state_referenced_locally
+  const openFoldersKey = `photolib.openFolders.${library.path}`;
+  let openFolders = $state<Set<string>>(
+    (() => {
+      try {
+        return new Set(JSON.parse(localStorage.getItem(openFoldersKey) ?? "[]") as string[]);
+      } catch {
+        return new Set<string>();
+      }
+    })(),
+  );
+  function toggleFolder(path: string) {
+    const next = new Set(openFolders);
+    if (next.has(path)) next.delete(path);
+    else next.add(path);
+    openFolders = next;
+    localStorage.setItem(openFoldersKey, JSON.stringify([...next]));
+  }
+
+  /**
+   * Folder rows for the sidebar, as a tree: every folder with photos plus its
+   * ancestors. A folder lists its subfolders too, so its count includes
+   * theirs. Rows under a closed folder are left out.
+   */
+  const folderTree = $derived.by(() => {
+    const own = new Map(folders.map((f) => [f.folder, f.count]));
+    const totals = new Map<string, number>();
+    const parents = new Set<string>();
+    for (const { folder, count } of folders) {
+      if (folder === "") continue;
+      const parts = folder.split("/");
       for (let depth = 1; depth <= parts.length; depth++) {
-        paths.add(parts.slice(0, depth).join("/"));
+        const path = parts.slice(0, depth).join("/");
+        totals.set(path, (totals.get(path) ?? 0) + count);
+        if (depth < parts.length) parents.add(path);
       }
     }
-    const rows = [...paths]
-      .sort((a, b) => {
-        const partsA = a.split("/");
-        const partsB = b.split("/");
-        for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
-          const order = partsA[i].localeCompare(partsB[i], undefined, { numeric: true });
-          if (order !== 0) return order;
-        }
-        return partsA.length - partsB.length;
-      })
-      .map((path) => {
-        const parts = path.split("/");
-        return {
-          path,
-          name: parts[parts.length - 1],
-          depth: parts.length - 1,
-          count: counts.get(path) ?? 0,
-        };
-      });
-    if (counts.has("")) {
-      rows.unshift({ path: "", name: "Top level", depth: 0, count: counts.get("") ?? 0 });
+    const all = [...totals.keys()].sort((a, b) => {
+      const partsA = a.split("/");
+      const partsB = b.split("/");
+      for (let i = 0; i < Math.min(partsA.length, partsB.length); i++) {
+        const order = partsA[i].localeCompare(partsB[i], undefined, { numeric: true });
+        if (order !== 0) return order;
+      }
+      return partsA.length - partsB.length;
+    });
+    const rows: {
+      path: string;
+      name: string;
+      depth: number;
+      count: number;
+      hasChildren: boolean;
+    }[] = [];
+    if (own.has("")) {
+      rows.push({ path: "", name: "Top level", depth: 0, count: own.get("") ?? 0, hasChildren: false });
     }
-    return rows;
+    for (const path of all) {
+      const parts = path.split("/");
+      // Shown only if every folder above it is open.
+      const hidden = parts.slice(0, -1).some((_, i) => !openFolders.has(parts.slice(0, i + 1).join("/")));
+      if (hidden) continue;
+      rows.push({
+        path,
+        name: parts[parts.length - 1],
+        depth: parts.length - 1,
+        count: totals.get(path) ?? 0,
+        hasChildren: parents.has(path),
+      });
+    }
+    return { rows, paths: new Set(["", ...totals.keys()]) };
   });
+
+  /** The listing for a folder row: the folder with its subfolders. */
+  const folderListing = (path: string): Listing =>
+    path === "" ? { kind: "folder", folder: "" } : { kind: "folder", folder: path, subfolders: true };
 
   const currentAlbum = $derived(
     listing.kind === "album" ? (albums.find((a) => a.id === (listing as { album: string }).album) ?? null) : null,
@@ -776,14 +817,24 @@
       </button>
 
       <h2>Folders</h2>
-      {#each folderRows as folder (folder.path)}
-        {@render row(
-          { kind: "folder", folder: folder.path },
-          folder.name,
-          folder.count,
-          folder.depth,
-          folder.count > 0,
-        )}
+      {#each folderTree.rows as folder (folder.path)}
+        <div class="tree-row">
+          {#if folder.hasChildren}
+            <button
+              class="twisty"
+              class:open={openFolders.has(folder.path)}
+              style:left="{folder.depth * 14}px"
+              aria-expanded={openFolders.has(folder.path)}
+              aria-label="{openFolders.has(folder.path) ? 'Hide' : 'Show'} the folders in {folder.name}"
+              onclick={() => toggleFolder(folder.path)}
+            >
+              <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+                <path d="M3.5 1.5 7 5l-3.5 3.5" />
+              </svg>
+            </button>
+          {/if}
+          {@render row(folderListing(folder.path), folder.name, folder.count, folder.depth + 1)}
+        </div>
       {/each}
     </nav>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
@@ -1544,6 +1595,40 @@
     width: 280px;
   }
 
+  .tree-row {
+    position: relative;
+  }
+
+  .twisty {
+    position: absolute;
+    top: 50%;
+    z-index: 1;
+    width: 22px;
+    height: 22px;
+    margin-left: 4px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-dim);
+    line-height: 0;
+    text-align: center;
+    cursor: pointer;
+    transform: translateY(-50%);
+    transition: transform 0.12s;
+  }
+
+  .twisty svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .twisty.open {
+    transform: translateY(-50%) rotate(90deg);
+  }
+
   .heading {
     display: flex;
     flex-direction: column;
@@ -1559,6 +1644,7 @@
 
   .range {
     width: 17em;
+    max-width: 100%;
     min-height: 1.2em;
     overflow: hidden;
     color: var(--text-dim);
@@ -1570,6 +1656,13 @@
 
   .range.unused {
     visibility: hidden;
+  }
+
+  /* No room for the dates on a narrow window. */
+  @media (max-width: 900px) {
+    .range {
+      display: none;
+    }
   }
 
   .title {

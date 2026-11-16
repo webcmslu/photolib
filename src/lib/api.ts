@@ -228,8 +228,8 @@ export interface PhotoDetails {
 export type Listing =
   /** Every photo that is not hidden. */
   | { kind: "library" }
-  /** The photos directly inside one folder ("" is the library root). */
-  | { kind: "folder"; folder: string }
+  /** The photos inside one folder ("" is the library root), and in its subfolders if asked. */
+  | { kind: "folder"; folder: string; subfolders?: boolean }
   | { kind: "favorites" }
   | { kind: "album"; album: string }
   | { kind: "hidden" }

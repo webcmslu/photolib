@@ -440,7 +440,8 @@
         {:else if photo?.liveVideo}
           <span class="badge">LIVE</span>
         {:else if photo?.rawFile}
-          <span class="badge">{rawPairLabel(photo.relPath)}</span>
+          <!-- Short on small cells, so it leaves room for the heart. -->
+          <span class="badge">{frame.width < 190 ? "RAW" : rawPairLabel(photo.relPath)}</span>
         {/if}
         {#if photo?.favorite}
           <span class="favorite" aria-label="Favorite">♥</span>

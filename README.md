@@ -58,6 +58,8 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   and All Photos has a filter menu (favorites, edited, photos, videos, not in
   an album), square or whole-photo thumbnails, and the dates on screen under
   the title.
+- Ideas from Windows Photos: a year scrubber beside the grid, and folders as
+  a collapsible tree where a folder lists its subfolders too.
 
 ## Develop
 

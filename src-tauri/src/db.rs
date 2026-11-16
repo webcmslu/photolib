@@ -509,9 +509,11 @@ fn folder_of(rel_path: &str) -> &str {
 pub enum Listing {
     /// Every photo that is not hidden.
     Library,
-    /// The photos directly inside one folder.
+    /// The photos inside one folder: directly, or also in its subfolders.
     Folder {
         folder: String,
+        #[serde(default)]
+        subfolders: bool,
     },
     Favorites,
     Album {
@@ -585,9 +587,22 @@ impl Listing {
         let visible = format!("{IS_LISTED} AND NOT {IS_HIDDEN}");
         match self {
             Listing::Library => (format!("WHERE {visible} AND ?1 IS NULL"), None),
-            Listing::Folder { folder } => {
-                (format!("WHERE {visible} AND folder = ?1"), Some(folder))
-            }
+            Listing::Folder {
+                folder,
+                subfolders: false,
+            } => (format!("WHERE {visible} AND folder = ?1"), Some(folder)),
+            // `substr` rather than LIKE, which would read `_` and `%` in a
+            // folder name as wildcards.
+            Listing::Folder {
+                folder,
+                subfolders: true,
+            } => (
+                format!(
+                    "WHERE {visible} AND (folder = ?1
+                         OR substr(folder, 1, length(?1) + 1) = ?1 || '/')"
+                ),
+                Some(folder),
+            ),
             Listing::Favorites => (
                 format!("WHERE {visible} AND {IS_FAVORITE} AND ?1 IS NULL"),
                 None,
@@ -1373,6 +1388,7 @@ mod tests {
         let all = || Listing::Library;
         let in_folder = |folder: &str| Listing::Folder {
             folder: folder.into(),
+            subfolders: false,
         };
 
         assert_eq!(days(all()), [(10, 3), (3, 1), (-1, 1)]);
@@ -1435,6 +1451,7 @@ mod tests {
         );
         let one = plan(Listing::Folder {
             folder: "trip".into(),
+            subfolders: false,
         });
         assert!(
             one.contains("COVERING INDEX photos_folder") && !one.contains("TEMP B-TREE"),
@@ -1798,6 +1815,54 @@ mod tests {
             }
         );
         assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);
+    }
+
+    #[test]
+    fn a_folder_can_be_listed_with_its_subfolders() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for path in [
+            "trip/a.jpg",
+            "trip/day 1/b.jpg",
+            "trip/day 1/deeper/c.jpg",
+            "tripod/d.jpg",
+            "trip_x/e.jpg",
+            "f.jpg",
+        ] {
+            upsert(
+                &tx,
+                &PhotoRow {
+                    fingerprint: path.into(),
+                    ..row(path, 1)
+                },
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let listed = |folder: &str, subfolders: bool| -> Vec<String> {
+            let listing = Listing::Folder {
+                folder: folder.into(),
+                subfolders,
+            };
+            let mut paths: Vec<String> = photos_page(&conn, &listing, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.rel_path)
+                .collect();
+            paths.sort();
+            paths
+        };
+        assert_eq!(listed("trip", false), ["trip/a.jpg"]);
+        assert_eq!(
+            listed("trip", true),
+            ["trip/a.jpg", "trip/day 1/b.jpg", "trip/day 1/deeper/c.jpg"]
+        );
+        assert_eq!(
+            listed("trip/day 1", true),
+            ["trip/day 1/b.jpg", "trip/day 1/deeper/c.jpg"]
+        );
+        assert_eq!(listed("trip_x", true), ["trip_x/e.jpg"]);
+        assert_eq!(listed("", false), ["f.jpg"]);
     }
 
     #[test]
