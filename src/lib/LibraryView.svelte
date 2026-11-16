@@ -633,7 +633,7 @@
   {#if imported}
     <p class="banner">
       Imported from Apple Photos: {formatNumber(imported.favorites)} favorites,
-      {formatNumber(imported.hidden)} hidden,
+      {formatNumber(imported.hidden + imported.deleted)} hidden,
       {formatNumber(imported.albums.filter((album) => album.matched > 0).length)} album(s).
       <button class="dismiss" onclick={() => (imported = null)} aria-label="Dismiss">×</button>
     </p>
@@ -944,6 +944,12 @@
       <ul>
         <li>mark {formatNumber(summary.favorites)} as favorites;</li>
         <li>hide {formatNumber(summary.hidden)};</li>
+        {#if summary.deleted > 0}
+          <li>
+            hide {formatNumber(summary.deleted)} more that
+            {summary.deleted === 1 ? "is" : "are"} in “Recently Deleted” in Photos;
+          </li>
+        {/if}
         <li>
           create or fill {formatNumber(summary.albums.filter((album) => album.matched > 0).length)}
           {summary.albums.filter((album) => album.matched > 0).length === 1 ? "album" : "albums"}:

@@ -50,7 +50,8 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   two groups the same name merges them.
 - Milestone 13 (Apple Photos import): "Import from Apple Photos…" reads a
   `.photoslibrary` (read-only) and brings its favorites, hidden photos and
-  albums over, for the photos that are also in the library folder.
+  albums over, for the photos that are also in the library folder. Photos in
+  its "Recently Deleted" are hidden, unless a copy is still in Photos.
 
 ## Develop
 

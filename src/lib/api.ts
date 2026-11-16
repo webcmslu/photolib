@@ -51,12 +51,14 @@ export async function pickPhotosLibrary(): Promise<string | null> {
 
 /** Mirrors `ImportSummary` in src-tauri/src/apple.rs. */
 export interface ImportSummary {
-  /** Photos and videos in the Apple Photos library. */
+  /** Photos and videos in the Apple Photos library (not in its trash). */
   assets: number;
   /** How many of them were found in this library. */
   matched: number;
   favorites: number;
   hidden: number;
+  /** Photos in "Recently Deleted" in Photos, found here: they get hidden. */
+  deleted: number;
   albums: { name: string; photos: number; matched: number }[];
 }
 

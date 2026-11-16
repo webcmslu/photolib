@@ -6,13 +6,18 @@
 //! against a real library (macOS 27) and is read defensively:
 //!
 //! - `ZASSET`: one row per photo, with `ZFAVORITE`, `ZHIDDEN`,
-//!   `ZTRASHEDSTATE`, and where its original is (`ZDIRECTORY`/`ZFILENAME`);
+//!   `ZTRASHEDSTATE` (in "Recently Deleted"), and where its original is
+//!   (`ZDIRECTORY`/`ZFILENAME`);
 //! - `ZADDITIONALASSETATTRIBUTES`: the file's name before it was imported
 //!   into Photos (`ZORIGINALFILENAME`) and its size (`ZORIGINALFILESIZE`);
 //! - `ZGENERICALBUM`: albums; the ones the user made have `ZKIND = 2`;
 //! - a table named like `Z_34ASSETS` with columns like `Z_34ALBUMS` and
 //!   `Z_3ASSETS` says which photos are in which album. The numbers change
 //!   between macOS versions, so the table is looked up by its shape.
+//!
+//! Photos in "Recently Deleted" are hidden here, since this app never deletes
+//! files, unless another copy of the same photo is still in Photos (merging
+//! duplicates in Photos puts the extra copies in the trash).
 //!
 //! The Photos library is only read, never written. A photo of it is matched
 //! to a photo of our library by original file name and size, or failing
@@ -42,6 +47,9 @@ pub struct ImportSummary {
     /// Of the matched ones: favorites, hidden.
     pub favorites: u32,
     pub hidden: u32,
+    /// Photos in Photos' "Recently Deleted" that were found here and will be
+    /// hidden. Not counted in `assets` or `matched`.
+    pub deleted: u32,
     pub albums: Vec<AlbumSummary>,
 }
 
@@ -71,6 +79,7 @@ struct Asset {
     original_size: Option<i64>,
     favorite: bool,
     hidden: bool,
+    trashed: bool,
 }
 
 /// Reads the Apple Photos library at `photos_library` and matches it against
@@ -99,17 +108,20 @@ pub fn plan(conn: &Connection, photos_library: &Path) -> Result<Plan, String> {
         known.insert(fingerprint);
     }
 
+    let (live_assets, trashed_assets): (Vec<&Asset>, Vec<&Asset>) =
+        assets.iter().partition(|asset| !asset.trashed);
+
     let mut fingerprint_of: HashMap<i64, String> = HashMap::new();
     let mut plan = Plan {
         summary: ImportSummary {
-            assets: assets.len() as u32,
+            assets: live_assets.len() as u32,
             ..ImportSummary::default()
         },
         favorites: Vec::new(),
         hidden: Vec::new(),
         albums: Vec::new(),
     };
-    for asset in &assets {
+    for &asset in &live_assets {
         let Some(fingerprint) = match_asset(asset, photos_library, &by_name, &known) else {
             continue;
         };
@@ -125,7 +137,23 @@ pub fn plan(conn: &Connection, photos_library: &Path) -> Result<Plan, String> {
         fingerprint_of.insert(asset.id, fingerprint);
     }
 
-    let live: HashSet<i64> = assets.iter().map(|asset| asset.id).collect();
+    // Deleted in Photos: hide, unless a copy outside the trash matched too.
+    let kept: HashSet<&String> = fingerprint_of.values().collect();
+    let mut deleted: Vec<String> = trashed_assets
+        .iter()
+        .filter_map(|asset| match_asset(asset, photos_library, &by_name, &known))
+        .filter(|fingerprint| !kept.contains(fingerprint))
+        .collect();
+    deleted.sort();
+    deleted.dedup();
+    plan.summary.deleted = deleted.len() as u32;
+    for fingerprint in deleted {
+        if !plan.hidden.contains(&fingerprint) {
+            plan.hidden.push(fingerprint);
+        }
+    }
+
+    let live: HashSet<i64> = live_assets.iter().map(|asset| asset.id).collect();
     for (album_id, name) in album_rows {
         let members: Vec<i64> = memberships
             .iter()
@@ -222,9 +250,9 @@ fn open(photos_library: &Path) -> Result<Connection, String> {
 fn read_assets(apple: &Connection) -> rusqlite::Result<Vec<Asset>> {
     let mut stmt = apple.prepare(
         "SELECT a.Z_PK, a.ZDIRECTORY, a.ZFILENAME, x.ZORIGINALFILENAME, x.ZORIGINALFILESIZE,
-                COALESCE(a.ZFAVORITE, 0), COALESCE(a.ZHIDDEN, 0)
-         FROM ZASSET a LEFT JOIN ZADDITIONALASSETATTRIBUTES x ON x.ZASSET = a.Z_PK
-         WHERE COALESCE(a.ZTRASHEDSTATE, 0) = 0",
+                COALESCE(a.ZFAVORITE, 0), COALESCE(a.ZHIDDEN, 0),
+                COALESCE(a.ZTRASHEDSTATE, 0)
+         FROM ZASSET a LEFT JOIN ZADDITIONALASSETATTRIBUTES x ON x.ZASSET = a.Z_PK",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(Asset {
@@ -235,6 +263,7 @@ fn read_assets(apple: &Connection) -> rusqlite::Result<Vec<Asset>> {
             original_size: row.get(4)?,
             favorite: row.get::<_, i64>(5)? != 0,
             hidden: row.get::<_, i64>(6)? != 0,
+            trashed: row.get::<_, i64>(7)? != 0,
         })
     })?;
     rows.collect()
@@ -440,6 +469,8 @@ mod tests {
                 matched: 3,
                 favorites: 2,
                 hidden: 1,
+                // Asset 5 is in the trash, but asset 1 is the same photo.
+                deleted: 0,
                 albums: vec![
                     AlbumSummary {
                         name: "Empty here".into(),
@@ -489,6 +520,43 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn recently_deleted_photos_are_hidden_unless_a_copy_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = dir.path().join("Test.photoslibrary");
+        let apple = fake_library(&library);
+        let fp = |n: u8| format!("{n:02x}").repeat(32);
+
+        let mut conn = db::open_in_memory().unwrap();
+        index_photo(&mut conn, "kept.jpg", 1000, &fp(1));
+        index_photo(&mut conn, "deleted.jpg", 2000, &fp(2));
+
+        add_asset(&apple, 1, ("kept.jpg", 1000), false, false, false);
+        // A duplicate of it that Photos merged away, so it sits in the trash.
+        add_asset(&apple, 2, ("kept.jpg", 1000), false, false, true);
+        // Deleted in Photos, twice (it was imported twice): one photo here.
+        add_asset(&apple, 3, ("deleted.jpg", 2000), true, false, true);
+        add_asset(&apple, 4, ("deleted.jpg", 2000), false, true, true);
+        // Deleted in Photos and not in our library at all.
+        add_asset(&apple, 5, ("elsewhere.jpg", 3000), false, false, true);
+        drop(apple);
+
+        let plan = plan(&conn, &library).unwrap();
+        assert_eq!(
+            (
+                plan.summary.assets,
+                plan.summary.matched,
+                plan.summary.favorites,
+                plan.summary.hidden,
+                plan.summary.deleted
+            ),
+            (1, 1, 0, 0, 1)
+        );
+        assert_eq!(plan.hidden, [fp(2)]);
+        // A deleted photo is not made a favorite, whatever it was in Photos.
+        assert!(plan.favorites.is_empty());
     }
 
     #[test]
