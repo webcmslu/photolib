@@ -23,7 +23,7 @@
   import CropBox from "./CropBox.svelte";
   import { editedSize, isNeutral, NO_EDIT, type Edit } from "./edit";
   import EditedImage from "./EditedImage.svelte";
-  import { formatBytes, formatDateTime, formatDuration, formatNumber } from "./format";
+  import { formatBytes, formatDateTime, formatDuration, formatNumber, rawPairLabel } from "./format";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -654,6 +654,13 @@
           {#if details.liveVideo}
             <dt>Kind</dt>
             <dd>Live Photo</dd>
+          {/if}
+          {#if details.rawPath}
+            <dt>Kind</dt>
+            <dd>
+              {rawPairLabel(details.relPath)}
+              <small>{details.rawPath.slice(details.rawPath.lastIndexOf("/") + 1)}</small>
+            </dd>
           {/if}
           {#if details.cameraMake || details.cameraModel}
             <dt>Camera</dt>

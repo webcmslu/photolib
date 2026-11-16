@@ -27,7 +27,8 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   their embedded JPEG preview (CR2, CR3, NEF, ARW, DNG, RAF, ORF, RW2 and
   more); MP4/MOV videos with thumbnails, date, length and GPS, played in the
   viewer; an iPhone Live Photo's `.MOV` is attached to its photo instead of
-  being listed twice.
+  being listed twice. Likewise a RAW file saved next to a JPEG (or HEIC) of
+  the same name is shown as one "JPEG + RAW" photo.
 - Milestone 8 (map): a Map section shows the photos and videos that have a
   GPS position on an OpenStreetMap map, clustered by zoom level; clicking a
   marker lists its photos. The map tiles are fetched from

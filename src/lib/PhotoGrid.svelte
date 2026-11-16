@@ -11,7 +11,7 @@
 -->
 <script lang="ts">
   import { thumbUrl, type DayGroup } from "./api";
-  import { formatDay, formatDuration, formatMonth, formatNumber, monthKey } from "./format";
+  import { formatDay, formatDuration, formatMonth, formatNumber, monthKey, rawPairLabel } from "./format";
   import EditedImage from "./EditedImage.svelte";
   import type { PhotoPages } from "./pages.svelte";
 
@@ -324,6 +324,8 @@
           <span class="badge">▶ {photo.durationMs === null ? "" : formatDuration(photo.durationMs)}</span>
         {:else if photo?.liveVideo}
           <span class="badge">LIVE</span>
+        {:else if photo?.rawFile}
+          <span class="badge">{rawPairLabel(photo.relPath)}</span>
         {/if}
         {#if photo?.favorite}
           <span class="favorite" aria-label="Favorite">♥</span>

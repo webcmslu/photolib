@@ -62,3 +62,9 @@ export function formatBytes(bytes: number): string {
 export function photoCount(count: number): string {
   return `${formatNumber(count)} ${count === 1 ? "photo" : "photos"}`;
 }
+
+/** "JPEG + RAW", "HEIC + RAW"…: names a pair after the file that is shown. */
+export function rawPairLabel(relPath: string): string {
+  const extension = relPath.slice(relPath.lastIndexOf(".") + 1).toUpperCase();
+  return `${extension === "JPG" ? "JPEG" : extension} + RAW`;
+}

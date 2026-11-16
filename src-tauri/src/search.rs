@@ -108,13 +108,11 @@ fn meaning(word: &str) -> Option<String> {
             "fingerprint IN (SELECT key FROM org_state WHERE kind = 'fav' AND value = '1')"
                 .to_owned(),
         ),
-        "raw" => {
-            let extensions: Vec<String> = raw::EXTENSIONS
-                .iter()
-                .map(|extension| format!("rel_path LIKE '%.{extension}'"))
-                .collect();
-            Some(format!("({})", extensions.join(" OR ")))
-        }
+        // A RAW file by itself, or a JPEG + RAW pair.
+        "raw" => Some(format!(
+            "(raw_file IS NOT NULL OR {})",
+            raw::is_raw_sql("rel_path")
+        )),
         _ => None,
     }
 }

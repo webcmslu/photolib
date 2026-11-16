@@ -184,6 +184,8 @@ export interface PhotoItem {
   durationMs: number | null;
   /** For a Live Photo: the fingerprint of its video. */
   liveVideo: string | null;
+  /** For a JPEG + RAW pair: the fingerprint of its RAW file. */
+  rawFile: string | null;
   /** How the photo is shown, if it was edited. */
   edit: Edit | null;
 }
@@ -216,6 +218,8 @@ export interface PhotoDetails {
   video: boolean;
   durationMs: number | null;
   liveVideo: string | null;
+  /** For a JPEG + RAW pair: where its RAW file is. */
+  rawPath: string | null;
   /** The nearest town, such as "Paris, France". */
   place: string | null;
 }

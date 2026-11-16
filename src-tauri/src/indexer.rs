@@ -240,10 +240,10 @@ pub fn scan(
         tx.commit()?;
     }
 
-    // After additions and removals, work out again which videos belong to
-    // which photos.
+    // After additions and removals, work out again which videos and RAW
+    // files belong to which photos.
     if !summary.cancelled {
-        db::pair_live_photos(conn)?;
+        db::pair_parts(conn)?;
         // Name the places of the photos that are new or moved.
         db::fill_places(conn, |latitude, longitude| {
             places::lookup(latitude, longitude).map(|place| (place.name, place.search))

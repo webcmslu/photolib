@@ -18,6 +18,16 @@ pub const EXTENSIONS: &[&str] = &[
     "cr2", "cr3", "nef", "nrw", "arw", "sr2", "dng", "raf", "orf", "rw2", "pef", "srw",
 ];
 
+/// An SQL condition that is true when `column` (a file path) has a RAW
+/// extension. `LIKE` ignores case, so `.CR2` and `.cr2` both match.
+pub fn is_raw_sql(column: &str) -> String {
+    let tests: Vec<String> = EXTENSIONS
+        .iter()
+        .map(|extension| format!("{column} LIKE '%.{extension}'"))
+        .collect();
+    format!("({})", tests.join(" OR "))
+}
+
 /// How much of a RAW file is read to find its EXIF block, which sits at the
 /// start in every format we know. Reading whole files (20 to 60 MB each)
 /// would make indexing over a network very slow.

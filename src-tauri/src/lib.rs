@@ -327,6 +327,11 @@ fn run_scan(
     });
 
     let thumbnails = thumbs::generate_missing(root, &mut conn, cache, cancel, &on_progress)?;
+    // A JPEG that turned out not to be decodable can't stand for its RAW
+    // file: show the RAW file by itself again.
+    if thumbnails.undecodable > 0 {
+        db::pair_parts(&mut conn)?;
+    }
 
     // Last, and only if the user switched it on: look for faces in the new
     // photos and put them into groups.

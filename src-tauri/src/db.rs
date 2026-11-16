@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -50,25 +50,27 @@ CREATE TABLE photos (
     live_candidate INTEGER NOT NULL DEFAULT 0,
     -- On the photo of a Live Photo: the fingerprint of its video.
     live_video    TEXT,
-    -- 1 on the video of a Live Photo. It is shown through its photo, never
-    -- listed by itself.
-    live_part     INTEGER NOT NULL DEFAULT 0,
+    -- 1 on a file that is shown through another one, never listed by itself:
+    -- the video of a Live Photo, or the RAW file of a JPEG + RAW pair.
+    part          INTEGER NOT NULL DEFAULT 0,
     -- The nearest town to latitude/longitude, such as 'Paris, France'. NULL
     -- until it has been looked up; '' when no town is near. See places.rs.
     place         TEXT,
     -- The same in lowercase and without accents, for searching.
-    place_search  TEXT
+    place_search  TEXT,
+    -- On the photo of a JPEG + RAW pair: the fingerprint of its RAW file.
+    raw_file      TEXT
 );
 -- The order the timeline and the folder view list photos in. Partial, to match
 -- their WHERE clause, so skipping to a far offset reads only the index.
--- (fingerprint, thumb_state and live_part are included only so that the filter
+-- (fingerprint, thumb_state and part are included only so that the filter
 -- can be evaluated from the index alone.)
 CREATE INDEX photos_timeline
-    ON photos (sort_date DESC, rel_path, fingerprint, thumb_state, live_part)
-    WHERE thumb_state != 2 AND live_part = 0;
+    ON photos (sort_date DESC, rel_path, fingerprint, thumb_state, part)
+    WHERE thumb_state != 2 AND part = 0;
 CREATE INDEX photos_folder
-    ON photos (folder, sort_date DESC, rel_path, fingerprint, thumb_state, live_part)
-    WHERE thumb_state != 2 AND live_part = 0;
+    ON photos (folder, sort_date DESC, rel_path, fingerprint, thumb_state, part)
+    WHERE thumb_state != 2 AND part = 0;
 CREATE INDEX photos_stem ON photos (stem);
 
 -- The merged organization (favorites, hidden, albums): one row per value that
@@ -179,20 +181,34 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
 }
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-    if version == SCHEMA_VERSION {
-        return Ok(());
-    }
+    let mut version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    // Upgrades that keep what is indexed, one version after the other: indexing
+    // a whole library again takes long over a network.
     if version == 5 {
-        // Version 6 only added two columns that are filled in afterwards:
-        // not worth indexing a whole library again.
-        return conn.execute_batch(&format!(
+        // Two columns that are filled in after the scan.
+        conn.execute_batch(
             "BEGIN;
              ALTER TABLE photos ADD COLUMN place TEXT;
              ALTER TABLE photos ADD COLUMN place_search TEXT;
-             PRAGMA user_version = {SCHEMA_VERSION};
-             COMMIT;"
-        ));
+             PRAGMA user_version = 6;
+             COMMIT;",
+        )?;
+        version = 6;
+    }
+    if version == 6 {
+        // `live_part` now also covers RAW files paired with a JPEG; the
+        // pairing is worked out again after the next scan.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE photos RENAME COLUMN live_part TO part;
+             ALTER TABLE photos ADD COLUMN raw_file TEXT;
+             PRAGMA user_version = 7;
+             COMMIT;",
+        )?;
+        version = 7;
+    }
+    if version == SCHEMA_VERSION {
+        return Ok(());
     }
     // The index is only a cache, so any other version (older or from a newer
     // build) is simply rebuilt from scratch on the next scan.
@@ -303,7 +319,7 @@ pub struct PendingThumb {
 pub fn pending_thumbs(conn: &Connection) -> rusqlite::Result<Vec<PendingThumb>> {
     let mut stmt = conn.prepare(
         "SELECT rel_path, fingerprint, orientation, kind FROM photos
-         WHERE thumb_state = 0 AND live_part = 0 ORDER BY sort_date DESC",
+         WHERE thumb_state = 0 AND part = 0 ORDER BY sort_date DESC",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(PendingThumb {
@@ -352,34 +368,60 @@ pub fn fill_places(
     Ok(pending.len())
 }
 
-/// Pairs each Live Photo's video with its photo: a short (or Apple-tagged)
-/// video next to a photo with the same name. The video then disappears from
-/// the listings and the photo gets a link to it. Returns how many rows changed.
-pub fn pair_live_photos(conn: &mut Connection) -> rusqlite::Result<usize> {
+/// Pairs the files that are shown through another one, and returns how many
+/// rows changed:
+/// - a Live Photo's video, a short (or Apple-tagged) video next to a photo
+///   with the same name;
+/// - a RAW file next to a JPEG (or HEIC, PNG...) with the same name, which the
+///   camera saved together. The JPEG is shown, as cameras and Apple Photos do.
+///
+/// The second file then disappears from the listings, and the photo gets a
+/// link to it.
+pub fn pair_parts(conn: &mut Connection) -> rusqlite::Result<usize> {
     let tx = conn.transaction()?;
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "CREATE TEMP TABLE IF NOT EXISTS live_pairs (
              image_id INTEGER PRIMARY KEY, video_id INTEGER, video_fp TEXT);
+         CREATE TEMP TABLE IF NOT EXISTS raw_pairs (
+             image_id INTEGER PRIMARY KEY, raw_id INTEGER, raw_fp TEXT);
          DELETE FROM live_pairs;
+         DELETE FROM raw_pairs;
          INSERT OR REPLACE INTO live_pairs
              SELECT i.id, v.id, v.fingerprint
              FROM photos v JOIN photos i ON i.stem = v.stem AND i.kind = 0
              WHERE v.kind = 1 AND v.live_candidate = 1
-             ORDER BY v.rel_path DESC;",
-    )?;
+             ORDER BY v.rel_path DESC;
+         -- The JPEG must be decodable, or the photo would vanish altogether.
+         INSERT OR REPLACE INTO raw_pairs
+             SELECT i.id, r.id, r.fingerprint
+             FROM photos r JOIN photos i ON i.stem = r.stem AND i.kind = 0
+                 AND i.thumb_state != 2 AND NOT {image_is_raw}
+             WHERE r.kind = 0 AND {raw}
+             ORDER BY r.rel_path DESC;",
+        image_is_raw = crate::raw::is_raw_sql("i.rel_path"),
+        raw = crate::raw::is_raw_sql("r.rel_path"),
+    ))?;
     let mut changed = 0;
     // Only rows whose pairing really changed are written.
     for update in [
         "UPDATE photos SET live_video = NULL
          WHERE live_video IS NOT NULL AND id NOT IN (SELECT image_id FROM live_pairs)",
-        "UPDATE photos SET live_part = 0
-         WHERE live_part = 1 AND id NOT IN (SELECT video_id FROM live_pairs)",
+        "UPDATE photos SET raw_file = NULL
+         WHERE raw_file IS NOT NULL AND id NOT IN (SELECT image_id FROM raw_pairs)",
+        "UPDATE photos SET part = 0
+         WHERE part = 1 AND id NOT IN (SELECT video_id FROM live_pairs
+                                       UNION SELECT raw_id FROM raw_pairs)",
         "UPDATE photos
          SET live_video = (SELECT video_fp FROM live_pairs WHERE image_id = photos.id)
          WHERE id IN (SELECT image_id FROM live_pairs)
            AND live_video IS NOT (SELECT video_fp FROM live_pairs WHERE image_id = photos.id)",
-        "UPDATE photos SET live_part = 1
-         WHERE live_part = 0 AND id IN (SELECT video_id FROM live_pairs)",
+        "UPDATE photos
+         SET raw_file = (SELECT raw_fp FROM raw_pairs WHERE image_id = photos.id)
+         WHERE id IN (SELECT image_id FROM raw_pairs)
+           AND raw_file IS NOT (SELECT raw_fp FROM raw_pairs WHERE image_id = photos.id)",
+        "UPDATE photos SET part = 1
+         WHERE part = 0 AND id IN (SELECT video_id FROM live_pairs
+                                   UNION SELECT raw_id FROM raw_pairs)",
     ] {
         changed += tx.execute(update, [])?;
     }
@@ -476,7 +518,7 @@ const IS_HIDDEN: &str =
 const IS_FAVORITE: &str =
     "fingerprint IN (SELECT key FROM org_state WHERE kind = 'fav' AND value = '1')";
 /// Rows that can be listed: decodable, and not the video half of a Live Photo.
-const IS_LISTED: &str = "thumb_state != 2 AND live_part = 0";
+const IS_LISTED: &str = "thumb_state != 2 AND part = 0";
 
 impl Listing {
     /// The `WHERE` clause and its one parameter (`?1`, NULL when unused).
@@ -649,6 +691,8 @@ pub struct PhotoItem {
     pub duration_ms: Option<u64>,
     /// For a Live Photo: the fingerprint of its video.
     pub live_video: Option<String>,
+    /// For a JPEG + RAW pair: the fingerprint of its RAW file.
+    pub raw_file: Option<String>,
     /// How the photo is shown, if it was edited.
     pub edit: Option<crate::org::Edit>,
 }
@@ -664,7 +708,8 @@ pub fn photos_page(
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE},
                 kind, duration_ms, live_video,
-                (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint)
+                (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint),
+                raw_file
          FROM photos {filter} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2"
     ))?;
     let rows = stmt.query_map(params![param, offset, limit], |row| {
@@ -681,6 +726,7 @@ pub fn photos_page(
             edit: row
                 .get::<_, Option<String>>(9)?
                 .and_then(|json| serde_json::from_str(&json).ok()),
+            raw_file: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -734,6 +780,8 @@ pub struct PhotoDetails {
     pub duration_ms: Option<u64>,
     /// For a Live Photo: the fingerprint of its video.
     pub live_video: Option<String>,
+    /// For a JPEG + RAW pair: where its RAW file is.
+    pub raw_path: Option<String>,
     /// The nearest town, such as "Paris, France".
     pub place: Option<String>,
 }
@@ -745,7 +793,9 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
                 "SELECT rel_path, fingerprint, size, sort_date, date_source, width, height,
                         camera_make, camera_model, latitude, longitude,
                         {IS_FAVORITE}, {IS_HIDDEN}, kind, duration_ms, live_video,
-                        NULLIF(place, '')
+                        NULLIF(place, ''),
+                        (SELECT r.rel_path FROM photos r
+                         WHERE r.stem = photos.stem AND r.fingerprint = photos.raw_file)
                  FROM photos WHERE rel_path = ?1"
             ),
             [rel_path],
@@ -769,6 +819,7 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
                     duration_ms: row.get::<_, Option<i64>>(14)?.map(|ms| ms as u64),
                     live_video: row.get(15)?,
                     place: row.get(16)?,
+                    raw_path: row.get(17)?,
                 })
             },
         )
@@ -818,10 +869,16 @@ pub fn geo_points(
     rows.collect()
 }
 
-/// Every listed file: `(rel_path, size, fingerprint)`.
+/// Every file: `(rel_path, size, fingerprint)`, where the fingerprint is the
+/// one of the photo the file is listed as. So the RAW file of a JPEG + RAW
+/// pair, or the video of a Live Photo, gives the fingerprint of its JPEG.
 pub fn files(conn: &Connection) -> rusqlite::Result<Vec<(String, u64, String)>> {
-    let mut stmt =
-        conn.prepare("SELECT rel_path, size, fingerprint FROM photos WHERE live_part = 0")?;
+    let mut stmt = conn.prepare(
+        "SELECT p.rel_path, p.size, COALESCE(main.fingerprint, p.fingerprint)
+         FROM photos p LEFT JOIN photos main
+             ON p.part = 1 AND main.stem = p.stem AND main.part = 0
+            AND (main.raw_file = p.fingerprint OR main.live_video = p.fingerprint)",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok((row.get(0)?, row.get::<_, i64>(1)? as u64, row.get(2)?))
     })?;
@@ -835,7 +892,7 @@ pub fn files(conn: &Connection) -> rusqlite::Result<Vec<(String, u64, String)>> 
 pub fn pending_faces(conn: &Connection) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT fingerprint FROM photos
-         WHERE kind = 0 AND thumb_state = 1 AND live_part = 0
+         WHERE kind = 0 AND thumb_state = 1 AND part = 0
            AND fingerprint NOT IN (SELECT fingerprint FROM faces.scanned)
          ORDER BY sort_date DESC",
     )?;
@@ -931,7 +988,7 @@ pub fn face_groups(conn: &Connection) -> rusqlite::Result<Vec<FaceGroup>> {
                 f.fingerprint, p.width, p.height, f.left, f.top, f.width, f.height
          FROM faces.face f JOIN photos p ON p.fingerprint = f.fingerprint
          WHERE f.cluster IS NOT NULL
-           AND p.thumb_state != 2 AND p.live_part = 0
+           AND p.thumb_state != 2 AND p.part = 0
            AND NOT p.{IS_HIDDEN}
          GROUP BY f.cluster"
     ))?;
@@ -1099,11 +1156,9 @@ pub fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
 
 /// How many photos and videos are indexed. A Live Photo counts once.
 pub fn count(conn: &Connection) -> rusqlite::Result<u64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM photos WHERE live_part = 0",
-        [],
-        |row| row.get::<_, i64>(0).map(|n| n as u64),
-    )
+    conn.query_row("SELECT COUNT(*) FROM photos WHERE part = 0", [], |row| {
+        row.get::<_, i64>(0).map(|n| n as u64)
+    })
 }
 
 #[cfg(test)]
@@ -1310,9 +1365,9 @@ mod tests {
         upsert(&tx, &video("trip/party.mp4", "long", false)).unwrap();
         tx.commit().unwrap();
 
-        assert_eq!(pair_live_photos(&mut conn).unwrap(), 2);
+        assert_eq!(pair_parts(&mut conn).unwrap(), 2);
         // Running it again changes nothing.
-        assert_eq!(pair_live_photos(&mut conn).unwrap(), 0);
+        assert_eq!(pair_parts(&mut conn).unwrap(), 0);
 
         let listed: Vec<(String, Option<String>, bool)> =
             photos_page(&conn, &Listing::Library, 0, 10)
@@ -1359,8 +1414,80 @@ mod tests {
         let tx = conn.transaction().unwrap();
         delete(&tx, "trip/IMG_1.HEIC").unwrap();
         tx.commit().unwrap();
-        assert_eq!(pair_live_photos(&mut conn).unwrap(), 1);
+        assert_eq!(pair_parts(&mut conn).unwrap(), 1);
         assert_eq!(count(&conn).unwrap(), 4);
+    }
+
+    #[test]
+    fn jpeg_and_raw_are_paired_by_name() {
+        let mut conn = open_in_memory().unwrap();
+        let photo = |rel_path: &str| PhotoRow {
+            fingerprint: rel_path.into(),
+            ..row(rel_path, 1)
+        };
+        let tx = conn.transaction().unwrap();
+        upsert(&tx, &photo("match/IMG_1.JPG")).unwrap();
+        upsert(&tx, &photo("match/IMG_1.CR2")).unwrap();
+        // A RAW file by itself, and one whose JPEG is in another folder.
+        upsert(&tx, &photo("match/IMG_2.NEF")).unwrap();
+        upsert(&tx, &photo("other/IMG_2.jpg")).unwrap();
+        // Two RAW files: neither stands for the other.
+        upsert(&tx, &photo("match/IMG_3.cr2")).unwrap();
+        upsert(&tx, &photo("match/IMG_3.dng")).unwrap();
+        // A JPEG that can't be decoded doesn't hide its RAW file.
+        upsert(&tx, &photo("match/IMG_4.jpg")).unwrap();
+        upsert(&tx, &photo("match/IMG_4.arw")).unwrap();
+        set_thumb_state(&tx, "match/IMG_4.jpg", ThumbState::Failed, None).unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(pair_parts(&mut conn).unwrap(), 2);
+        assert_eq!(pair_parts(&mut conn).unwrap(), 0);
+
+        let listed: Vec<(String, Option<String>)> = photos_page(&conn, &Listing::Library, 0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|item| (item.rel_path, item.raw_file))
+            .collect();
+        let pair = |path: &str| (path.to_owned(), None::<String>);
+        assert_eq!(
+            listed,
+            [
+                (
+                    "match/IMG_1.JPG".to_owned(),
+                    Some("match/IMG_1.CR2".to_owned())
+                ),
+                pair("match/IMG_2.NEF"),
+                pair("match/IMG_3.cr2"),
+                pair("match/IMG_3.dng"),
+                pair("match/IMG_4.arw"),
+                pair("other/IMG_2.jpg"),
+            ]
+        );
+        // The pair counts once (the count includes the undecodable JPEG),
+        // and its RAW file needs no thumbnail of its own.
+        assert_eq!(count(&conn).unwrap(), 7);
+        assert!(pending_thumbs(&conn)
+            .unwrap()
+            .iter()
+            .all(|pending| pending.rel_path != "match/IMG_1.CR2"));
+        let details = photo_details(&conn, "match/IMG_1.JPG").unwrap().unwrap();
+        assert_eq!(details.raw_path.as_deref(), Some("match/IMG_1.CR2"));
+        // Both files of the pair stand for the JPEG (the Apple Photos import
+        // may find either).
+        let as_listed: HashMap<String, String> = files(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|(rel_path, _, fingerprint)| (rel_path, fingerprint))
+            .collect();
+        assert_eq!(as_listed["match/IMG_1.CR2"], "match/IMG_1.JPG");
+        assert_eq!(as_listed["match/IMG_2.NEF"], "match/IMG_2.NEF");
+
+        // When the JPEG goes away, the RAW file is listed by itself again.
+        let tx = conn.transaction().unwrap();
+        delete(&tx, "match/IMG_1.JPG").unwrap();
+        tx.commit().unwrap();
+        assert_eq!(pair_parts(&mut conn).unwrap(), 1);
+        assert_eq!(count(&conn).unwrap(), 7);
     }
 
     #[test]
@@ -1524,7 +1651,7 @@ mod tests {
     }
 
     #[test]
-    fn version_5_is_upgraded_in_place() {
+    fn versions_5_and_6_are_upgraded_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("index.db");
         {
@@ -1536,6 +1663,8 @@ mod tests {
             conn.execute_batch(
                 "ALTER TABLE photos DROP COLUMN place;
                  ALTER TABLE photos DROP COLUMN place_search;
+                 ALTER TABLE photos DROP COLUMN raw_file;
+                 ALTER TABLE photos RENAME COLUMN part TO live_part;
                  PRAGMA user_version = 5;",
             )
             .unwrap();
@@ -1543,6 +1672,11 @@ mod tests {
         let mut conn = open(&path).unwrap();
         assert_eq!(count(&conn).unwrap(), 1);
         assert_eq!(fill_places(&mut conn, |_, _| None).unwrap(), 1);
+        assert_eq!(pair_parts(&mut conn).unwrap(), 0);
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
     }
 
     #[test]
