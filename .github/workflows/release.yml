@@ -121,6 +121,11 @@ jobs:
               break
             fi
           done
+          if [ -n "$ossl" ]; then
+            echo "A .p12 in the newer format can be converted with: $("$ossl" version)."
+          else
+            echo "No OpenSSL 3 here: a .p12 in the newer format cannot be converted."
+          fi
           converts() { # password
             [ -n "$ossl" ] || return 1
             local pem="$RUNNER_TEMP/certificate.pem" legacy="$RUNNER_TEMP/legacy.p12"
