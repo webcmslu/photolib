@@ -372,8 +372,11 @@ pub fn fill_places(
 /// rows changed:
 /// - a Live Photo's video, a short (or Apple-tagged) video next to a photo
 ///   with the same name;
-/// - a RAW file next to a JPEG (or HEIC, PNG...) with the same name, which the
-///   camera saved together. The JPEG is shown, as cameras and Apple Photos do.
+/// - a RAW file and a JPEG (or HEIC, PNG...) with the same name, which the
+///   camera saved together: in the same folder, or in different folders
+///   (such as `trip/` and `trip/cr2/`) when both have the same EXIF capture
+///   time, since camera file names repeat every 10,000 shots. The JPEG is
+///   shown, as cameras and Apple Photos do.
 ///
 /// The second file then disappears from the listings, and the photo gets a
 /// link to it.
@@ -392,6 +395,17 @@ pub fn pair_parts(conn: &mut Connection) -> rusqlite::Result<usize> {
              WHERE v.kind = 1 AND v.live_candidate = 1
              ORDER BY v.rel_path DESC;
          -- The JPEG must be decodable, or the photo would vanish altogether.
+         -- First pairs across folders, then pairs in one folder, which win.
+         -- (`i.part = 0` always holds for a JPEG; it lets the join use the
+         -- timeline index on sort_date.)
+         INSERT OR REPLACE INTO raw_pairs
+             SELECT i.id, r.id, r.fingerprint
+             FROM photos r JOIN photos i ON i.sort_date = r.sort_date
+                 AND i.thumb_state != 2 AND i.part = 0 AND i.kind = 0
+                 AND i.date_source = 'exif' AND NOT {image_is_raw}
+                 AND {name_i} = {name_r}
+             WHERE r.kind = 0 AND r.date_source = 'exif' AND {raw}
+             ORDER BY r.rel_path DESC;
          INSERT OR REPLACE INTO raw_pairs
              SELECT i.id, r.id, r.fingerprint
              FROM photos r JOIN photos i ON i.stem = r.stem AND i.kind = 0
@@ -400,6 +414,8 @@ pub fn pair_parts(conn: &mut Connection) -> rusqlite::Result<usize> {
              ORDER BY r.rel_path DESC;",
         image_is_raw = crate::raw::is_raw_sql("i.rel_path"),
         raw = crate::raw::is_raw_sql("r.rel_path"),
+        name_i = file_name_sql("i.stem"),
+        name_r = file_name_sql("r.stem"),
     ))?;
     let mut changed = 0;
     // Only rows whose pairing really changed are written.
@@ -427,6 +443,12 @@ pub fn pair_parts(conn: &mut Connection) -> rusqlite::Result<usize> {
     }
     tx.commit()?;
     Ok(changed)
+}
+
+/// SQL for the last part of a `/`-separated path in `column`: `rtrim` with
+/// every character but `/` strips the name, which tells where it starts.
+fn file_name_sql(column: &str) -> String {
+    format!("substr({column}, length(rtrim({column}, replace({column}, '/', ''))) + 1)")
 }
 
 /// Records the outcome of thumbnail generation. `size` is the upright
@@ -861,7 +883,7 @@ pub fn photo_details(conn: &Connection, rel_path: &str) -> rusqlite::Result<Opti
                         {IS_FAVORITE}, {IS_HIDDEN}, kind, duration_ms, live_video,
                         NULLIF(place, ''),
                         (SELECT r.rel_path FROM photos r
-                         WHERE r.stem = photos.stem AND r.fingerprint = photos.raw_file)
+                         WHERE r.fingerprint = photos.raw_file LIMIT 1)
                  FROM photos WHERE rel_path = ?1"
             ),
             [rel_path],
@@ -939,14 +961,26 @@ pub fn geo_points(
 /// one of the photo the file is listed as. So the RAW file of a JPEG + RAW
 /// pair, or the video of a Live Photo, gives the fingerprint of its JPEG.
 pub fn files(conn: &Connection) -> rusqlite::Result<Vec<(String, u64, String)>> {
+    // Which photo each paired file is shown through.
+    let mut shown_as: HashMap<String, String> = HashMap::new();
     let mut stmt = conn.prepare(
-        "SELECT p.rel_path, p.size, COALESCE(main.fingerprint, p.fingerprint)
-         FROM photos p LEFT JOIN photos main
-             ON p.part = 1 AND main.stem = p.stem AND main.part = 0
-            AND (main.raw_file = p.fingerprint OR main.live_video = p.fingerprint)",
+        "SELECT raw_file, fingerprint FROM photos WHERE raw_file IS NOT NULL
+         UNION ALL
+         SELECT live_video, fingerprint FROM photos WHERE live_video IS NOT NULL",
     )?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        shown_as.insert(row.get(0)?, row.get(1)?);
+    }
+    let mut stmt = conn.prepare("SELECT rel_path, size, fingerprint, part FROM photos")?;
     let rows = stmt.query_map([], |row| {
-        Ok((row.get(0)?, row.get::<_, i64>(1)? as u64, row.get(2)?))
+        let fingerprint: String = row.get(2)?;
+        let part: bool = row.get(3)?;
+        let listed_as = match shown_as.get(&fingerprint) {
+            Some(main) if part => main.clone(),
+            _ => fingerprint,
+        };
+        Ok((row.get(0)?, row.get::<_, i64>(1)? as u64, listed_as))
     })?;
     rows.collect()
 }
@@ -1494,9 +1528,17 @@ mod tests {
         let tx = conn.transaction().unwrap();
         upsert(&tx, &photo("match/IMG_1.JPG")).unwrap();
         upsert(&tx, &photo("match/IMG_1.CR2")).unwrap();
-        // A RAW file by itself, and one whose JPEG is in another folder.
+        // A RAW file by itself: the JPEG of the same name in another folder
+        // was taken at another time.
         upsert(&tx, &photo("match/IMG_2.NEF")).unwrap();
-        upsert(&tx, &photo("other/IMG_2.jpg")).unwrap();
+        upsert(
+            &tx,
+            &PhotoRow {
+                sort_date: 99,
+                ..photo("other/IMG_2.jpg")
+            },
+        )
+        .unwrap();
         // Two RAW files: neither stands for the other.
         upsert(&tx, &photo("match/IMG_3.cr2")).unwrap();
         upsert(&tx, &photo("match/IMG_3.dng")).unwrap();
@@ -1509,11 +1551,13 @@ mod tests {
         assert_eq!(pair_parts(&mut conn).unwrap(), 2);
         assert_eq!(pair_parts(&mut conn).unwrap(), 0);
 
-        let listed: Vec<(String, Option<String>)> = photos_page(&conn, &Listing::Library, 0, 10)
-            .unwrap()
-            .into_iter()
-            .map(|item| (item.rel_path, item.raw_file))
-            .collect();
+        let mut listed: Vec<(String, Option<String>)> =
+            photos_page(&conn, &Listing::Library, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| (item.rel_path, item.raw_file))
+                .collect();
+        listed.sort();
         let pair = |path: &str| (path.to_owned(), None::<String>);
         assert_eq!(
             listed,
@@ -1554,6 +1598,79 @@ mod tests {
         tx.commit().unwrap();
         assert_eq!(pair_parts(&mut conn).unwrap(), 1);
         assert_eq!(count(&conn).unwrap(), 7);
+    }
+
+    #[test]
+    fn raw_files_in_another_folder_pair_by_name_and_capture_time() {
+        let mut conn = open_in_memory().unwrap();
+        let shot = |rel_path: &str, sort_date: i64, exif: bool| PhotoRow {
+            fingerprint: rel_path.into(),
+            date_from_exif: exif,
+            ..dated(rel_path, sort_date)
+        };
+        let tx = conn.transaction().unwrap();
+        // Olivier's layout: the JPEGs in a folder, their RAW files in `cr2/`.
+        upsert(&tx, &shot("print/IMG_9313.JPG", 1_000, true)).unwrap();
+        upsert(&tx, &shot("print/cr2/IMG_9313.CR2", 1_000, true)).unwrap();
+        // The same name ten thousand shots later, taken at another time.
+        upsert(&tx, &shot("2023/IMG_9313.CR2", 9_000, true)).unwrap();
+        // Same name and time, but the time comes from the file, not EXIF.
+        upsert(&tx, &shot("scans/IMG_7.jpg", 5_000, false)).unwrap();
+        upsert(&tx, &shot("scans/raw/IMG_7.dng", 5_000, false)).unwrap();
+        // Same time, different names.
+        upsert(&tx, &shot("print/IMG_9314.JPG", 2_000, true)).unwrap();
+        upsert(&tx, &shot("print/cr2/IMG_9315.CR2", 2_000, true)).unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(pair_parts(&mut conn).unwrap(), 2);
+        let mut listed: Vec<(String, Option<String>)> =
+            photos_page(&conn, &Listing::Library, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| (item.rel_path, item.raw_file))
+                .collect();
+        listed.sort();
+        let alone = |path: &str| (path.to_owned(), None::<String>);
+        assert_eq!(
+            listed,
+            [
+                alone("2023/IMG_9313.CR2"),
+                (
+                    "print/IMG_9313.JPG".to_owned(),
+                    Some("print/cr2/IMG_9313.CR2".to_owned())
+                ),
+                alone("print/IMG_9314.JPG"),
+                alone("print/cr2/IMG_9315.CR2"),
+                alone("scans/IMG_7.jpg"),
+                alone("scans/raw/IMG_7.dng"),
+            ]
+        );
+        let details = photo_details(&conn, "print/IMG_9313.JPG").unwrap().unwrap();
+        assert_eq!(details.raw_path.as_deref(), Some("print/cr2/IMG_9313.CR2"));
+        let as_listed: HashMap<String, String> = files(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|(rel_path, _, fingerprint)| (rel_path, fingerprint))
+            .collect();
+        assert_eq!(as_listed["print/cr2/IMG_9313.CR2"], "print/IMG_9313.JPG");
+
+        // Neither pairing compares every photo with every other one.
+        let plan: Vec<String> = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN SELECT i.id FROM photos r JOIN photos i
+                     ON i.sort_date = r.sort_date AND i.thumb_state != 2 AND i.part = 0
+                 WHERE {}",
+                crate::raw::is_raw_sql("r.rel_path")
+            ))
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert!(
+            plan.iter().any(|step| step.contains("SEARCH i USING")),
+            "{plan:?}"
+        );
     }
 
     #[test]
