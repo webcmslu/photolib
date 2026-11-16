@@ -1,16 +1,19 @@
 //! Scans a library folder into the local index.
 //!
-//! A scan has two phases:
-//! 1. **Scanning**: walk the folder and `stat` every image. A file whose size and
-//!    mtime match the index is left alone, which makes rescans cheap.
-//! 2. **Indexing**: fingerprint and read EXIF for the new or changed files, in
-//!    parallel, while this thread writes the results to SQLite in batches.
+//! A scan does two things at once:
+//! - **Walk**: list the folder and `stat` every image. A file whose size and
+//!   mtime match the index is left alone, which makes rescans cheap.
+//! - **Index**: fingerprint and read EXIF for the new or changed files, in
+//!   parallel, while the calling thread writes the results to SQLite.
+//!
+//! Progress says `Scanning` while the walk runs and `Indexing` once it is done
+//! and only the remaining files are being read.
 //!
 //! The scanner only ever reads the library folder.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -33,6 +36,8 @@ const SKIPPED_DIRS: &[&str] = &[
 
 const WRITE_BATCH: usize = 500;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+/// New rows become visible to the UI at least this often during a scan.
+const COMMIT_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,8 +54,9 @@ pub struct Progress {
     pub phase: Phase,
     /// Image files found so far by the walk.
     pub discovered: u64,
-    /// Items the current phase has to process: new or changed files when
-    /// indexing, photos without thumbnails when making thumbnails.
+    /// Items the current phase has to process: new or changed files found so
+    /// far when scanning or indexing, photos without thumbnails when making
+    /// thumbnails.
     pub total: u64,
     /// How many of `total` are done.
     pub done: u64,
@@ -105,7 +111,20 @@ struct Candidate {
     is_new: bool,
 }
 
+/// What the walk found, besides the candidates it handed on.
+#[derive(Default)]
+struct Walked {
+    seen: HashSet<String>,
+    unchanged: u64,
+    failed: u64,
+    unreadable_dirs: u64,
+}
+
 /// Brings the index in `conn` up to date with the folder at `root`.
+///
+/// The walk, the file reading and the database writes run at the same time,
+/// and rows are committed at least every `COMMIT_INTERVAL`, so on a slow NAS
+/// photos show up while the folders are still being listed.
 ///
 /// Set `cancel` from another thread to stop early; whatever was done so far
 /// is kept. `on_progress` is called from this thread only.
@@ -119,136 +138,102 @@ pub fn scan(
     let mut summary = ScanSummary::default();
     let known = db::load_known(conn)?;
 
-    // Phase 1: walk.
-    let mut seen: HashSet<String> = HashSet::with_capacity(known.len());
-    let mut todo: Vec<Candidate> = Vec::new();
-    let mut discovered = 0u64;
-    let mut last_progress = Instant::now();
+    // Shared with the walker thread, read here for the progress reports.
+    let discovered = AtomicU64::new(0);
+    let queued = AtomicU64::new(0);
+    let walking = AtomicBool::new(true);
 
-    let walker = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| entry.depth() == 0 || !is_skipped(entry));
+    let walked = std::thread::scope(|scope| -> Result<Walked, ScanError> {
+        let (candidate_tx, candidate_rx) = mpsc::sync_channel::<Candidate>(WRITE_BATCH);
+        let (row_tx, row_rx) = mpsc::sync_channel::<(bool, Option<PhotoRow>)>(WRITE_BATCH);
 
-    for entry in walker {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) if e.depth() == 0 => return Err(ScanError::RootUnreachable(e.to_string())),
-            Err(_) => {
-                summary.unreadable_dirs += 1;
-                continue;
-            }
-        };
-        if !entry.file_type().is_file() || metadata::kind_of(entry.path()).is_none() {
-            continue;
-        }
-        let Some(rel_path) = relative_path(root, entry.path()) else {
-            summary.failed += 1; // name is not valid Unicode
-            continue;
-        };
-        discovered += 1;
-        seen.insert(rel_path.clone());
-
-        let Ok(meta) = entry.metadata() else {
-            summary.failed += 1;
-            continue;
-        };
-        let size = meta.len();
-        let mtime_ms = meta.modified().map(unix_ms).unwrap_or(0);
-
-        match known.get(&rel_path) {
-            Some(&(known_size, known_mtime)) if known_size == size && known_mtime == mtime_ms => {
-                summary.unchanged += 1;
-            }
-            previous => todo.push(Candidate {
-                abs_path: entry.into_path(),
-                rel_path,
-                size,
-                mtime_ms,
-                is_new: previous.is_none(),
-            }),
-        }
-
-        if last_progress.elapsed() >= PROGRESS_INTERVAL {
-            last_progress = Instant::now();
-            on_progress(Progress {
-                phase: Phase::Scanning,
-                discovered,
-                total: 0,
-                done: 0,
-            });
-        }
-    }
-
-    // Phase 2: index new and changed files. Workers read files in parallel and
-    // send rows over a bounded channel; this thread is the only database writer.
-    let total = todo.len() as u64;
-    let mut done = 0u64;
-    on_progress(Progress {
-        phase: Phase::Indexing,
-        discovered,
-        total,
-        done,
-    });
-
-    let write_result = std::thread::scope(|scope| -> rusqlite::Result<()> {
-        let (sender, receiver) = mpsc::sync_channel::<(bool, Option<PhotoRow>)>(WRITE_BATCH);
-        let todo = &todo;
-        scope.spawn(move || {
-            todo.par_iter().for_each_with(sender, |sender, candidate| {
-                if cancel.load(Ordering::Relaxed) {
-                    return;
-                }
-                // A send error means the writer stopped; nothing left to do.
-                let _ = sender.send((candidate.is_new, index_file(candidate)));
-            });
+        let (known, discovered, queued, walking) = (&known, &discovered, &queued, &walking);
+        let walker = scope.spawn(move || {
+            let result = walk(root, known, cancel, discovered, queued, candidate_tx);
+            walking.store(false, Ordering::Relaxed);
+            result
         });
 
+        // Workers read files in parallel as the walk hands them over.
+        scope.spawn(move || {
+            let _ = candidate_rx.into_iter().par_bridge().try_for_each_with(
+                row_tx,
+                |row_tx, candidate| {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(());
+                    }
+                    // A send error means the writer stopped: stop too, which
+                    // in turn stops the walk.
+                    row_tx
+                        .send((candidate.is_new, index_file(&candidate)))
+                        .map_err(|_| ())
+                },
+            );
+        });
+
+        // This thread is the only database writer.
+        let mut done = 0u64;
         let mut pending = 0usize;
+        let mut last_commit = Instant::now();
+        let mut last_progress = Instant::now();
+        let mut reported_walk_end = false;
         let mut tx = conn.transaction()?;
-        for (is_new, row) in receiver {
-            match row {
-                Some(row) => {
+        loop {
+            match row_rx.recv_timeout(PROGRESS_INTERVAL) {
+                Ok((is_new, Some(row))) => {
                     db::upsert(&tx, &row)?;
                     if is_new {
                         summary.added += 1;
                     } else {
                         summary.updated += 1;
                     }
+                    done += 1;
+                    pending += 1;
                 }
-                None => summary.failed += 1,
+                Ok((_, None)) => {
+                    summary.failed += 1;
+                    done += 1;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
-            done += 1;
-            pending += 1;
-            if pending >= WRITE_BATCH {
+            if pending >= WRITE_BATCH || (pending > 0 && last_commit.elapsed() >= COMMIT_INTERVAL) {
                 tx.commit()?;
                 tx = conn.transaction()?;
                 pending = 0;
+                last_commit = Instant::now();
             }
-            if last_progress.elapsed() >= PROGRESS_INTERVAL {
+            let still_walking = walking.load(Ordering::Relaxed);
+            let walk_just_ended = !still_walking && !reported_walk_end;
+            if walk_just_ended || last_progress.elapsed() >= PROGRESS_INTERVAL {
+                reported_walk_end |= walk_just_ended;
                 last_progress = Instant::now();
                 on_progress(Progress {
-                    phase: Phase::Indexing,
-                    discovered,
-                    total,
+                    phase: if still_walking {
+                        Phase::Scanning
+                    } else {
+                        Phase::Indexing
+                    },
+                    discovered: discovered.load(Ordering::Relaxed),
+                    total: queued.load(Ordering::Relaxed),
                     done,
                 });
             }
         }
-        tx.commit()
-    });
-    write_result?;
+        tx.commit()?;
+        walker.join().expect("the folder walk panicked")
+    })?;
 
+    summary.unchanged = walked.unchanged;
+    summary.failed += walked.failed;
+    summary.unreadable_dirs = walked.unreadable_dirs;
     summary.cancelled = cancel.load(Ordering::Relaxed);
 
     // Forget files that are gone, but only after a complete, clean walk.
     // Otherwise an unplugged drive would look like "everything was deleted".
     if !summary.cancelled && summary.unreadable_dirs == 0 {
         let tx = conn.transaction()?;
-        for rel_path in known.keys().filter(|path| !seen.contains(*path)) {
+        for rel_path in known.keys().filter(|path| !walked.seen.contains(*path)) {
             db::delete(&tx, rel_path)?;
             summary.removed += 1;
         }
@@ -268,6 +253,76 @@ pub fn scan(
     summary.total = db::count(conn)?;
     summary.duration_ms = started.elapsed().as_millis() as u64;
     Ok(summary)
+}
+
+/// Walks the folder and `stat`s every image, sending the new and changed ones
+/// to `candidates`. Files that match the index are only counted.
+fn walk(
+    root: &Path,
+    known: &HashMap<String, (u64, i64)>,
+    cancel: &AtomicBool,
+    discovered: &AtomicU64,
+    queued: &AtomicU64,
+    candidates: mpsc::SyncSender<Candidate>,
+) -> Result<Walked, ScanError> {
+    let mut walked = Walked {
+        seen: HashSet::with_capacity(known.len()),
+        ..Walked::default()
+    };
+    let walker = WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| entry.depth() == 0 || !is_skipped(entry));
+
+    for entry in walker {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) if e.depth() == 0 => return Err(ScanError::RootUnreachable(e.to_string())),
+            Err(_) => {
+                walked.unreadable_dirs += 1;
+                continue;
+            }
+        };
+        if !entry.file_type().is_file() || metadata::kind_of(entry.path()).is_none() {
+            continue;
+        }
+        let Some(rel_path) = relative_path(root, entry.path()) else {
+            walked.failed += 1; // name is not valid Unicode
+            continue;
+        };
+        discovered.fetch_add(1, Ordering::Relaxed);
+        walked.seen.insert(rel_path.clone());
+
+        let Ok(meta) = entry.metadata() else {
+            walked.failed += 1;
+            continue;
+        };
+        let size = meta.len();
+        let mtime_ms = meta.modified().map(unix_ms).unwrap_or(0);
+
+        match known.get(&rel_path) {
+            Some(&(known_size, known_mtime)) if known_size == size && known_mtime == mtime_ms => {
+                walked.unchanged += 1;
+            }
+            previous => {
+                let candidate = Candidate {
+                    abs_path: entry.into_path(),
+                    rel_path,
+                    size,
+                    mtime_ms,
+                    is_new: previous.is_none(),
+                };
+                queued.fetch_add(1, Ordering::Relaxed);
+                if candidates.send(candidate).is_err() {
+                    break; // the writer stopped (database error)
+                }
+            }
+        }
+    }
+    Ok(walked)
 }
 
 /// Reads one file. `None` means it could not be read.

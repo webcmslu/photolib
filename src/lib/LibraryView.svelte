@@ -71,6 +71,8 @@
   // svelte-ignore state_referenced_locally
   let writable = $state(library.writable);
   let lastLiveRefresh = 0;
+  /** `progress.done` at the last live refresh, so a scan with nothing new does not reload. */
+  let liveRefreshDone = 0;
   let lastScanStart = Date.now();
 
   onMount(() => {
@@ -112,14 +114,24 @@
       case "running": {
         scanning = true;
         progress = event.progress;
+        // New photos are written while the folders are still being walked,
+        // so show them as they come instead of waiting for the walk to end.
+        const { phase, done } = event.progress;
         const now = Date.now();
-        if (event.progress.phase === "indexing" && now - lastLiveRefresh > LIVE_REFRESH_MS) {
+        if (
+          (phase === "scanning" || phase === "indexing") &&
+          done > liveRefreshDone &&
+          now - lastLiveRefresh > LIVE_REFRESH_MS
+        ) {
           lastLiveRefresh = now;
+          liveRefreshDone = done;
           refreshAll();
         }
         break;
       }
       case "online":
+        // Sent at the start of every scan.
+        liveRefreshDone = 0;
         online = true;
         writable = event.writable;
         break;
