@@ -13,6 +13,10 @@
 #   APPLE_SIGNING_IDENTITY       e.g. "Developer ID Application: Name (TEAMID)"
 #   APPLE_ID, APPLE_PASSWORD     Apple ID and an app-specific password
 #   APPLE_TEAM_ID
+# The macOS jobs check the certificate and its password before building.
+# To set the two together, from the folder holding the exported .p12:
+#   base64 -i certificate.p12 | gh secret set APPLE_CERTIFICATE
+#   gh secret set APPLE_CERTIFICATE_PASSWORD      (asks for it; type or paste)
 name: Release
 
 on:
@@ -92,10 +96,79 @@ jobs:
             echo "No signing certificate configured: building unsigned."
             exit 0
           fi
+
+          # Check the certificate and its password now, the way the build
+          # will use them, rather than after a five-minute build. Nothing
+          # secret is printed.
+          cert="$RUNNER_TEMP/certificate.p12"
+          if ! printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$cert" 2>/dev/null; then
+            echo "::error::APPLE_CERTIFICATE is not valid base64. Set it again with: base64 -i certificate.p12 | gh secret set APPLE_CERTIFICATE"
+            exit 1
+          fi
+          echo "Certificate: $(wc -c < "$cert" | tr -d ' ') bytes (compare with the size of your .p12 file)."
+          keychain="$RUNNER_TEMP/check.keychain-db"
+          security create-keychain -p check "$keychain"
+          imports() { # file password
+            security import "$1" -k "$keychain" -P "$2" -T /usr/bin/codesign > /dev/null 2>&1
+          }
+          # Apple's `security` cannot read a .p12 in the format OpenSSL 3 and
+          # later write by default, and says "wrong password" about it. If
+          # OpenSSL opens the file, rewrite it in the older format.
+          ossl=""
+          for candidate in "$(brew --prefix openssl@3 2>/dev/null)/bin/openssl" "$(command -v openssl)"; do
+            if [ -x "$candidate" ] && "$candidate" version | grep -qE '^OpenSSL [3-9]'; then
+              ossl="$candidate"
+              break
+            fi
+          done
+          converts() { # password
+            [ -n "$ossl" ] || return 1
+            local pem="$RUNNER_TEMP/certificate.pem" legacy="$RUNNER_TEMP/legacy.p12"
+            PASS="$1" "$ossl" pkcs12 -in "$cert" -nodes -passin env:PASS -out "$pem" 2>/dev/null &&
+              PASS="$1" "$ossl" pkcs12 -export -legacy -in "$pem" -out "$legacy" -passout env:PASS 2>/dev/null &&
+              imports "$legacy" "$1" &&
+              APPLE_CERTIFICATE="$(base64 -i "$legacy")"
+            local result=$?
+            rm -f "$pem" "$legacy"
+            return $result
+          }
+          # A password pasted with a trailing newline or space is the usual
+          # slip: accept it without them, and say so.
+          trimmed="$(printf '%s' "$APPLE_CERTIFICATE_PASSWORD" | sed -e 's/[[:space:]]*$//')"
+          found=""
+          for password in "$APPLE_CERTIFICATE_PASSWORD" "$trimmed"; do
+            if imports "$cert" "$password"; then
+              found="as is"
+            elif converts "$password"; then
+              found="converted"
+              echo "::warning::The .p12 file is in a format macOS cannot import (written by OpenSSL 3 or later); it was converted for this build. Export it with the legacy option to avoid this."
+            fi
+            if [ -n "$found" ]; then
+              if [ "$password" != "$APPLE_CERTIFICATE_PASSWORD" ]; then
+                echo "::warning::APPLE_CERTIFICATE_PASSWORD ends with spaces or a newline; using it without them."
+                APPLE_CERTIFICATE_PASSWORD="$password"
+              fi
+              break
+            fi
+          done
+          security delete-keychain "$keychain"
+          rm -f "$cert"
+          if [ -z "$found" ]; then
+            echo "::error::APPLE_CERTIFICATE_PASSWORD does not open APPLE_CERTIFICATE. They must come from the same export of the .p12 file: export it again from Keychain Access, then set both secrets (see the header of this file)."
+            exit 1
+          fi
+          echo "The certificate and its password work."
+
+          # The multi-line form keeps values intact whatever they contain.
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
                       APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
             if [ -n "${!name}" ]; then
-              echo "$name=${!name}" >> "$GITHUB_ENV"
+              delimiter="END_$(openssl rand -hex 8)"
+              {
+                echo "$name<<$delimiter"
+                printf '%s\n' "${!name}"
+                echo "$delimiter"
+              } >> "$GITHUB_ENV"
             fi
           done
 
