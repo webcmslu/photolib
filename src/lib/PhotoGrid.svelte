@@ -10,9 +10,10 @@
   several cells wide and two rows high, with the others flowing around it.
 -->
 <script lang="ts">
-  import { thumbUrl, type DayGroup } from "./api";
+  import { thumbUrl, type DayGroup, type PhotoItem } from "./api";
   import { formatDay, formatDuration, formatMonth, formatNumber, monthKey, rawPairLabel } from "./format";
   import EditedImage from "./EditedImage.svelte";
+  import { NO_EDIT, place as placeEdited } from "./edit";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -29,6 +30,10 @@
     cellSize?: number;
     /** A day (days since 1970) to start scrolled to. */
     startAt?: number | null;
+    /** "square" crops each photo to fill its cell; "whole" shows all of it. */
+    fit?: "square" | "whole";
+    /** Told the oldest and newest day on screen whenever they change. */
+    onrange?: (range: { oldest: number; newest: number } | null) => void;
   }
   let {
     groups,
@@ -38,7 +43,27 @@
     ontoggle,
     cellSize = 150,
     startAt = null,
+    fit = "square",
+    onrange,
   }: Props = $props();
+
+  /**
+   * The part of a cell the photo takes: all of it when cropped to a square,
+   * else the photo's own shape (after any edit) centered in the cell. The
+   * badges and the checkbox sit on this frame, so they follow the photo.
+   */
+  function frameOf(photo: PhotoItem | undefined, width: number, height: number) {
+    if (fit === "square" || !photo?.width || !photo?.height) {
+      return { left: 0, top: 0, width, height };
+    }
+    const shown = placeEdited(photo.edit ?? NO_EDIT, photo.width, photo.height, width, height, "contain");
+    return {
+      left: (width - shown.clipWidth) / 2,
+      top: (height - shown.clipHeight) / 2,
+      width: shown.clipWidth,
+      height: shown.clipHeight,
+    };
+  }
 
   /** A plain click opens a photo, unless a selection is under way. */
   function onclick(event: MouseEvent, index: number) {
@@ -157,6 +182,23 @@
     }
     return low;
   }
+
+  /** The days on screen (the sections are newest first). */
+  const shownDays = $derived.by(() => {
+    const { sections } = layout;
+    const bottom = scrollTop + clientHeight;
+    let newest: number | null = null;
+    let oldest: number | null = null;
+    for (let s = sectionAt(scrollTop); s < sections.length; s++) {
+      const section = sections[s];
+      if (section.top >= bottom) break;
+      if (section.top + section.height <= scrollTop) continue;
+      newest ??= section.day;
+      oldest = section.day;
+    }
+    return newest === null || oldest === null ? null : { oldest, newest };
+  });
+  $effect(() => onrange?.(shownDays));
 
   const visible = $derived.by(() => {
     const { sections, columns, cell, pitch } = layout;
@@ -288,12 +330,13 @@
     {#each visible.cells as cell (cell.index)}
       {@const photo = pages.get(cell.index)}
       {@const isSelected = selected.has(cell.index)}
+      {@const frame = frameOf(photo, cell.width, cell.height)}
       <div
         class="cell"
         class:selected={isSelected}
-        style:transform="translate({cell.x}px, {cell.y}px)"
-        style:width="{cell.width}px"
-        style:height="{cell.height}px"
+        style:transform="translate({cell.x + frame.left}px, {cell.y + frame.top}px)"
+        style:width="{frame.width}px"
+        style:height="{frame.height}px"
       >
         <button
           class="open"

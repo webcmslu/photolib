@@ -29,12 +29,13 @@
     type LibraryInfo,
     type Listing,
     type MonthSummary,
+    type Only,
     type Op,
     type ScanProgress,
     type ScanSummary,
     type ThumbSummary,
   } from "./api";
-  import { formatNumber, photoCount } from "./format";
+  import { formatDayRange, formatNumber, photoCount } from "./format";
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
   import PeopleView from "./PeopleView.svelte";
@@ -350,6 +351,7 @@
   });
 
   const emptyText = $derived.by(() => {
+    if (only) return "Nothing here matches the filter.";
     switch (listing.kind) {
       case "favorites":
         return "No favorites yet. Open a photo and press the heart, or select photos in the grid.";
@@ -366,7 +368,29 @@
 
   // --- The listing on screen ---------------------------------------------------
 
-  const pages = $derived(new PhotoPages(library.path, listing));
+  /**
+   * The filter menu's choice. It belongs to the listing it was chosen for,
+   * so opening another album or folder shows all of it again.
+   */
+  let filter = $state.raw<{ listing: Listing; only: Only } | null>(null);
+  const only = $derived(filter?.listing === listing ? filter.only : null);
+  let filterMenuOpen = $state(false);
+  const FILTERS: [Only | null, string][] = [
+    [null, "All Items"],
+    ["favorites", "Favorites"],
+    ["edited", "Edited"],
+    ["photos", "Photos"],
+    ["videos", "Videos"],
+    ["notInAlbum", "Not in an Album"],
+  ];
+  function chooseFilter(choice: Only | null) {
+    filter = choice === null ? null : { listing, only: choice };
+    filterMenuOpen = false;
+  }
+
+  const pages = $derived(
+    new PhotoPages(library.path, only ? { kind: "only", within: listing, only } : listing),
+  );
   let groups = $state<DayGroup[]>([]);
   /** False until the first timeline for the current listing has arrived. */
   let groupsLoaded = $state(false);
@@ -387,6 +411,20 @@
   /** The width the grid's cells aim for: the zoom level. */
   let cellSize = $state(remembered("photolib.cellSize", 150, CELL_MIN, CELL_MAX));
   $effect(() => localStorage.setItem("photolib.cellSize", String(cellSize)));
+  /** The days on screen in the grid, shown under the title. */
+  let shownRange = $state<{ oldest: number; newest: number } | null>(null);
+  function setShownRange(range: { oldest: number; newest: number } | null) {
+    // Called on every scroll: only a real change re-renders the toolbar.
+    if (range?.oldest !== shownRange?.oldest || range?.newest !== shownRange?.newest) {
+      shownRange = range;
+    }
+  }
+
+  /** Square thumbnails, or each photo in its own shape. */
+  let gridFit = $state<"square" | "whole">(
+    localStorage.getItem("photolib.gridFit") === "whole" ? "whole" : "square",
+  );
+  $effect(() => localStorage.setItem("photolib.gridFit", gridFit));
 
   const SIDEBAR_MIN = 150;
   const SIDEBAR_MAX = 600;
@@ -439,6 +477,10 @@
 
   /** Ctrl/Cmd with + or - zooms the grid, like in a browser. */
   function onkeydown(event: KeyboardEvent) {
+    if (event.key === "Escape" && filterMenuOpen) {
+      filterMenuOpen = false;
+      return;
+    }
     if (!(event.ctrlKey || event.metaKey) || viewerIndex !== null) return;
     const factor = event.key === "+" || event.key === "=" ? 1.25 : event.key === "-" ? 0.8 : 0;
     if (factor === 0) return;
@@ -594,7 +636,10 @@
   }
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window
+  {onkeydown}
+  onclick={() => (filterMenuOpen = false)}
+/>
 
 <div class="library">
   <header>
@@ -851,8 +896,17 @@
           {#if listing.kind === "area"}
             <button class="secondary" onclick={() => (section = "map")}>‹ Map</button>
           {/if}
-          <strong class="title">{title}</strong>
-          {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
+          <span class="heading">
+            <span class="heading-line">
+              <strong class="title">{title}</strong>
+              {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
+            </span>
+            <!-- Always there, with a fixed width, so that scrolling never
+                 moves the rest of the toolbar. -->
+            <span class="range" class:unused={viewMode !== "all" || !shownRange}>
+              {shownRange ? formatDayRange(shownRange.oldest, shownRange.newest) : ""}
+            </span>
+          </span>
           <span class="spacer"></span>
           <div class="segmented" role="group" aria-label="View">
             {#each [["years", "Years"], ["months", "Months"], ["all", "All Photos"]] as const as [mode, label] (mode)}
@@ -876,6 +930,54 @@
             aria-label="Thumbnail size"
             title="Thumbnail size (Ctrl/Cmd + and -)"
           />
+          <span class="menu-anchor">
+            <button
+              class="secondary icon"
+              class:active={only !== null}
+              aria-haspopup="menu"
+              aria-expanded={filterMenuOpen}
+              onclick={(event) => {
+                event.stopPropagation();
+                filterMenuOpen = !filterMenuOpen;
+              }}
+              title={only ? `Showing: ${FILTERS.find(([value]) => value === only)?.[1]}` : "Filter"}
+              aria-label="Filter"
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M2 4h12M4 8h8M6 12h4" />
+              </svg>
+            </button>
+            {#if filterMenuOpen}
+              <div class="menu" role="menu">
+                {#each FILTERS as [value, label] (label)}
+                  <button
+                    role="menuitemradio"
+                    aria-checked={only === value}
+                    onclick={() => chooseFilter(value)}
+                  >
+                    <span class="mark">{only === value ? "✓" : ""}</span>{label}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </span>
+          <button
+            class="secondary icon"
+            class:unused={viewMode !== "all"}
+            disabled={viewMode !== "all"}
+            aria-pressed={gridFit === "whole"}
+            onclick={() => (gridFit = gridFit === "square" ? "whole" : "square")}
+            title={gridFit === "square" ? "Show whole photos" : "Show square thumbnails"}
+            aria-label="Show thumbnails as squares or as whole photos"
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              {#if gridFit === "square"}
+                <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+              {:else}
+                <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+              {/if}
+            </svg>
+          </button>
           {#if currentAlbum}
             {#if confirmingDelete}
               <span class="dim">Delete this album? The photos stay in the library.</span>
@@ -919,6 +1021,8 @@
             {pages}
             {selected}
             {cellSize}
+            fit={gridFit}
+            onrange={setShownRange}
             startAt={startDay}
             onopen={(index) => (viewerIndex = index)}
             ontoggle={toggleSelected}
@@ -1180,8 +1284,70 @@
     width: 120px;
   }
 
-  .toolbar input.zoom.unused {
+  .toolbar input.zoom.unused,
+  .toolbar button.unused {
     visibility: hidden;
+  }
+
+  .toolbar button.icon {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 6px;
+  }
+
+  .toolbar button.icon.active {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .menu-anchor {
+    position: relative;
+  }
+
+  .menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    min-width: 190px;
+    padding: 5px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    box-shadow: 0 8px 28px rgb(0 0 0 / 0.22);
+  }
+
+  .menu button {
+    display: flex;
+    align-items: center;
+    padding: 6px 10px 6px 4px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .menu button:hover,
+  .menu button:focus-visible {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .menu .mark {
+    width: 20px;
+    text-align: center;
+  }
+
+  .toolbar button.icon svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.4;
   }
 
   nav h2 {
@@ -1376,6 +1542,34 @@
 
   .toolbar input {
     width: 280px;
+  }
+
+  .heading {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .heading-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .range {
+    width: 17em;
+    min-height: 1.2em;
+    overflow: hidden;
+    color: var(--text-dim);
+    font-size: 11px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .range.unused {
+    visibility: hidden;
   }
 
   .title {

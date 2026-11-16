@@ -511,6 +511,41 @@ pub enum Listing {
         north: f64,
         east: f64,
     },
+    /// Another listing narrowed down by the filter menu.
+    Only {
+        within: Box<Listing>,
+        only: Only,
+    },
+}
+
+/// What the filter menu can narrow a listing down to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Only {
+    Favorites,
+    Edited,
+    Photos,
+    Videos,
+    NotInAlbum,
+}
+
+impl Only {
+    fn condition(self) -> String {
+        match self {
+            Only::Favorites => IS_FAVORITE.to_owned(),
+            Only::Edited => "fingerprint IN (SELECT key FROM org_state
+                                 WHERE kind = 'edit' AND value != '')"
+                .to_owned(),
+            Only::Photos => "kind = 0".to_owned(),
+            Only::Videos => "kind = 1".to_owned(),
+            Only::NotInAlbum => "fingerprint NOT IN (
+                     SELECT m.photo FROM org_state m
+                     WHERE m.kind = 'member' AND m.value = '1'
+                       AND NOT EXISTS (SELECT 1 FROM org_state d
+                           WHERE d.kind = 'album_deleted' AND d.key = m.key AND d.value = '1'))"
+                .to_owned(),
+        }
+    }
 }
 
 const IS_HIDDEN: &str =
@@ -582,6 +617,10 @@ impl Listing {
                     "0".to_owned()
                 };
                 (format!("WHERE {visible} AND {inside} AND ?1 IS NULL"), None)
+            }
+            Listing::Only { within, only } => {
+                let (filter, param) = within.filter();
+                (format!("{filter} AND {}", only.condition()), param)
             }
         }
     }
@@ -1642,6 +1681,100 @@ mod tests {
             }
         );
         assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);
+    }
+
+    #[test]
+    fn listings_can_be_narrowed_down() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for name in [
+            "fav.jpg",
+            "edited.jpg",
+            "in-album.jpg",
+            "in-deleted-album.jpg",
+        ] {
+            upsert(
+                &tx,
+                &PhotoRow {
+                    fingerprint: name.into(),
+                    ..row(name, 1)
+                },
+            )
+            .unwrap();
+        }
+        let mut clip = video("clip.mov", "clip.mov", false);
+        clip.duration_ms = Some(60_000);
+        upsert(&tx, &clip).unwrap();
+        let ops = [
+            Op::Fav {
+                photo: "fav.jpg".into(),
+                on: true,
+            },
+            Op::Edit {
+                photo: "edited.jpg".into(),
+                edit: Some(crate::org::Edit {
+                    rotate: 90,
+                    ..crate::org::Edit::default()
+                }),
+            },
+            Op::AlbumMember {
+                album: "trip".into(),
+                photo: "in-album.jpg".into(),
+                on: true,
+            },
+            Op::AlbumMember {
+                album: "trip".into(),
+                photo: "clip.mov".into(),
+                on: true,
+            },
+            Op::AlbumMember {
+                album: "gone".into(),
+                photo: "in-deleted-album.jpg".into(),
+                on: true,
+            },
+            Op::AlbumDeleted {
+                album: "gone".into(),
+                on: true,
+            },
+        ];
+        for op in ops {
+            apply_event(&tx, "device", &Event { ts: 1, op }).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let listed = |within: Listing, only: Only| -> Vec<String> {
+            let listing = Listing::Only {
+                within: Box::new(within),
+                only,
+            };
+            let mut paths: Vec<String> = photos_page(&conn, &listing, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.rel_path)
+                .collect();
+            paths.sort();
+            // The other queries of a listing take it too.
+            let per_day: u32 = timeline(&conn, &listing)
+                .unwrap()
+                .iter()
+                .map(|g| g.count)
+                .sum();
+            assert_eq!(per_day as usize, paths.len());
+            paths
+        };
+        assert_eq!(listed(Listing::Library, Only::Favorites), ["fav.jpg"]);
+        assert_eq!(listed(Listing::Library, Only::Edited), ["edited.jpg"]);
+        assert_eq!(listed(Listing::Library, Only::Videos), ["clip.mov"]);
+        assert_eq!(listed(Listing::Library, Only::Photos).len(), 4);
+        assert_eq!(
+            listed(Listing::Library, Only::NotInAlbum),
+            ["edited.jpg", "fav.jpg", "in-deleted-album.jpg"]
+        );
+        let trip = || Listing::Album {
+            album: "trip".into(),
+        };
+        assert_eq!(listed(trip(), Only::Photos), ["in-album.jpg"]);
+        assert_eq!(listed(trip(), Only::Videos), ["clip.mov"]);
     }
 
     #[test]

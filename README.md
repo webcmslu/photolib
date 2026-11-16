@@ -53,6 +53,11 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   `.photoslibrary` (read-only) and brings its favorites, hidden photos and
   albums over, for the photos that are also in the library folder. Photos in
   its "Recently Deleted" are hidden, unless a copy is still in Photos.
+- After the milestones, closer to Apple Photos: Months show each month's
+  busiest days as cards, Years are square cards that zoom into their months,
+  and All Photos has a filter menu (favorites, edited, photos, videos, not in
+  an album), square or whole-photo thumbnails, and the dates on screen under
+  the title.
 
 ## Develop
 

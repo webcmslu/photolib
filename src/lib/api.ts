@@ -238,7 +238,12 @@ export type Listing =
   /** The photos that match what was typed in the search box. */
   | { kind: "search"; query: string }
   /** The photos taken inside a rectangle on the map. */
-  | { kind: "area"; south: number; west: number; north: number; east: number };
+  | { kind: "area"; south: number; west: number; north: number; east: number }
+  /** Another listing narrowed down by the filter menu. */
+  | { kind: "only"; within: Listing; only: Only };
+
+/** What the filter menu can narrow a listing down to. Mirrors `Only`. */
+export type Only = "favorites" | "edited" | "photos" | "videos" | "notInAlbum";
 
 /** Day groups of a listing, newest first. */
 export function timeline(path: string, listing: Listing): Promise<DayGroup[]> {

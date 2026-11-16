@@ -21,7 +21,19 @@ const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
   timeZone: "UTC",
 });
 
+const shortDateFormat = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeZone: "UTC",
+});
+
 export const formatNumber = (value: number) => numberFormat.format(value);
+
+/** "Dec 28, 2024 – Jan 1, 2025", or a single date, from two day numbers. */
+export function formatDayRange(first: number, last: number): string {
+  return first === last
+    ? shortDateFormat.format(first * DAY_MS)
+    : shortDateFormat.formatRange(first * DAY_MS, last * DAY_MS);
+}
 
 /** "Sunday, 14 July" for a day number (days since 1970-01-01). */
 export const formatDay = (day: number) => dayFormat.format(day * DAY_MS);
