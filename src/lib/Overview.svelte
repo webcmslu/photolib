@@ -4,7 +4,8 @@
   - "years": a square card per year, with a cover photo.
   - "months": each month shows its busiest days (at most four) as cards with
     the day of the month in the corner. The busiest day gets the large card
-    when there are three or four; one or two days share the width evenly.
+    when there are three or four, on the left and on the right in turn; one
+    or two days share the width evenly.
 
   Clicking a year zooms into the months at that year. Clicking a day, or a
   month's title, opens the photo grid there.
@@ -39,6 +40,21 @@
     const busiest = entry.days.reduce((best, day) => (day.count > best.count ? day : best));
     return [busiest, ...entry.days.filter((day) => day !== busiest)];
   }
+
+  /**
+   * The months whose large card goes on the right: every other month that
+   * has one, counted down the page, as in Apple Photos.
+   */
+  const mirrored = $derived.by(() => {
+    const keys = new Set<number>();
+    let large = 0;
+    for (const entry of months) {
+      if (entry.days.length <= 2) continue;
+      if (large % 2 === 1) keys.add(entry.year * 12 + entry.month);
+      large++;
+    }
+    return keys;
+  });
 
   const years = $derived.by(() => {
     // Each year shows the cover of its busiest day.
@@ -104,7 +120,11 @@
           <button class="title" onclick={() => onday(lastDay(entry))}>{monthTitle(entry)}</button>
           <span class="count">{photoCount(entry.count)}</span>
         </h2>
-        <div class="days" data-cards={entry.days.length}>
+        <div
+          class="days"
+          class:mirrored={mirrored.has(entry.year * 12 + entry.month)}
+          data-cards={entry.days.length}
+        >
           {#each cards(entry) as day, position (day.day)}
             <button
               class="card"
@@ -273,6 +293,15 @@
     grid-row: 1 / -1;
   }
 
+  /* Every other such month: the stacked cards on the left. */
+  .days.mirrored {
+    grid-template-columns: 1fr 2.4fr;
+  }
+
+  .mirrored .large {
+    grid-column: 2;
+  }
+
   .day-label {
     padding: 10px 12px;
     font-size: 15px;
@@ -300,8 +329,10 @@
       aspect-ratio: 3 / 2;
     }
 
-    .large {
+    .large,
+    .mirrored .large {
       grid-row: auto;
+      grid-column: auto;
     }
   }
 
