@@ -164,6 +164,17 @@ jobs:
           fi
           echo "The certificate and its password work."
 
+          # Notarization logs in to Apple with these; check them now too.
+          if [ -n "$APPLE_ID" ]; then
+            if xcrun notarytool history --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" \
+                 --team-id "$APPLE_TEAM_ID" > /dev/null 2>&1; then
+              echo "The notarization login works."
+            else
+              echo "::error::Apple refused the notarization login. APPLE_ID must be the Apple ID's email, APPLE_PASSWORD an app-specific password made at appleid.apple.com (not the account password), and APPLE_TEAM_ID 7LMT79E5E4."
+              exit 1
+            fi
+          fi
+
           # The multi-line form keeps values intact whatever they contain.
           for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY \
                       APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
