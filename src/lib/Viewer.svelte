@@ -66,6 +66,37 @@
   let photo = $state<PhotoItem | undefined>();
   let details = $state<PhotoDetails | null>(null);
   let showInfo = $state(false);
+
+  // --- The filmstrip under the photo, as in Windows Photos ---------------------
+
+  /** Shown unless switched off (T), remembered. */
+  let showStrip = $state(localStorage.getItem("photolib.filmstrip") !== "off");
+  $effect(() => localStorage.setItem("photolib.filmstrip", showStrip ? "on" : "off"));
+  /** Thumbnails on each side of the current photo. */
+  const STRIP_REACH = 40;
+  const stripFirst = $derived(Math.max(0, index - STRIP_REACH));
+  const stripLast = $derived(Math.min(total - 1, index + STRIP_REACH));
+  const stripIndices = $derived(
+    Array.from({ length: Math.max(0, stripLast - stripFirst + 1) }, (_, i) => stripFirst + i),
+  );
+  let strip = $state<HTMLDivElement>();
+  /** The strip the centering was last done in: a new one jumps, no glide. */
+  let centeredIn: HTMLDivElement | undefined;
+  $effect(() => {
+    if (showStrip) pages.ensure(stripFirst, stripLast);
+  });
+  // Keeps the current photo's thumbnail in the middle of the strip.
+  $effect(() => {
+    void index;
+    void stripIndices;
+    const current = strip?.querySelector<HTMLElement>(".thumb.current");
+    if (!strip || !current) return;
+    strip.scrollTo({
+      left: current.offsetLeft - (strip.clientWidth - current.offsetWidth) / 2,
+      behavior: centeredIn === strip ? "smooth" : "instant",
+    });
+    centeredIn = strip;
+  });
   /** Fingerprint whose full-size image has loaded. */
   let fullSizeReady = $state<string | null>(null);
 
@@ -401,6 +432,9 @@
       case "i":
         showInfo = !showInfo;
         break;
+      case "t":
+        showStrip = !showStrip;
+        break;
       case "f":
         toggleFullscreen();
         break;
@@ -481,6 +515,9 @@
         title="Zoom in (+)">+</button
       >
       <button onclick={toggleFullscreen} title="Full screen (F)">⛶</button>
+      <button onclick={() => (showStrip = !showStrip)} aria-pressed={showStrip} title="Filmstrip (T)">
+        ▭▭▭
+      </button>
       <button onclick={() => (showInfo = !showInfo)} aria-pressed={showInfo} title="Info (I)">ⓘ</button>
     </div>
 
@@ -566,6 +603,25 @@
         <button class="nav next" onclick={() => go(1)} aria-label="Next photo">›</button>
       {/if}
     </div>
+
+    {#if showStrip && !editing && total > 1}
+      <div class="strip" bind:this={strip}>
+        {#each stripIndices as stripIndex (stripIndex)}
+          {@const item = pages.get(stripIndex)}
+          <button
+            class="thumb"
+            class:current={stripIndex === index}
+            onclick={() => (index = stripIndex)}
+            aria-label="Photo {stripIndex + 1}"
+            aria-current={stripIndex === index}
+          >
+            {#if item}
+              <img src={thumbUrl(item.fingerprint, "grid")} alt="" draggable="false" loading="lazy" />
+            {/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   {#if editing}
@@ -756,6 +812,50 @@
     white-space: nowrap;
   }
 
+  .strip {
+    flex: none;
+    display: flex;
+    gap: 4px;
+    height: 64px;
+    padding: 6px 50%;
+    overflow-x: auto;
+    scrollbar-width: none;
+    background: #000;
+  }
+
+  .strip::-webkit-scrollbar {
+    display: none;
+  }
+
+  .thumb {
+    flex: none;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 4px;
+    background: #222;
+    overflow: hidden;
+    opacity: 0.6;
+    cursor: pointer;
+  }
+
+  .thumb:hover {
+    opacity: 0.9;
+  }
+
+  .thumb.current {
+    border-color: #fff;
+    opacity: 1;
+  }
+
+  .thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
   .stage {
     flex: 1;
     min-height: 0;
@@ -774,7 +874,7 @@
 
   /* The image box fills the stage and the photo is fitted inside it, so the
      preview and the full-size photo occupy exactly the same place. */
-  img {
+  .stage img {
     position: absolute;
     inset: 0;
     width: 100%;
