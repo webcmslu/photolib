@@ -5,6 +5,11 @@
 #   GitHub release for that tag.
 # - Run manually (Actions > Release > Run workflow): builds everything and
 #   keeps the installers as workflow artifacts, without making a release.
+#   Given an existing tag, it builds that tag instead and adds the
+#   installers to its draft release (to redo a build without moving the tag).
+#
+# macOS builds use a fixed image (macos-15): jobs on `macos-latest` waited
+# in vain for a machine when that label moved to a newer image.
 #
 # macOS signing and notarization happen only when these repository secrets
 # are set; without them the app is built unsigned:
@@ -23,6 +28,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Build this existing tag (e.g. v0.1.2) and add its installers to its draft release. Empty: just build main and keep the installers as artifacts."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -31,7 +41,7 @@ jobs:
   # One draft release for the tag, made before the builds start: when each
   # build made its own, several drafts of the same version appeared.
   draft:
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || inputs.tag != ''
     runs-on: ubuntu-latest
     outputs:
       id: ${{ steps.draft.outputs.id }}
@@ -39,7 +49,7 @@ jobs:
       - id: draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           # Reuse the draft of this tag if there is one (a re-run).
           id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
@@ -65,11 +75,11 @@ jobs:
             os: ubuntu-24.04
             args: ""
           - name: macOS Apple Silicon
-            os: macos-latest
+            os: macos-15
             target: aarch64-apple-darwin
             args: "--target aarch64-apple-darwin"
           - name: macOS Intel
-            os: macos-latest
+            os: macos-15
             target: x86_64-apple-darwin
             args: "--target x86_64-apple-darwin"
           - name: Windows x64
@@ -80,6 +90,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A manual run for a tag builds that tag's code.
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -214,7 +227,7 @@ jobs:
           done
 
       - name: Build and attach to a draft release
-        if: github.ref_type == 'tag'
+        if: github.ref_type == 'tag' || inputs.tag != ''
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -223,13 +236,13 @@ jobs:
           args: ${{ matrix.args }}
 
       - name: Build only
-        if: github.ref_type != 'tag'
+        if: github.ref_type != 'tag' && inputs.tag == ''
         uses: tauri-apps/tauri-action@v0
         with:
           args: ${{ matrix.args }}
 
       - name: Keep the installers as artifacts
-        if: github.ref_type != 'tag'
+        if: github.ref_type != 'tag' && inputs.tag == ''
         uses: actions/upload-artifact@v4
         with:
           name: photolib-${{ matrix.target || runner.os }}
