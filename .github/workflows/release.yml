@@ -28,7 +28,32 @@ permissions:
   contents: write
 
 jobs:
+  # One draft release for the tag, made before the builds start: when each
+  # build made its own, several drafts of the same version appeared.
+  draft:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    outputs:
+      id: ${{ steps.draft.outputs.id }}
+    steps:
+      - id: draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # Reuse the draft of this tag if there is one (a re-run).
+          id="$(gh api "repos/$GITHUB_REPOSITORY/releases" --paginate \
+                  --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
+          if [ -z "$id" ]; then
+            id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
+                    -f tag_name="$TAG" -f name="Photolib $TAG" -F draft=true --jq .id)"
+          fi
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: draft
+    # Also runs when there is no tag, and so no draft (a manual run).
+    if: ${{ !cancelled() && needs.draft.result != 'failure' }}
     strategy:
       fail-fast: false
       matrix:
@@ -194,9 +219,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Photolib ${{ github.ref_name }}
-          releaseDraft: true
+          releaseId: ${{ needs.draft.outputs.id }}
           args: ${{ matrix.args }}
 
       - name: Build only
