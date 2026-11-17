@@ -42,6 +42,7 @@
   import { PhotoPages } from "./pages.svelte";
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
+  import Slideshow from "./Slideshow.svelte";
 
   interface Props {
     library: LibraryInfo;
@@ -518,6 +519,11 @@
 
   /** Ctrl/Cmd with + or - zooms the grid, like in a browser. */
   function onkeydown(event: KeyboardEvent) {
+    if (event.key === "F5" && !slideshow && viewerIndex === null && section === "photos") {
+      event.preventDefault();
+      startSlideshow();
+      return;
+    }
     if (event.key === "Escape" && filterMenuOpen) {
       filterMenuOpen = false;
       return;
@@ -532,6 +538,18 @@
   let grid = $state<PhotoGrid>();
   let viewerIndex = $state<number | null>(null);
   const selected = new SvelteSet<number>();
+
+  /** The running slideshow: the selected photos, or else the whole listing. */
+  let slideshow = $state<{ count: number; indexAt: (position: number) => number } | null>(null);
+  function startSlideshow() {
+    if (listedTotal === 0) return;
+    if (selected.size > 0) {
+      const order = [...selected].sort((a, b) => a - b);
+      slideshow = { count: order.length, indexAt: (position) => order[position] };
+    } else {
+      slideshow = { count: listedTotal, indexAt: (position) => position };
+    }
+  }
   let selectionAnchor: number | null = null;
 
   // Start afresh whenever something else is listed.
@@ -981,6 +999,18 @@
             aria-label="Thumbnail size"
             title="Thumbnail size (Ctrl/Cmd + and -)"
           />
+          <button
+            class="secondary icon"
+            onclick={startSlideshow}
+            disabled={listedTotal === 0}
+            title={selected.size > 0 ? "Slideshow of the selected photos (F5)" : "Slideshow (F5)"}
+            aria-label="Start a slideshow"
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+              <rect x="1.5" y="3" width="13" height="10" rx="2" />
+              <path d="M6.5 5.8v4.4L10 8z" />
+            </svg>
+          </button>
           <span class="menu-anchor">
             <button
               class="secondary icon"
@@ -1086,6 +1116,15 @@
     </main>
   </div>
 </div>
+
+{#if slideshow}
+  <Slideshow
+    {pages}
+    count={slideshow.count}
+    indexAt={slideshow.indexAt}
+    onclose={() => (slideshow = null)}
+  />
+{/if}
 
 {#if importing}
   {@const summary = importing.summary}
