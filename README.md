@@ -64,7 +64,7 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 
 ## Develop
 
-Prerequisites: Node 20+, Rust 1.85+ and the
+Prerequisites: Node 20+, Rust 1.88+ and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
 
 HEIC: macOS decodes it with its own ImageIO framework, so nothing extra is
