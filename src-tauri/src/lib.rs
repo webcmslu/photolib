@@ -699,6 +699,31 @@ fn timeline(
     .map_err(|e| e.to_string())
 }
 
+/// The end of the release file name of the installer that fits this
+/// computer, so that "a new version is available" can link straight to it.
+/// `None` when no installer is made for it.
+#[tauri::command]
+fn release_asset_suffix() -> Option<&'static str> {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("macos", "aarch64") => Some("aarch64.dmg"),
+        ("macos", "x86_64") => Some("x64.dmg"),
+        ("windows", "x86_64") => Some("x64-setup.exe"),
+        ("linux", "x86_64") => {
+            // Set by the AppImage runtime when the app runs from one.
+            if std::env::var_os("APPIMAGE").is_some() {
+                Some("amd64.AppImage")
+            } else if Path::new("/etc/debian_version").exists() {
+                Some("amd64.deb")
+            } else if Path::new("/etc/redhat-release").exists() {
+                Some("x86_64.rpm")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// The shape of every photo of a listing, in grid order (see [`db::shapes`]).
 #[tauri::command(async)]
 fn shapes(
@@ -929,6 +954,7 @@ fn sync_library(path: String, state: State<'_, AppState>) -> Result<bool, String
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             let device = org::device_id(&data_dir)?;
@@ -1000,6 +1026,7 @@ pub fn run() {
             timeline,
             photos_page,
             shapes,
+            release_asset_suffix,
             folders,
             photo_details,
             apple_import_preview,

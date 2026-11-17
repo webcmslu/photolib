@@ -9,6 +9,7 @@
     type RecentLibrary,
   } from "./lib/api";
   import LibraryView from "./lib/LibraryView.svelte";
+  import AboutButton from "./lib/AboutButton.svelte";
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
@@ -72,6 +73,7 @@
     <LibraryView {library} onclose={closeLibrary} />
   {/key}
 {:else}
+  <div class="corner"><AboutButton /></div>
   <div class="welcome">
     <h1>Photolib</h1>
     <p class="dim">Browse any folder of photos: a NAS, an external drive or a local disk.</p>
@@ -123,6 +125,12 @@
 {/if}
 
 <style>
+  .corner {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+  }
+
   .welcome {
     max-width: 560px;
     margin: 0 auto;

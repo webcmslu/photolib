@@ -45,6 +45,7 @@
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
   import Slideshow from "./Slideshow.svelte";
+  import AboutButton from "./AboutButton.svelte";
 
   interface Props {
     library: LibraryInfo;
@@ -760,6 +761,7 @@
       <span>{status}</span>
     </div>
     <button class="secondary" onclick={rescan} disabled={scanning}>Rescan</button>
+    <AboutButton />
   </header>
 
   {#if !online}
