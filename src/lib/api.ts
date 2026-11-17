@@ -165,8 +165,8 @@ export function libraryStats(path: string): Promise<LibraryStats> {
 
 /** One day of the timeline. Mirrors `DayGroup` in src-tauri/src/db.rs. */
 export interface DayGroup {
-  /** Days since 1970-01-01. */
-  day: number;
+  /** Days since 1970-01-01; null when sorted by name (one group for all). */
+  day: number | null;
   count: number;
 }
 
@@ -246,8 +246,11 @@ export type Listing =
 export type Only = "favorites" | "edited" | "photos" | "videos" | "notInAlbum";
 
 /** Day groups of a listing, newest first. */
-export function timeline(path: string, listing: Listing): Promise<DayGroup[]> {
-  return invoke("timeline", { path, listing });
+/** How the photo grid orders a listing. Mirrors `Order` in src-tauri/src/db.rs. */
+export type Order = "dateDesc" | "dateAsc" | "nameAsc" | "nameDesc";
+
+export function timeline(path: string, listing: Listing, order: Order = "dateDesc"): Promise<DayGroup[]> {
+  return invoke("timeline", { path, listing, order });
 }
 
 /** Mirrors `MonthSummary` in src-tauri/src/db.rs. */
@@ -278,10 +281,11 @@ export function listMonths(path: string, listing: Listing): Promise<MonthSummary
 export function photosPage(
   path: string,
   listing: Listing,
+  order: Order,
   offset: number,
   limit: number,
 ): Promise<PhotoItem[]> {
-  return invoke("photos_page", { path, listing, offset, limit });
+  return invoke("photos_page", { path, listing, order, offset, limit });
 }
 
 export function listFolders(path: string): Promise<FolderEntry[]> {

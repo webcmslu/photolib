@@ -1,6 +1,6 @@
 // Loads a photo listing in pages, on demand, so the grid never needs the
 // whole library in memory.
-import { photosPage, type Listing, type PhotoItem } from "./api";
+import { photosPage, type Listing, type Order, type PhotoItem } from "./api";
 
 const PAGE_SIZE = 200;
 /** Pages kept in memory (40,000 photos). The farthest ones are dropped first. */
@@ -19,6 +19,7 @@ export class PhotoPages {
   constructor(
     readonly libraryPath: string,
     readonly listing: Listing,
+    readonly order: Order = "dateDesc",
   ) {}
 
   /** The photo at `index` of the listing, if its page is loaded. Reactive. */
@@ -61,7 +62,7 @@ export class PhotoPages {
     let pending = this.#loading.get(page);
     if (!pending) {
       const generation = this.#generation;
-      pending = photosPage(this.libraryPath, this.listing, page * PAGE_SIZE, PAGE_SIZE)
+      pending = photosPage(this.libraryPath, this.listing, this.order, page * PAGE_SIZE, PAGE_SIZE)
         .then((items) => {
           if (generation !== this.#generation) return;
           this.#pages.set(page, items);

@@ -30,6 +30,7 @@
     type Listing,
     type MonthSummary,
     type Only,
+    type Order,
     type Op,
     type ScanProgress,
     type ScanSummary,
@@ -430,8 +431,24 @@
     filterMenuOpen = false;
   }
 
+  /** The grid's order, remembered for every library. */
+  const ORDERS: Order[] = ["dateDesc", "dateAsc", "nameAsc", "nameDesc"];
+  let order = $state<Order>(
+    ORDERS.find((value) => value === localStorage.getItem("photolib.order")) ?? "dateDesc",
+  );
+  $effect(() => localStorage.setItem("photolib.order", order));
+  let sortMenuOpen = $state(false);
+  const byName = $derived(order === "nameAsc" || order === "nameDesc");
+  const ascending = $derived(order === "dateAsc" || order === "nameAsc");
+  function chooseSort(by: "date" | "name" | null, up: boolean | null) {
+    const name = by === null ? byName : by === "name";
+    const asc = up === null ? ascending : up;
+    order = name ? (asc ? "nameAsc" : "nameDesc") : asc ? "dateAsc" : "dateDesc";
+    sortMenuOpen = false;
+  }
+
   const pages = $derived(
-    new PhotoPages(library.path, only ? { kind: "only", within: listing, only } : listing),
+    new PhotoPages(library.path, only ? { kind: "only", within: listing, only } : listing, order),
   );
   let groups = $state<DayGroup[]>([]);
   /** False until the first timeline for the current listing has arrived. */
@@ -524,8 +541,9 @@
       startSlideshow();
       return;
     }
-    if (event.key === "Escape" && filterMenuOpen) {
+    if (event.key === "Escape" && (filterMenuOpen || sortMenuOpen)) {
       filterMenuOpen = false;
+      sortMenuOpen = false;
       return;
     }
     if (!(event.ctrlKey || event.metaKey) || viewerIndex !== null) return;
@@ -580,7 +598,7 @@
 
   async function loadGroups(target: PhotoPages) {
     try {
-      const loaded = await timeline(target.libraryPath, target.listing);
+      const loaded = await timeline(target.libraryPath, target.listing, target.order);
       if (target !== pages) return; // something else is listed by now
       groups = loaded;
       groupsLoaded = true;
@@ -697,7 +715,10 @@
 
 <svelte:window
   {onkeydown}
-  onclick={() => (filterMenuOpen = false)}
+  onclick={() => {
+    filterMenuOpen = false;
+    sortMenuOpen = false;
+  }}
 />
 
 <div class="library">
@@ -1014,11 +1035,49 @@
           <span class="menu-anchor">
             <button
               class="secondary icon"
+              class:unused={viewMode !== "all"}
+              disabled={viewMode !== "all"}
+              aria-haspopup="menu"
+              aria-expanded={sortMenuOpen}
+              onclick={(event) => {
+                event.stopPropagation();
+                filterMenuOpen = false;
+                sortMenuOpen = !sortMenuOpen;
+              }}
+              title="Sort"
+              aria-label="Sort"
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <path d="M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5" />
+              </svg>
+            </button>
+            {#if sortMenuOpen}
+              <div class="menu" role="menu">
+                <button role="menuitemradio" aria-checked={!byName} onclick={() => chooseSort("date", null)}>
+                  <span class="mark">{!byName ? "✓" : ""}</span>Date taken
+                </button>
+                <button role="menuitemradio" aria-checked={byName} onclick={() => chooseSort("name", null)}>
+                  <span class="mark">{byName ? "✓" : ""}</span>Name
+                </button>
+                <hr />
+                <button role="menuitemradio" aria-checked={ascending} onclick={() => chooseSort(null, true)}>
+                  <span class="mark">{ascending ? "✓" : ""}</span>{byName ? "A to Z" : "Oldest first"}
+                </button>
+                <button role="menuitemradio" aria-checked={!ascending} onclick={() => chooseSort(null, false)}>
+                  <span class="mark">{!ascending ? "✓" : ""}</span>{byName ? "Z to A" : "Newest first"}
+                </button>
+              </div>
+            {/if}
+          </span>
+          <span class="menu-anchor">
+            <button
+              class="secondary icon"
               class:active={only !== null}
               aria-haspopup="menu"
               aria-expanded={filterMenuOpen}
               onclick={(event) => {
                 event.stopPropagation();
+                sortMenuOpen = false;
                 filterMenuOpen = !filterMenuOpen;
               }}
               title={only ? `Showing: ${FILTERS.find(([value]) => value === only)?.[1]}` : "Filter"}
@@ -1090,8 +1149,10 @@
               startYear = year;
               viewMode = "months";
             }}
-            onday={(day) => {
-              startDay = day;
+            onday={(day, month) => {
+              // Oldest first, a month opens at its first day.
+              startDay =
+                month && order === "dateAsc" ? day - new Date(day * 86_400_000).getUTCDate() + 1 : day;
               viewMode = "all";
             }}
           />
@@ -1427,6 +1488,13 @@
   .menu button:focus-visible {
     background: var(--accent);
     color: var(--accent-text);
+  }
+
+  .menu hr {
+    width: 100%;
+    margin: 4px 0;
+    border: none;
+    border-top: 1px solid var(--border);
   }
 
   .menu .mark {

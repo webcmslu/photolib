@@ -21,8 +21,11 @@
     /** A year to start scrolled to, in the months mode. */
     startYear?: number | null;
     onyear: (year: number) => void;
-    /** Called with a day (days since 1970) to open the photo grid at. */
-    onday: (day: number) => void;
+    /**
+     * Called with a day (days since 1970) to open the photo grid at. For a
+     * month's title it is the month's last day, and `month` is true.
+     */
+    onday: (day: number, month?: boolean) => void;
   }
   let { mode, months, startYear = null, onyear, onday }: Props = $props();
 
@@ -117,7 +120,7 @@
       {@const isStart = entry.year === startYear && months[index - 1]?.year !== startYear}
       <section use:scrollIfStart={isStart} class:zoom-target={isStart}>
         <h2>
-          <button class="title" onclick={() => onday(lastDay(entry))}>{monthTitle(entry)}</button>
+          <button class="title" onclick={() => onday(lastDay(entry), true)}>{monthTitle(entry)}</button>
           <span class="count">{photoCount(entry.count)}</span>
         </h2>
         <div

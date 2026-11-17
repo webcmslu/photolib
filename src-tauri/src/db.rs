@@ -667,27 +667,82 @@ impl Listing {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayGroup {
-    /// Days since 1970-01-01, in the photos' wall-clock time.
-    pub day: i64,
+    /// Days since 1970-01-01, in the photos' wall-clock time. `None` when the
+    /// listing is sorted by name: then one group holds every photo.
+    pub day: Option<i64>,
     pub count: u32,
+}
+
+/// The order of a listing in the photo grid.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Order {
+    /// Date taken, newest first.
+    #[default]
+    DateDesc,
+    DateAsc,
+    /// File name, A to Z (ignoring case); ties broken by folder.
+    NameAsc,
+    NameDesc,
+}
+
+impl Order {
+    fn by_name(self) -> bool {
+        matches!(self, Order::NameAsc | Order::NameDesc)
+    }
+
+    /// The `ORDER BY` terms. The date orders walk the timeline index, one
+    /// way or the other.
+    fn sql(self) -> String {
+        let name = format!("{} COLLATE NOCASE", file_name_sql("rel_path"));
+        match self {
+            Order::DateDesc => "sort_date DESC, rel_path".to_owned(),
+            Order::DateAsc => "sort_date, rel_path DESC".to_owned(),
+            Order::NameAsc => format!("{name}, rel_path"),
+            Order::NameDesc => format!("{name} DESC, rel_path DESC"),
+        }
+    }
 }
 
 /// How many photos each day has, newest day first. Together with
 /// [`photos_page`] (same order) this is all the grid needs to lay itself out
 /// without loading every photo.
+#[cfg(test)]
 pub fn timeline(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<DayGroup>> {
+    timeline_in(conn, listing, Order::DateDesc)
+}
+
+/// [`timeline`] for a listing in the given order.
+pub fn timeline_in(
+    conn: &Connection,
+    listing: &Listing,
+    order: Order,
+) -> rusqlite::Result<Vec<DayGroup>> {
     let (filter, param) = listing.filter();
+    if order.by_name() {
+        let count: u32 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM photos {filter}"),
+            [param],
+            |row| row.get(0),
+        )?;
+        return Ok(if count == 0 {
+            Vec::new()
+        } else {
+            vec![DayGroup { day: None, count }]
+        });
+    }
+    let direction = if order == Order::DateAsc { "" } else { "DESC" };
     // Integer division truncates toward zero, so shift pre-1970 dates down a
     // day first to get a floor.
     let mut stmt = conn.prepare(&format!(
         "SELECT (sort_date - 86400000 * (sort_date < 0 AND sort_date % 86400000 != 0))
                     / 86400000 AS day,
                 COUNT(*)
-         FROM photos {filter} GROUP BY day ORDER BY day DESC"
+         FROM photos {filter} GROUP BY day ORDER BY day {direction}"
     ))?;
     let rows = stmt.query_map([param], |row| {
         Ok(DayGroup {
-            day: row.get(0)?,
+            day: Some(row.get(0)?),
             count: row.get(1)?,
         })
     })?;
@@ -801,19 +856,32 @@ pub struct PhotoItem {
 }
 
 /// A slice of the listing, newest first (ties broken by path).
+#[cfg(test)]
 pub fn photos_page(
     conn: &Connection,
     listing: &Listing,
     offset: u32,
     limit: u32,
 ) -> rusqlite::Result<Vec<PhotoItem>> {
+    photos_page_in(conn, listing, Order::DateDesc, offset, limit)
+}
+
+/// [`photos_page`] for a listing in the given order.
+pub fn photos_page_in(
+    conn: &Connection,
+    listing: &Listing,
+    order: Order,
+    offset: u32,
+    limit: u32,
+) -> rusqlite::Result<Vec<PhotoItem>> {
     let (filter, param) = listing.filter();
+    let order = order.sql();
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE},
                 kind, duration_ms, live_video,
                 (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint),
                 raw_file
-         FROM photos {filter} ORDER BY sort_date DESC, rel_path LIMIT ?3 OFFSET ?2"
+         FROM photos {filter} ORDER BY {order} LIMIT ?3 OFFSET ?2"
     ))?;
     let rows = stmt.query_map(params![param, offset, limit], |row| {
         Ok(PhotoItem {
@@ -1375,7 +1443,7 @@ mod tests {
             timeline(&conn, &listing)
                 .unwrap()
                 .into_iter()
-                .map(|g| (g.day, g.count))
+                .map(|g| (g.day.unwrap(), g.count))
                 .collect()
         };
         let paths = |listing: Listing, offset, limit| -> Vec<String> {
@@ -1815,6 +1883,95 @@ mod tests {
             }
         );
         assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);
+    }
+
+    #[test]
+    fn listings_can_be_sorted_by_date_or_name() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        // Two days; names that sort differently from dates and folders.
+        for (path, date) in [
+            ("b/IMG_2.jpg", 86_400_000),
+            ("a/img_3.jpg", 86_400_000 + 5),
+            ("c/IMG_1.jpg", 3 * 86_400_000),
+        ] {
+            upsert(
+                &tx,
+                &PhotoRow {
+                    fingerprint: path.into(),
+                    ..dated(path, date)
+                },
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let listed = |order: Order| -> (Vec<String>, Vec<(Option<i64>, u32)>) {
+            let paths = photos_page_in(&conn, &Listing::Library, order, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.rel_path)
+                .collect();
+            let groups = timeline_in(&conn, &Listing::Library, order)
+                .unwrap()
+                .into_iter()
+                .map(|group| (group.day, group.count))
+                .collect();
+            (paths, groups)
+        };
+        assert_eq!(
+            listed(Order::DateDesc),
+            (
+                vec![
+                    "c/IMG_1.jpg".into(),
+                    "a/img_3.jpg".into(),
+                    "b/IMG_2.jpg".into()
+                ],
+                vec![(Some(3), 1), (Some(1), 2)]
+            )
+        );
+        assert_eq!(
+            listed(Order::DateAsc),
+            (
+                vec![
+                    "b/IMG_2.jpg".into(),
+                    "a/img_3.jpg".into(),
+                    "c/IMG_1.jpg".into()
+                ],
+                vec![(Some(1), 2), (Some(3), 1)]
+            )
+        );
+        // By file name, whatever the folder and the case.
+        assert_eq!(
+            listed(Order::NameAsc),
+            (
+                vec![
+                    "c/IMG_1.jpg".into(),
+                    "b/IMG_2.jpg".into(),
+                    "a/img_3.jpg".into()
+                ],
+                vec![(None, 3)]
+            )
+        );
+        assert_eq!(listed(Order::NameDesc).0[0], "a/img_3.jpg");
+
+        // Oldest first still walks the timeline index, backwards.
+        let (filter, _) = Listing::Library.filter();
+        let plan: Vec<String> = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN SELECT fingerprint FROM photos {filter}
+                 ORDER BY {} LIMIT 10",
+                Order::DateAsc.sql()
+            ))
+            .unwrap()
+            .query_map([None::<&str>], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let plan = plan.join(" | ");
+        assert!(
+            plan.contains("photos_timeline") && !plan.contains("TEMP B-TREE"),
+            "{plan}"
+        );
     }
 
     #[test]

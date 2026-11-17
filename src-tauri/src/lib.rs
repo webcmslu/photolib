@@ -688,9 +688,15 @@ fn months(
 fn timeline(
     path: String,
     listing: db::Listing,
+    order: Option<db::Order>,
     state: State<'_, AppState>,
 ) -> Result<Vec<db::DayGroup>, String> {
-    db::timeline(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
+    db::timeline_in(
+        &open_index(&state, &path)?,
+        &listing,
+        order.unwrap_or_default(),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// A slice of a listing's photos, in the same order as [`timeline`].
@@ -698,13 +704,15 @@ fn timeline(
 fn photos_page(
     path: String,
     listing: db::Listing,
+    order: Option<db::Order>,
     offset: u32,
     limit: u32,
     state: State<'_, AppState>,
 ) -> Result<Vec<db::PhotoItem>, String> {
-    db::photos_page(
+    db::photos_page_in(
         &open_index(&state, &path)?,
         &listing,
+        order.unwrap_or_default(),
         offset,
         limit.min(1000),
     )

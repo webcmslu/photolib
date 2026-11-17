@@ -87,7 +87,8 @@
   let scrollTop = $state(0);
 
   interface Section {
-    day: number;
+    /** Null when the listing is sorted by name: one section, no heading. */
+    day: number | null;
     count: number;
     /** Listing index of the section's first photo. */
     start: number;
@@ -142,11 +143,14 @@
     let start = 0;
     let previousMonth: number | null = null;
     for (const group of groups) {
-      const month = monthKey(group.day);
-      const monthTitle = month !== previousMonth ? formatMonth(group.day) : null;
+      const day = group.day;
+      const month = day === null ? null : monthKey(day);
+      const monthTitle = day !== null && month !== previousMonth ? formatMonth(day) : null;
       previousMonth = month;
-      const headerHeight = DAY_HEADER + (monthTitle ? MONTH_HEADER : 0);
-      const [featuredWidth, featuredHeight] = featuredSize(group.count, columns);
+      // Sorted by name, there are no days: just a margin above the photos.
+      const headerHeight = day === null ? SIDE_PADDING : DAY_HEADER + (monthTitle ? MONTH_HEADER : 0);
+      const [featuredWidth, featuredHeight] =
+        day === null ? [0, 0] : featuredSize(group.count, columns);
       const rows =
         featuredWidth === 0
           ? Math.ceil(group.count / columns)
@@ -195,14 +199,16 @@
   /** Worth showing only for a long grid that spans several years. */
   const showRail = $derived(
     layout.sections.length > 0 &&
+      layout.sections[0].day !== null &&
       layout.height > clientHeight * 3 &&
-      yearOf(layout.sections[0].day) !== yearOf(layout.sections[layout.sections.length - 1].day),
+      yearOf(layout.sections[0].day) !== yearOf(layout.sections[layout.sections.length - 1].day ?? 0),
   );
 
   /** Where each year starts, as a fraction of the grid's height. */
   const yearStarts = $derived.by(() => {
     const starts: { year: number; top: number }[] = [];
     for (const section of layout.sections) {
+      if (section.day === null) continue;
       const year = yearOf(section.day);
       if (starts[starts.length - 1]?.year !== year) starts.push({ year, top: section.top });
     }
@@ -237,7 +243,7 @@
   function railMove(event: PointerEvent) {
     const y = event.clientY - (event.currentTarget as HTMLElement).getBoundingClientRect().top;
     const section = sectionAtRail(y);
-    railHover = section ? { y, label: formatMonth(section.day) } : null;
+    railHover = section?.day != null ? { y, label: formatMonth(section.day) } : null;
     if (railDragging) railJump(event);
   }
 
@@ -264,8 +270,10 @@
       const section = sections[s];
       if (section.top >= bottom) break;
       if (section.top + section.height <= scrollTop) continue;
-      newest ??= section.day;
-      oldest = section.day;
+      if (section.day === null) continue;
+      // Newest first, or oldest first when sorted that way.
+      newest = newest === null ? section.day : Math.max(newest, section.day);
+      oldest = oldest === null ? section.day : Math.min(oldest, section.day);
     }
     return newest === null || oldest === null ? null : { oldest, newest };
   });
@@ -370,7 +378,12 @@
 
   /** Scrolls to a day (days since 1970), or the nearest older one listed. */
   export function scrollToDay(target: number) {
-    const section = layout.sections.find((candidate) => candidate.day <= target);
+    const { sections } = layout;
+    const ascending = (sections[0]?.day ?? 0) < (sections[sections.length - 1]?.day ?? 0);
+    const section = sections.find(
+      (candidate) =>
+        candidate.day !== null && (ascending ? candidate.day >= target : candidate.day <= target),
+    );
     if (section) scroller.scrollTop = section.top;
   }
 
@@ -388,15 +401,17 @@
 <div class="scroller" bind:this={scroller} bind:clientWidth bind:clientHeight {onscroll}>
   <div class="canvas" style:height="{layout.height}px">
     {#each visible.headers as section (section.day)}
-      <header style:transform="translateY({section.top}px)" style:height="{section.headerHeight}px">
-        {#if section.monthTitle}
-          <h2>{section.monthTitle}</h2>
-        {/if}
-        <h3>
-          {formatDay(section.day)}
-          <span class="count">{formatNumber(section.count)}</span>
-        </h3>
-      </header>
+      {#if section.day !== null}
+        <header style:transform="translateY({section.top}px)" style:height="{section.headerHeight}px">
+          {#if section.monthTitle}
+            <h2>{section.monthTitle}</h2>
+          {/if}
+          <h3>
+            {formatDay(section.day)}
+            <span class="count">{formatNumber(section.count)}</span>
+          </h3>
+        </header>
+      {/if}
     {/each}
 
     {#each visible.cells as cell (cell.index)}
