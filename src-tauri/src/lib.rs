@@ -699,6 +699,22 @@ fn timeline(
     .map_err(|e| e.to_string())
 }
 
+/// The shape of every photo of a listing, in grid order (see [`db::shapes`]).
+#[tauri::command(async)]
+fn shapes(
+    path: String,
+    listing: db::Listing,
+    order: Option<db::Order>,
+    state: State<'_, AppState>,
+) -> Result<Vec<u16>, String> {
+    db::shapes(
+        &open_index(&state, &path)?,
+        &listing,
+        order.unwrap_or_default(),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// A slice of a listing's photos, in the same order as [`timeline`].
 #[tauri::command(async)]
 fn photos_page(
@@ -983,6 +999,7 @@ pub fn run() {
             library_stats,
             timeline,
             photos_page,
+            shapes,
             folders,
             photo_details,
             apple_import_preview,

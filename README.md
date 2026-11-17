@@ -56,10 +56,11 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 - After the milestones, closer to Apple Photos: Months show each month's
   busiest days as cards, Years are square cards that zoom into their months,
   and All Photos has a filter menu (favorites, edited, photos, videos, not in
-  an album), square or whole-photo thumbnails, and the dates on screen under
-  the title.
-- Ideas from Windows Photos: a year scrubber beside the grid, and folders as
-  a collapsible tree where a folder lists its subfolders too.
+  an album), and the dates on screen under the title.
+- Ideas from Windows Photos: a year scrubber beside the grid; folders as a
+  collapsible tree where a folder lists its subfolders too; a slideshow (F5);
+  sorting by date taken or name; a filmstrip in the viewer; and a "river"
+  layout, rows of photos at their own shape filling the width.
 
 ## Develop
 

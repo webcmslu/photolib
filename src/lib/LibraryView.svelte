@@ -21,6 +21,7 @@
     rescanLibrary,
     syncLibrary,
     timeline,
+    shapes,
     type Album,
     type DayGroup,
     type FolderEntry,
@@ -479,11 +480,26 @@
     }
   }
 
-  /** Square thumbnails, or each photo in its own shape. */
-  let gridFit = $state<"square" | "whole">(
-    localStorage.getItem("photolib.gridFit") === "whole" ? "whole" : "square",
+  /** Square thumbnails, or rows of photos at their own shape ("river"). */
+  let gridFit = $state<"square" | "river">(
+    // "whole" was the name of an earlier, letterboxed version of the river.
+    ["river", "whole"].includes(localStorage.getItem("photolib.gridFit") ?? "") ? "river" : "square",
   );
   $effect(() => localStorage.setItem("photolib.gridFit", gridFit));
+  /** Every photo's shape, for the river layout; loaded only for it. */
+  let gridShapes = $state.raw<number[] | null>(null);
+  async function loadShapes(target: PhotoPages) {
+    try {
+      const loaded = await shapes(target.libraryPath, target.listing, target.order);
+      if (target === pages) gridShapes = loaded;
+    } catch (e) {
+      error = String(e);
+    }
+  }
+  $effect(() => {
+    if (gridFit === "river") loadShapes(pages);
+    else gridShapes = null;
+  });
 
   const SIDEBAR_MIN = 150;
   const SIDEBAR_MAX = 600;
@@ -599,6 +615,8 @@
   async function loadGroups(target: PhotoPages) {
     try {
       const loaded = await timeline(target.libraryPath, target.listing, target.order);
+      // The river's shapes must match the listing, so they come along.
+      if (gridFit === "river") await loadShapes(target);
       if (target !== pages) return; // something else is listed by now
       groups = loaded;
       groupsLoaded = true;
@@ -1105,16 +1123,22 @@
             class="secondary icon"
             class:unused={viewMode !== "all"}
             disabled={viewMode !== "all"}
-            aria-pressed={gridFit === "whole"}
-            onclick={() => (gridFit = gridFit === "square" ? "whole" : "square")}
-            title={gridFit === "square" ? "Show whole photos" : "Show square thumbnails"}
-            aria-label="Show thumbnails as squares or as whole photos"
+            aria-pressed={gridFit === "river"}
+            onclick={() => (gridFit = gridFit === "square" ? "river" : "square")}
+            title={gridFit === "square" ? "Show photos in rows at their own shape" : "Show square thumbnails"}
+            aria-label="Square thumbnails or rows of whole photos"
           >
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
               {#if gridFit === "square"}
-                <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+                <rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1" />
+                <rect x="9" y="1.5" width="5.5" height="5.5" rx="1" />
+                <rect x="1.5" y="9" width="5.5" height="5.5" rx="1" />
+                <rect x="9" y="9" width="5.5" height="5.5" rx="1" />
               {:else}
-                <rect x="1.5" y="4" width="13" height="8" rx="1.5" />
+                <rect x="1.5" y="1.5" width="8" height="5.5" rx="1" />
+                <rect x="11" y="1.5" width="3.5" height="5.5" rx="1" />
+                <rect x="1.5" y="9" width="4" height="5.5" rx="1" />
+                <rect x="7" y="9" width="7.5" height="5.5" rx="1" />
               {/if}
             </svg>
           </button>
@@ -1164,6 +1188,7 @@
             {selected}
             {cellSize}
             fit={gridFit}
+            shapes={gridShapes}
             onrange={setShownRange}
             startAt={startDay}
             onopen={(index) => (viewerIndex = index)}

@@ -277,6 +277,11 @@ export function listMonths(path: string, listing: Listing): Promise<MonthSummary
   return invoke("months", { path, listing });
 }
 
+/** Every photo's width / height × 1000, in grid order, for the river layout. */
+export function shapes(path: string, listing: Listing, order: Order): Promise<number[]> {
+  return invoke("shapes", { path, listing, order });
+}
+
 /** A slice of a listing's photos, in the same order as `timeline`. */
 export function photosPage(
   path: string,

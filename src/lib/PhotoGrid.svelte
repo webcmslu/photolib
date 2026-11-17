@@ -10,10 +10,9 @@
   several cells wide and two rows high, with the others flowing around it.
 -->
 <script lang="ts">
-  import { thumbUrl, type DayGroup, type PhotoItem } from "./api";
+  import { thumbUrl, type DayGroup } from "./api";
   import { formatDay, formatDuration, formatMonth, formatNumber, monthKey, rawPairLabel } from "./format";
   import EditedImage from "./EditedImage.svelte";
-  import { NO_EDIT, place as placeEdited } from "./edit";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -30,8 +29,13 @@
     cellSize?: number;
     /** A day (days since 1970) to start scrolled to. */
     startAt?: number | null;
-    /** "square" crops each photo to fill its cell; "whole" shows all of it. */
-    fit?: "square" | "whole";
+    /**
+     * "square" crops each photo to fill a square cell; "river" lays the
+     * photos in rows at their own shape, each row filling the width.
+     */
+    fit?: "square" | "river";
+    /** For "river": every photo's width / height × 1000, in listing order. */
+    shapes?: number[] | null;
     /** Told the oldest and newest day on screen whenever they change. */
     onrange?: (range: { oldest: number; newest: number } | null) => void;
   }
@@ -44,26 +48,9 @@
     cellSize = 150,
     startAt = null,
     fit = "square",
+    shapes = null,
     onrange,
   }: Props = $props();
-
-  /**
-   * The part of a cell the photo takes: all of it when cropped to a square,
-   * else the photo's own shape (after any edit) centered in the cell. The
-   * badges and the checkbox sit on this frame, so they follow the photo.
-   */
-  function frameOf(photo: PhotoItem | undefined, width: number, height: number) {
-    if (fit === "square" || !photo?.width || !photo?.height) {
-      return { left: 0, top: 0, width, height };
-    }
-    const shown = placeEdited(photo.edit ?? NO_EDIT, photo.width, photo.height, width, height, "contain");
-    return {
-      left: (width - shown.clipWidth) / 2,
-      top: (height - shown.clipHeight) / 2,
-      width: shown.clipWidth,
-      height: shown.clipHeight,
-    };
-  }
 
   /** A plain click opens a photo, unless a selection is under way. */
   function onclick(event: MouseEvent, index: number) {
@@ -85,6 +72,16 @@
   let clientWidth = $state(0);
   let clientHeight = $state(0);
   let scrollTop = $state(0);
+
+  /** A row of the river layout; `xs` and `widths` are per photo. */
+  interface RiverRow {
+    top: number;
+    height: number;
+    /** Listing index of the row's first photo. */
+    start: number;
+    xs: number[];
+    widths: number[];
+  }
 
   interface Section {
     /** Null when the listing is sorted by name: one section, no heading. */
@@ -142,6 +139,10 @@
     let top = 0;
     let start = 0;
     let previousMonth: number | null = null;
+    const total = groups.reduce((sum, group) => sum + group.count, 0);
+    // The river needs every photo's shape; until they are there, squares.
+    const river = fit === "river" && shapes !== null && shapes.length === total && width > 0;
+    const riverRows: RiverRow[] = [];
     for (const group of groups) {
       const day = group.day;
       const month = day === null ? null : monthKey(day);
@@ -150,13 +151,49 @@
       // Sorted by name, there are no days: just a margin above the photos.
       const headerHeight = day === null ? SIDE_PADDING : DAY_HEADER + (monthTitle ? MONTH_HEADER : 0);
       const [featuredWidth, featuredHeight] =
-        day === null ? [0, 0] : featuredSize(group.count, columns);
-      const rows =
-        featuredWidth === 0
-          ? Math.ceil(group.count / columns)
-          : featuredHeight +
-            Math.ceil((group.count - 1 - featuredHeight * (columns - featuredWidth)) / columns);
-      const height = headerHeight + rows * pitch;
+        day === null || river ? [0, 0] : featuredSize(group.count, columns);
+      let rows: number;
+      let height: number;
+      if (river && shapes) {
+        // Fill each row with photos at `cellSize` high until it is full,
+        // then scale the row to the exact width. A day's last row keeps the
+        // target height and is not stretched.
+        const firstRow = riverRows.length;
+        let y = top + headerHeight;
+        const end = start + group.count;
+        for (let i = start; i < end; ) {
+          let aspects = 0;
+          let count = 0;
+          while (i + count < end) {
+            aspects += shapes[i + count] / 1000;
+            count++;
+            if (aspects * cellSize + GAP * (count - 1) >= width) break;
+          }
+          const full = aspects * cellSize + GAP * (count - 1) >= width;
+          const rowHeight = full ? (width - GAP * (count - 1)) / aspects : cellSize;
+          const xs: number[] = [];
+          const widths: number[] = [];
+          let x = SIDE_PADDING;
+          for (let k = 0; k < count; k++) {
+            const w = (shapes[i + k] / 1000) * rowHeight;
+            xs.push(x);
+            widths.push(w);
+            x += w + GAP;
+          }
+          riverRows.push({ top: y, height: rowHeight, start: i, xs, widths });
+          y += rowHeight + GAP;
+          i += count;
+        }
+        rows = riverRows.length - firstRow;
+        height = y - top;
+      } else {
+        rows =
+          featuredWidth === 0
+            ? Math.ceil(group.count / columns)
+            : featuredHeight +
+              Math.ceil((group.count - 1 - featuredHeight * (columns - featuredWidth)) / columns);
+        height = headerHeight + rows * pitch;
+      }
       sections.push({
         ...group,
         start,
@@ -171,7 +208,7 @@
       top += height;
       start += group.count;
     }
-    return { sections, columns, cell, pitch, height: top, total: start };
+    return { sections, columns, cell, pitch, height: top, total: start, river, riverRows };
   });
 
   /** Index of the last section whose `top` is at or above `y`. */
@@ -288,10 +325,28 @@
 
     const viewTop = scrollTop - OVERSCAN;
     const viewBottom = scrollTop + clientHeight + OVERSCAN;
+    if (layout.river) {
+      const rows = layout.riverRows;
+      // First row reaching into the view, by binary search on `top`.
+      let low = 0;
+      let high = rows.length;
+      while (low < high) {
+        const mid = (low + high) >> 1;
+        if (rows[mid].top + rows[mid].height < viewTop) low = mid + 1;
+        else high = mid;
+      }
+      for (let r = low; r < rows.length && rows[r].top <= viewBottom; r++) {
+        const row = rows[r];
+        row.xs.forEach((x, k) =>
+          cells.push({ index: row.start + k, x, y: row.top, width: row.widths[k], height: row.height }),
+        );
+      }
+    }
     for (let s = sectionAt(viewTop); s < sections.length; s++) {
       const section = sections[s];
       if (section.top > viewBottom) break;
       headers.push(section);
+      if (layout.river) continue;
 
       const gridTop = section.top + section.headerHeight;
       const { featuredWidth, featuredHeight } = section;
@@ -360,6 +415,24 @@
 
   /** Scrolls just enough to bring the photo at `index` into view. */
   export function reveal(index: number) {
+    if (layout.river) {
+      const rows = layout.riverRows;
+      // Last row starting at or before the photo.
+      let low = 0;
+      let high = rows.length - 1;
+      while (low < high) {
+        const mid = (low + high + 1) >> 1;
+        if (rows[mid].start <= index) low = mid;
+        else high = mid - 1;
+      }
+      const row = rows[low];
+      if (!row) return;
+      if (row.top < scroller.scrollTop) scroller.scrollTop = Math.max(0, row.top - DAY_HEADER);
+      else if (row.top + row.height > scroller.scrollTop + clientHeight) {
+        scroller.scrollTop = row.top + row.height - clientHeight + GAP;
+      }
+      return;
+    }
     const { sections, columns, pitch, cell } = layout;
     let section: Section | undefined;
     for (const candidate of sections) {
@@ -417,13 +490,12 @@
     {#each visible.cells as cell (cell.index)}
       {@const photo = pages.get(cell.index)}
       {@const isSelected = selected.has(cell.index)}
-      {@const frame = frameOf(photo, cell.width, cell.height)}
       <div
         class="cell"
         class:selected={isSelected}
-        style:transform="translate({cell.x + frame.left}px, {cell.y + frame.top}px)"
-        style:width="{frame.width}px"
-        style:height="{frame.height}px"
+        style:transform="translate({cell.x}px, {cell.y}px)"
+        style:width="{cell.width}px"
+        style:height="{cell.height}px"
       >
         <button
           class="open"
@@ -456,7 +528,7 @@
           <span class="badge">LIVE</span>
         {:else if photo?.rawFile}
           <!-- Short on small cells, so it leaves room for the heart. -->
-          <span class="badge">{frame.width < 190 ? "RAW" : rawPairLabel(photo.relPath)}</span>
+          <span class="badge">{cell.width < 190 ? "RAW" : rawPairLabel(photo.relPath)}</span>
         {/if}
         {#if photo?.favorite}
           <span class="favorite" aria-label="Favorite">♥</span>

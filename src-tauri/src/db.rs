@@ -903,6 +903,43 @@ pub fn photos_page_in(
     rows.collect()
 }
 
+/// The shape of every photo of a listing, in grid order: width divided by
+/// height as shown (after any edit), times 1000, kept between 1/4 and 4 so
+/// that a panorama can't take a whole row. 1500 (3:2) when unknown. The
+/// "river" layout needs them all to place the rows before photos load.
+pub fn shapes(conn: &Connection, listing: &Listing, order: Order) -> rusqlite::Result<Vec<u16>> {
+    let (filter, param) = listing.filter();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT width, height,
+                (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint)
+         FROM photos {filter} ORDER BY {}",
+        order.sql()
+    ))?;
+    let rows = stmt.query_map([param], |row| {
+        let width: Option<u32> = row.get(0)?;
+        let height: Option<u32> = row.get(1)?;
+        let edit: Option<String> = row.get(2)?;
+        let (Some(width), Some(height)) = (width.filter(|w| *w > 0), height.filter(|h| *h > 0))
+        else {
+            return Ok(1500);
+        };
+        let (mut width, mut height) = (f64::from(width), f64::from(height));
+        if let Some(edit) =
+            edit.and_then(|json| serde_json::from_str::<crate::org::Edit>(&json).ok())
+        {
+            if edit.rotate % 180 != 0 {
+                std::mem::swap(&mut width, &mut height);
+            }
+            if let Some([_, _, crop_width, crop_height]) = edit.crop {
+                width *= f64::from(crop_width.max(1));
+                height *= f64::from(crop_height.max(1));
+            }
+        }
+        Ok((width / height * 1000.0).clamp(250.0, 4000.0).round() as u16)
+    })?;
+    rows.collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FolderEntry {
@@ -1883,6 +1920,50 @@ mod tests {
             }
         );
         assert!(super::months(&conn, &Listing::Favorites).unwrap()[0].count == 1);
+    }
+
+    #[test]
+    fn shapes_follow_the_grid_order_and_the_edits() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        let photo = |path: &str, date: i64, size: Option<(u32, u32)>| PhotoRow {
+            fingerprint: path.into(),
+            width: size.map(|s| s.0),
+            height: size.map(|s| s.1),
+            ..dated(path, date)
+        };
+        upsert(&tx, &photo("wide.jpg", 3, Some((4000, 3000)))).unwrap();
+        upsert(&tx, &photo("tall.jpg", 2, Some((3000, 4000)))).unwrap();
+        upsert(&tx, &photo("unknown.jpg", 1, None)).unwrap();
+        upsert(&tx, &photo("panorama.jpg", 0, Some((12000, 1000)))).unwrap();
+        // Turned a quarter, then cropped to a square of the turned picture's
+        // full height: 3000 wide by 4000 high, keeping 3/4 of the height.
+        apply_event(
+            &tx,
+            "device",
+            &Event {
+                ts: 1,
+                op: Op::Edit {
+                    photo: "wide.jpg".into(),
+                    edit: Some(crate::org::Edit {
+                        rotate: 90,
+                        crop: Some([0, 0, 10_000, 7_500]),
+                        ..crate::org::Edit::default()
+                    }),
+                },
+            },
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        assert_eq!(
+            shapes(&conn, &Listing::Library, Order::DateDesc).unwrap(),
+            [1000, 750, 1500, 4000]
+        );
+        assert_eq!(
+            shapes(&conn, &Listing::Library, Order::DateAsc).unwrap(),
+            [4000, 1500, 750, 1000]
+        );
     }
 
     #[test]
