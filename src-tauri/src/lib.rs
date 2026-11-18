@@ -220,14 +220,15 @@ fn now_ms() -> u64 {
 }
 
 /// Starts a background scan of `library_path` unless one is already running
-/// for it. A running scan of a different library is cancelled first.
-fn start_scan(app: &AppHandle, library_path: &str) {
+/// for it. A running scan of a different library is cancelled first, and so
+/// is a running check of this one when everything is to be read again.
+fn start_scan(app: &AppHandle, library_path: &str, mode: indexer::Mode) {
     let state = app.state::<AppState>();
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut current = state.scan.lock().unwrap();
         if let Some(running) = current.as_ref() {
-            if running.library_path == library_path {
+            if running.library_path == library_path && mode == indexer::Mode::Changes {
                 return;
             }
             running.cancel.store(true, Ordering::Relaxed);
@@ -242,7 +243,7 @@ fn start_scan(app: &AppHandle, library_path: &str) {
     let library_path = library_path.to_owned();
     let cache = state.thumbs.clone();
     std::thread::spawn(move || {
-        let result = run_scan(&app, &library_path, &cache, &cancel);
+        let result = run_scan(&app, &library_path, mode, &cache, &cancel);
 
         // Clear the slot first (if it is still ours), so that by the time the
         // UI hears the scan is over, a new one can be started.
@@ -282,6 +283,7 @@ fn start_scan(app: &AppHandle, library_path: &str) {
 fn run_scan(
     app: &AppHandle,
     library_path: &str,
+    mode: indexer::Mode,
     cache: &ThumbCache,
     cancel: &AtomicBool,
 ) -> Result<(ScanSummary, ThumbSummary), indexer::ScanError> {
@@ -317,7 +319,7 @@ fn run_scan(
         }
     }
 
-    let summary = indexer::scan(root, &mut conn, cancel, &on_progress)?;
+    let summary = indexer::scan_with(root, &mut conn, mode, cancel, &on_progress)?;
     if summary.cancelled {
         return Ok((summary, ThumbSummary::default()));
     }
@@ -425,17 +427,32 @@ fn make_thumb_on_demand(state: &AppState, fingerprint: &str) -> Result<(), ()> {
     if state.thumbs.has_both(fingerprint) {
         return Ok(()); // made while we were waiting
     }
-    if metadata::kind_of(&source) == Some(metadata::Kind::Video) {
-        return state
+    let size = if metadata::kind_of(&source) == Some(metadata::Kind::Video) {
+        state
             .thumbs
             .generate_from_video(&source, fingerprint)
-            .map_err(drop);
+            .map_err(drop)?;
+        None
+    } else {
+        Some(
+            state
+                .thumbs
+                .generate(&source, fingerprint, orientation)
+                .map_err(drop)?,
+        )
+    };
+    // Tell the index, so the background pass doesn't open the file again.
+    // Off this thread: the pass may be holding the database for a moment.
+    if let Some(open) = state.open_library.lock().unwrap().as_ref() {
+        let db_path = state.index_db(&open.path);
+        let fingerprint = fingerprint.to_owned();
+        std::thread::spawn(move || {
+            if let Ok(conn) = db::open(&db_path) {
+                let _ = db::mark_thumb_ready(&conn, &fingerprint, size);
+            }
+        });
     }
-    state
-        .thumbs
-        .generate(&source, fingerprint, orientation)
-        .map(drop)
-        .map_err(drop)
+    Ok(())
 }
 
 /// Answers a `photo://localhost/<fingerprint>` request with the full-size
@@ -595,7 +612,7 @@ fn open_library(
         online,
         writable,
     });
-    start_scan(&app, &path);
+    start_scan(&app, &path, indexer::Mode::Changes);
 
     Ok(LibraryInfo {
         path,
@@ -631,10 +648,17 @@ fn remove_recent_library(
     Ok(with_availability(list))
 }
 
-/// Rescans a library in the background. Does nothing if it is already being scanned.
+/// Checks a library for new and changed files in the background (does
+/// nothing if it is already being scanned), or with `everything`, reads
+/// every file again.
 #[tauri::command(async)]
-fn rescan_library(path: String, app: AppHandle) {
-    start_scan(&app, &path);
+fn rescan_library(path: String, everything: Option<bool>, app: AppHandle) {
+    let mode = if everything.unwrap_or(false) {
+        indexer::Mode::Everything
+    } else {
+        indexer::Mode::Changes
+    };
+    start_scan(&app, &path, mode);
 }
 
 /// Stops the scan of `path`, if one is running. What it indexed so far is kept.
@@ -836,7 +860,7 @@ fn enable_faces(app: AppHandle, state: State<'_, AppState>) -> Result<(), String
     .map_err(|e| format!("Couldn't download the face models: {e}"))?;
     let open = state.open_library.lock().unwrap().clone();
     if let Some(open) = open {
-        start_scan(&app, &open.path);
+        start_scan(&app, &open.path, indexer::Mode::Changes);
     }
     Ok(())
 }

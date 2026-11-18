@@ -57,6 +57,7 @@ pub fn find_faces(
             discovered: 0,
             total,
             done,
+            known: 0,
         })
     };
     report(0);

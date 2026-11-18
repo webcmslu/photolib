@@ -341,6 +341,35 @@ pub fn retry_missing_thumbs(conn: &Connection) -> rusqlite::Result<usize> {
     )
 }
 
+/// Makes the next thumbnail pass try again every photo it gave up on, for a
+/// full rescan.
+pub fn retry_failed_thumbs(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE photos SET thumb_state = 0 WHERE thumb_state IN (2, 3, 4)",
+        [],
+    )
+}
+
+/// Records a thumbnail made on demand (the grid asked for it before the
+/// background pass got there), so that pass doesn't open the file again.
+/// Only photos still waiting are touched.
+pub fn mark_thumb_ready(
+    conn: &Connection,
+    fingerprint: &str,
+    size: Option<(u32, u32)>,
+) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE photos SET thumb_state = 1,
+                           width = COALESCE(?2, width), height = COALESCE(?3, height)
+         WHERE fingerprint = ?1 AND thumb_state = 0",
+        params![
+            fingerprint,
+            size.map(|(width, _)| width),
+            size.map(|(_, height)| height)
+        ],
+    )
+}
+
 /// Names the place of every photo that has a position but no place yet.
 /// `lookup` gives the display name and the search text for a position.
 /// Returns how many photos were looked up.

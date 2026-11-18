@@ -497,6 +497,7 @@ pub fn generate_missing(
             discovered: 0,
             total,
             done,
+            known: 0,
         })
     };
     if total > 0 {

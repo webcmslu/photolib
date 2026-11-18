@@ -94,6 +94,8 @@ export interface ScanProgress {
   /** Items the current phase has to process, and how many are done. */
   total: number;
   done: number;
+  /** Files the index already held when the scan started. */
+  known: number;
 }
 
 /** Mirrors `ScanSummary` in src-tauri/src/indexer.rs. */
@@ -143,8 +145,9 @@ export function onIndexEvent(handler: (event: IndexEvent) => void): Promise<Unli
   return listen<IndexEvent>("index-event", (e) => handler(e.payload));
 }
 
-export function rescanLibrary(path: string): Promise<void> {
-  return invoke("rescan_library", { path });
+/** Checks for new and changed files, or with `everything`, reads every file again. */
+export function rescanLibrary(path: string, everything = false): Promise<void> {
+  return invoke("rescan_library", { path, everything });
 }
 
 export function closeLibrary(path: string): Promise<void> {

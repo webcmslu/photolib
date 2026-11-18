@@ -171,12 +171,15 @@
     }
   }
 
-  async function rescan() {
+  let scanMenuOpen = $state(false);
+
+  async function rescan(everything = false) {
+    scanMenuOpen = false;
     error = null;
     scanning = true;
     lastScanStart = Date.now();
     try {
-      await rescanLibrary(library.path);
+      await rescanLibrary(library.path, everything);
     } catch (e) {
       scanning = false;
       error = String(e);
@@ -193,6 +196,10 @@
       }
       if (progress?.phase === "thumbnails") {
         return `Making thumbnails: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+      }
+      if (progress?.phase === "scanning" && progress.known > 0) {
+        // A library seen before: only new and changed files are read.
+        return `Checking for new photos: ${formatNumber(Math.min(progress.discovered, progress.known))} of ${formatNumber(progress.known)}`;
       }
       return progress ? `Scanning… ${formatNumber(progress.discovered)} found` : "Scanning…";
     }
@@ -558,9 +565,10 @@
       startSlideshow();
       return;
     }
-    if (event.key === "Escape" && (filterMenuOpen || sortMenuOpen)) {
+    if (event.key === "Escape" && (filterMenuOpen || sortMenuOpen || scanMenuOpen)) {
       filterMenuOpen = false;
       sortMenuOpen = false;
+      scanMenuOpen = false;
       return;
     }
     if (!(event.ctrlKey || event.metaKey) || viewerIndex !== null) return;
@@ -737,6 +745,7 @@
   onclick={() => {
     filterMenuOpen = false;
     sortMenuOpen = false;
+    scanMenuOpen = false;
   }}
 />
 
@@ -757,10 +766,50 @@
     <div class="status" role="status">
       {#if scanning && progress && progress.phase !== "scanning" && progress.total > 0}
         <progress value={progress.done} max={progress.total}></progress>
+      {:else if scanning && progress?.phase === "scanning" && progress.known > 0}
+        <progress value={Math.min(progress.discovered, progress.known)} max={progress.known}></progress>
       {/if}
       <span>{status}</span>
     </div>
-    <button class="secondary" onclick={rescan} disabled={scanning}>Rescan</button>
+    <span class="menu-anchor scan-buttons">
+      <button
+        class="secondary"
+        onclick={() => rescan()}
+        disabled={scanning}
+        title="Look for photos added or changed since the last check"
+      >
+        Check for new
+      </button>
+      <button
+        class="secondary more"
+        aria-haspopup="menu"
+        aria-expanded={scanMenuOpen}
+        aria-label="More scan options"
+        title="More scan options"
+        onclick={(event) => {
+          event.stopPropagation();
+          filterMenuOpen = false;
+          sortMenuOpen = false;
+          scanMenuOpen = !scanMenuOpen;
+        }}
+      >
+        <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+          <path d="M4 6l4 4 4-4" />
+        </svg>
+      </button>
+      {#if scanMenuOpen}
+        <div class="menu scan-menu" role="menu">
+          <button role="menuitem" disabled={scanning} onclick={() => rescan()}>
+            <span class="mark"></span>
+            <span>Check for new photos<small>Reads only files added or changed</small></span>
+          </button>
+          <button role="menuitem" onclick={() => rescan(true)}>
+            <span class="mark"></span>
+            <span>Rescan everything<small>Reads every file again; slow on a large library</small></span>
+          </button>
+        </div>
+      {/if}
+    </span>
     <AboutButton />
   </header>
 
@@ -1062,6 +1111,7 @@
               onclick={(event) => {
                 event.stopPropagation();
                 filterMenuOpen = false;
+                scanMenuOpen = false;
                 sortMenuOpen = !sortMenuOpen;
               }}
               title="Sort"
@@ -1098,6 +1148,7 @@
               onclick={(event) => {
                 event.stopPropagation();
                 sortMenuOpen = false;
+                scanMenuOpen = false;
                 filterMenuOpen = !filterMenuOpen;
               }}
               title={only ? `Showing: ${FILTERS.find(([value]) => value === only)?.[1]}` : "Filter"}
@@ -1527,6 +1578,51 @@
   .menu .mark {
     width: 20px;
     text-align: center;
+  }
+
+  .scan-buttons {
+    display: inline-flex;
+  }
+
+  .scan-buttons > button:first-child {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+
+  .scan-buttons > .more {
+    margin-left: -1px;
+    padding: 0 7px;
+    border-top-left-radius: 0;
+    border-bottom-left-radius: 0;
+  }
+
+  .scan-buttons > .more svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .scan-menu {
+    min-width: 250px;
+  }
+
+  .scan-menu small {
+    display: block;
+    margin-top: 1px;
+    opacity: 0.7;
+    font-size: 11px;
+  }
+
+  .menu button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .menu button:disabled:hover {
+    background: none;
+    color: var(--text);
   }
 
   .toolbar button.icon svg {

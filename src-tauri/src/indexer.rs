@@ -60,6 +60,20 @@ pub struct Progress {
     pub total: u64,
     /// How many of `total` are done.
     pub done: u64,
+    /// Files the index already held when the scan started, so the walk of a
+    /// known library reads as "checked 12,000 of 80,000".
+    pub known: u64,
+}
+
+/// What a scan reads again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// Only files that are new or whose size or date changed: the usual check.
+    #[default]
+    Changes,
+    /// Every file, as on the first scan, and photos whose thumbnail could not
+    /// be made get another try. Thumbnails of unchanged content are kept.
+    Everything,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -128,15 +142,31 @@ struct Walked {
 ///
 /// Set `cancel` from another thread to stop early; whatever was done so far
 /// is kept. `on_progress` is called from this thread only.
+#[cfg(test)]
 pub fn scan(
     root: &Path,
     conn: &mut Connection,
     cancel: &AtomicBool,
     on_progress: &dyn Fn(Progress),
 ) -> Result<ScanSummary, ScanError> {
+    scan_with(root, conn, Mode::Changes, cancel, on_progress)
+}
+
+/// [`scan`], choosing what is read again.
+pub fn scan_with(
+    root: &Path,
+    conn: &mut Connection,
+    mode: Mode,
+    cancel: &AtomicBool,
+    on_progress: &dyn Fn(Progress),
+) -> Result<ScanSummary, ScanError> {
     let started = Instant::now();
     let mut summary = ScanSummary::default();
     let known = db::load_known(conn)?;
+    let known_count = known.len() as u64;
+    if mode == Mode::Everything {
+        db::retry_failed_thumbs(conn)?;
+    }
 
     // Shared with the walker thread, read here for the progress reports.
     let discovered = AtomicU64::new(0);
@@ -149,7 +179,7 @@ pub fn scan(
 
         let (known, discovered, queued, walking) = (&known, &discovered, &queued, &walking);
         let walker = scope.spawn(move || {
-            let result = walk(root, known, cancel, discovered, queued, candidate_tx);
+            let result = walk(root, known, mode, cancel, discovered, queued, candidate_tx);
             walking.store(false, Ordering::Relaxed);
             result
         });
@@ -217,6 +247,7 @@ pub fn scan(
                     discovered: discovered.load(Ordering::Relaxed),
                     total: queued.load(Ordering::Relaxed),
                     done,
+                    known: known_count,
                 });
             }
         }
@@ -260,6 +291,7 @@ pub fn scan(
 fn walk(
     root: &Path,
     known: &HashMap<String, (u64, i64)>,
+    mode: Mode,
     cancel: &AtomicBool,
     discovered: &AtomicU64,
     queued: &AtomicU64,
@@ -304,7 +336,9 @@ fn walk(
         let mtime_ms = meta.modified().map(unix_ms).unwrap_or(0);
 
         match known.get(&rel_path) {
-            Some(&(known_size, known_mtime)) if known_size == size && known_mtime == mtime_ms => {
+            Some(&(known_size, known_mtime))
+                if mode == Mode::Changes && known_size == size && known_mtime == mtime_ms =>
+            {
                 walked.unchanged += 1;
             }
             previous => {
@@ -458,6 +492,47 @@ mod tests {
         assert_eq!(sources[0], ("a.jpg".into(), "exif".into()));
         assert_eq!(sources[1], ("2024/summer/b.JPEG".into(), "exif".into()));
         assert_eq!(sources[2], ("2024/c.png".into(), "file".into()));
+    }
+
+    #[test]
+    fn everything_mode_reads_every_file_and_keeps_thumbnails() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join("a.jpg"), photo("2024:01:01 10:00:00")).unwrap();
+        fs::write(root.join("b.jpg"), photo("2024:01:02 10:00:00")).unwrap();
+        let mut conn = db::open_in_memory().unwrap();
+        run(root, &mut conn);
+        conn.execute(
+            "UPDATE photos SET thumb_state = 1 WHERE rel_path = 'a.jpg'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE photos SET thumb_state = 2 WHERE rel_path = 'b.jpg'",
+            [],
+        )
+        .unwrap();
+
+        let progress = std::cell::Cell::new(0);
+        let full = scan_with(
+            root,
+            &mut conn,
+            Mode::Everything,
+            &AtomicBool::new(false),
+            &|p| progress.set(p.known),
+        )
+        .unwrap();
+        assert_eq!((full.added, full.updated, full.unchanged), (0, 2, 0));
+        assert_eq!(progress.get(), 2);
+        let states: Vec<i64> = conn
+            .prepare("SELECT thumb_state FROM photos ORDER BY rel_path")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        // Same content, same thumbnail; the failed one is tried again.
+        assert_eq!(states, [1, 0]);
     }
 
     #[test]
