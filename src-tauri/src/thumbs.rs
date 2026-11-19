@@ -24,7 +24,7 @@ use image::codecs::jpeg::JpegEncoder;
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageReader, RgbImage};
 use rayon::prelude::*;
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use serde::Serialize;
 
 use crate::db::{self, ThumbState};
@@ -42,6 +42,8 @@ const PREVIEW_QUALITY: u8 = 82;
 
 const WRITE_BATCH: usize = 100;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
+/// Results are written at least this often, so the grid fills in steadily.
+const WRITE_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbSize {
@@ -538,40 +540,56 @@ pub fn generate_missing(
             });
         });
 
-        let mut in_batch = 0usize;
-        let mut tx = conn.transaction()?;
-        for (rel_path, result) in receiver {
-            match result {
-                Ok(size) => {
-                    db::set_thumb_state(&tx, &rel_path, ThumbState::Ready, size)?;
-                }
-                Err(ThumbError::Decode(_)) => {
-                    db::set_thumb_state(&tx, &rel_path, ThumbState::Failed, None)?;
-                    summary.undecodable += 1;
-                }
-                Err(ThumbError::NoVideoTool) => {
-                    db::set_thumb_state(&tx, &rel_path, ThumbState::Missing, None)?;
-                    summary.without_thumbnail += 1;
-                }
-                Err(ThumbError::NoFrame(_)) => {
-                    db::set_thumb_state(&tx, &rel_path, ThumbState::NoFrame, None)?;
-                    summary.without_thumbnail += 1;
-                }
-                Err(ThumbError::Io(_)) => summary.unreadable += 1,
+        // The results are written in short transactions, a batch at a time,
+        // never while waiting for the next thumbnail: making them can take
+        // a while on a network drive, and a change the user makes meanwhile
+        // (an album, a favorite) must not wait for it.
+        let mut batch: Vec<Outcome> = Vec::with_capacity(WRITE_BATCH);
+        let mut last_write = Instant::now();
+        let mut write = |batch: &mut Vec<Outcome>| -> rusqlite::Result<()> {
+            if batch.is_empty() {
+                return Ok(());
             }
-            done += 1;
-            in_batch += 1;
-            if in_batch >= WRITE_BATCH {
-                tx.commit()?;
-                tx = conn.transaction()?;
-                in_batch = 0;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for (rel_path, result) in batch.drain(..) {
+                let (state, size) = match result {
+                    Ok(size) => (ThumbState::Ready, size),
+                    Err(ThumbError::Decode(_)) => (ThumbState::Failed, None),
+                    Err(ThumbError::NoVideoTool) => (ThumbState::Missing, None),
+                    Err(ThumbError::NoFrame(_)) => (ThumbState::NoFrame, None),
+                    Err(ThumbError::Io(_)) => continue,
+                };
+                db::set_thumb_state(&tx, &rel_path, state, size)?;
+            }
+            tx.commit()
+        };
+        loop {
+            match receiver.recv_timeout(PROGRESS_INTERVAL) {
+                Ok((rel_path, result)) => {
+                    match &result {
+                        Err(ThumbError::Decode(_)) => summary.undecodable += 1,
+                        Err(ThumbError::NoVideoTool | ThumbError::NoFrame(_)) => {
+                            summary.without_thumbnail += 1
+                        }
+                        Err(ThumbError::Io(_)) => summary.unreadable += 1,
+                        Ok(_) => {}
+                    }
+                    done += 1;
+                    batch.push((rel_path, result));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if batch.len() >= WRITE_BATCH || last_write.elapsed() >= WRITE_INTERVAL {
+                write(&mut batch)?;
+                last_write = Instant::now();
             }
             if last_progress.elapsed() >= PROGRESS_INTERVAL {
                 last_progress = Instant::now();
                 report(done);
             }
         }
-        tx.commit()
+        write(&mut batch)
     })?;
 
     summary.generated = generated.load(Ordering::Relaxed)

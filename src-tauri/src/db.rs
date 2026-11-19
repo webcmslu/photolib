@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 
 use crate::org::{Event, Op};
 
@@ -413,7 +413,7 @@ pub fn set_face_groups_hidden(
     clusters: &[i64],
     hidden: bool,
 ) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for cluster in clusters {
         if hidden {
             tx.execute(
@@ -452,7 +452,7 @@ pub fn remove_faces(
     clusters: &[i64],
     photos: &[String],
 ) -> rusqlite::Result<usize> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut removed = 0;
     {
         let mut update = tx.prepare(
@@ -482,7 +482,7 @@ pub fn fill_places(
         )?
         .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
         .collect::<rusqlite::Result<_>>()?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     {
         let mut update =
             tx.prepare("UPDATE photos SET place = ?2, place_search = ?3 WHERE id = ?1")?;
@@ -508,7 +508,7 @@ pub fn fill_places(
 /// The second file then disappears from the listings, and the photo gets a
 /// link to it.
 pub fn pair_parts(conn: &mut Connection) -> rusqlite::Result<usize> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     tx.execute_batch(&format!(
         "CREATE TEMP TABLE IF NOT EXISTS live_pairs (
              image_id INTEGER PRIMARY KEY, video_id INTEGER, video_fp TEXT);
@@ -1304,7 +1304,7 @@ pub fn face_embeddings(conn: &Connection) -> rusqlite::Result<Vec<StoredFace>> {
 }
 
 pub fn set_face_clusters(conn: &mut Connection, groups: &[(i64, i64)]) -> rusqlite::Result<()> {
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     {
         let mut update = tx.prepare("UPDATE faces.face SET cluster = ?2 WHERE id = ?1")?;
         for (face, cluster) in groups {

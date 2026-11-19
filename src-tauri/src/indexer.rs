@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local};
 use rayon::prelude::*;
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use serde::Serialize;
 use walkdir::{DirEntry, WalkDir};
 
@@ -207,7 +207,7 @@ pub fn scan_with(
         let mut last_commit = Instant::now();
         let mut last_progress = Instant::now();
         let mut reported_walk_end = false;
-        let mut tx = conn.transaction()?;
+        let mut tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         loop {
             match row_rx.recv_timeout(PROGRESS_INTERVAL) {
                 Ok((is_new, Some(row))) => {
@@ -229,7 +229,7 @@ pub fn scan_with(
             }
             if pending >= WRITE_BATCH || (pending > 0 && last_commit.elapsed() >= COMMIT_INTERVAL) {
                 tx.commit()?;
-                tx = conn.transaction()?;
+                tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 pending = 0;
                 last_commit = Instant::now();
             }
@@ -263,7 +263,7 @@ pub fn scan_with(
     // Forget files that are gone, but only after a complete, clean walk.
     // Otherwise an unplugged drive would look like "everything was deleted".
     if !summary.cancelled && summary.unreadable_dirs == 0 {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         for rel_path in known.keys().filter(|path| !walked.seen.contains(*path)) {
             db::delete(&tx, rel_path)?;
             summary.removed += 1;

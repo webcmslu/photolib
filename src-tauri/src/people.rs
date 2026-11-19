@@ -21,7 +21,7 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use serde::Serialize;
 
 use crate::db::{self, NewFace};
@@ -48,6 +48,8 @@ const MAX_SUGGESTIONS: usize = 12;
 const MAX_PEOPLE: usize = 500;
 const WRITE_BATCH: usize = 50;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
+/// Found faces are written at least this often.
+const WRITE_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Searches the photos that were not searched yet. Returns how many were.
 pub fn find_faces(
@@ -94,10 +96,16 @@ pub fn find_faces(
                 });
         });
 
-        let mut in_batch = 0;
-        let mut tx = conn.transaction()?;
-        for (fingerprint, faces) in receiver {
-            if let Some(faces) = faces {
+        // Written in short transactions, never while waiting for the next
+        // photo: a change the user makes meanwhile must not wait for it.
+        let mut batch: Vec<(&String, Vec<Face>)> = Vec::with_capacity(WRITE_BATCH);
+        let mut last_write = Instant::now();
+        let mut write = |batch: &mut Vec<(&String, Vec<Face>)>| -> rusqlite::Result<()> {
+            if batch.is_empty() {
+                return Ok(());
+            }
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for (fingerprint, faces) in batch.drain(..) {
                 let rows: Vec<NewFace<'_>> = faces
                     .iter()
                     .map(|face| NewFace {
@@ -108,19 +116,29 @@ pub fn find_faces(
                     .collect();
                 db::save_faces(&tx, fingerprint, &rows)?;
             }
-            done += 1;
-            in_batch += 1;
-            if in_batch >= WRITE_BATCH {
-                tx.commit()?;
-                tx = conn.transaction()?;
-                in_batch = 0;
+            tx.commit()
+        };
+        loop {
+            match receiver.recv_timeout(PROGRESS_INTERVAL) {
+                Ok((fingerprint, faces)) => {
+                    if let Some(faces) = faces {
+                        batch.push((fingerprint, faces));
+                    }
+                    done += 1;
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+            if batch.len() >= WRITE_BATCH || last_write.elapsed() >= WRITE_INTERVAL {
+                write(&mut batch)?;
+                last_write = Instant::now();
             }
             if last_progress.elapsed() >= PROGRESS_INTERVAL {
                 last_progress = Instant::now();
                 report(done);
             }
         }
-        tx.commit()
+        write(&mut batch)
     })?;
     Ok(done)
 }
@@ -194,7 +212,7 @@ pub fn merge_groups(conn: &mut Connection) -> rusqlite::Result<usize> {
     if merges.is_empty() {
         return Ok(0);
     }
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for (from, into) in &merges {
         db::merge_face_group(&tx, *from, *into)?;
     }

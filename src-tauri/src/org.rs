@@ -35,7 +35,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::db;
@@ -425,7 +425,7 @@ pub fn sync(
         );
 
     let mut read = 0;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     for (source, log_device, path) in sources {
         let offset = db::log_offset(&tx, &source)?;
         // An unreadable log is skipped this time and picked up on a later sync.
@@ -503,7 +503,9 @@ pub fn record(
     };
     append(&log, &events).map_err(RecordError::Log)?;
 
-    let tx = conn.transaction().map_err(RecordError::Database)?;
+    let tx = conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(RecordError::Database)?;
     for event in &events {
         db::apply_event(&tx, device, event).map_err(RecordError::Database)?;
     }
