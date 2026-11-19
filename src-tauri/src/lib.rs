@@ -1430,7 +1430,8 @@ pub fn run() {
         // `importthumb://localhost/<generation>/<file>`: thumbnails in the import window.
         .register_asynchronous_uri_scheme_protocol("importthumb", |ctx, request, responder| {
             let app = ctx.app_handle().clone();
-            let path = request.uri().path().to_owned();
+            // `convertFileSrc` percent-encodes the '/'.
+            let path = request.uri().path().replace("%2F", "/").replace("%2f", "/");
             tauri::async_runtime::spawn_blocking(move || {
                 let mut parts = path.trim_start_matches('/').split('/');
                 let generation = parts.next().and_then(|p| p.parse().ok());

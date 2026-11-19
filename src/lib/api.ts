@@ -60,6 +60,7 @@ export interface ImportTile {
   bytes: number;
   video: boolean;
   live: boolean;
+  raw: boolean;
   already: boolean;
   unreadable: boolean;
   /** For the thumbnail: importthumb://localhost/<generation>/<thumb>. */

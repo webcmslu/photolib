@@ -173,6 +173,8 @@ pub struct Tile {
     pub video: bool,
     /// A photo with its video (Live Photo).
     pub live: bool,
+    /// A photo with its RAW file (or a RAW file alone).
+    pub raw: bool,
     /// Already in the library, or imported before.
     pub already: bool,
     /// None of its new files could be read.
@@ -411,9 +413,12 @@ fn survey(
                 .find_map(|(_, entry)| entry.modified.map(crate::indexer::wall_clock_ms))
         });
         // Its tile shows the photo (not the video of a Live Photo).
+        // …and the JPEG of a JPEG + RAW pair, which is quicker to read.
+        let kind = |entry: &Entry| metadata::kind_of(Path::new(&entry.name));
         let main = files
             .iter()
-            .find(|(_, entry)| !entry.is_video)
+            .find(|(_, entry)| kind(entry) == Some(metadata::Kind::Image))
+            .or_else(|| files.iter().find(|(_, entry)| !entry.is_video))
             .unwrap_or(&files[0]);
         let mut tile = Tile {
             group,
@@ -422,6 +427,9 @@ fn survey(
             bytes: 0,
             video: files.iter().all(|(_, entry)| entry.is_video),
             live: files.iter().any(|(_, e)| e.is_video) && files.iter().any(|(_, e)| !e.is_video),
+            raw: files.iter().any(|(_, entry)| {
+                metadata::kind_of(Path::new(&entry.name)) == Some(metadata::Kind::Raw)
+            }),
             already: false,
             unreadable: false,
             thumb: main.0,

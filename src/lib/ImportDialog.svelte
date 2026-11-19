@@ -239,7 +239,7 @@
           {:else if preview.new === 0}
             <strong>{t("Everything here is already in the library.")}</strong>
           {:else}
-            <strong>{t("{items} to import ({size})", { items: items(preview.new), size: formatBytes(preview.newBytes) })}</strong>
+            <strong>{t("{items} to import ({size})", { items: items(preview.tiles.filter(selectable).length), size: formatBytes(preview.newBytes) })}</strong>
           {/if}
           {#if preview.firstDay !== null && preview.lastDay !== null}
             <span class="note">· {formatDayRange(preview.firstDay, preview.lastDay)}</span>
@@ -280,7 +280,7 @@
             {:else}
               <img src={thumbUrl(tile)} alt={tile.name} loading="lazy" draggable="false" onerror={() => noThumb.add(tile.group)} />
             {/if}
-            {#if tile.live}<span class="badge">LIVE</span>{:else if tile.video}<span class="badge">▶</span>{/if}
+            {#if tile.live}<span class="badge">LIVE</span>{:else if tile.video}<span class="badge">▶</span>{:else if tile.raw}<span class="badge">RAW</span>{/if}
             {#if tile.already}
               <span class="state">✓ {t("In the library")}</span>
             {:else if tile.unreadable}
@@ -538,6 +538,8 @@
     overflow-y: auto;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    /* Fixed rows: WebKit does not size grid items by aspect-ratio reliably. */
+    grid-auto-rows: 130px;
     gap: 4px;
     padding: 8px 12px;
     align-content: start;
@@ -545,15 +547,15 @@
 
   .tile {
     position: relative;
-    aspect-ratio: 1;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
     padding: 0;
     border: 3px solid transparent;
     border-radius: 6px;
     overflow: hidden;
     background: var(--surface-hover);
     cursor: pointer;
-    content-visibility: auto;
-    contain-intrinsic-size: 120px;
   }
 
   .tile.on {
