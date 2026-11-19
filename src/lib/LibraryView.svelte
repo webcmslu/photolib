@@ -52,6 +52,7 @@
   import SettingsButton from "./SettingsButton.svelte";
   import ExportDialog from "./ExportDialog.svelte";
   import DuplicatesView from "./DuplicatesView.svelte";
+  import SimilarView from "./SimilarView.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { showMenu, type MenuEntry } from "./contextMenu";
   import { LABELS, labelForKey, type LabelColor } from "./labels";
@@ -230,7 +231,7 @@
   // Raw (not a deep proxy): it is passed to the backend as is.
   let listing = $state.raw<Listing>({ kind: "library" });
   /** What the main area shows: a photo grid, the map or the people. */
-  let section = $state<"photos" | "map" | "people" | "duplicates">("photos");
+  let section = $state<"photos" | "map" | "people" | "duplicates" | "similar">("photos");
   /** The name of the person whose photos are listed. */
   let personName = $state<string | null>(null);
   let personHidden = $state(false);
@@ -1169,6 +1170,9 @@
       <button class="row" class:selected={section === "duplicates"} onclick={() => (section = "duplicates")}>
         <span class="row-name">Duplicates</span>
       </button>
+      <button class="row" class:selected={section === "similar"} onclick={() => (section = "similar")}>
+        <span class="row-name">Similar shots</span>
+      </button>
 
       <h2>
         Albums
@@ -1278,6 +1282,10 @@
             canEdit={online && writable}
             onchanged={refreshAll}
           />
+        </div>
+      {:else if section === "similar"}
+        <div class="map">
+          <SimilarView libraryPath={library.path} {revision} canEdit={online && writable} onchanged={refreshAll} />
         </div>
       {:else}
       <div class="toolbar">

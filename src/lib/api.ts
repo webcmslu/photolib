@@ -605,3 +605,28 @@ export function createAlbum(path: string, name: string): Promise<string> {
 export function syncLibrary(path: string): Promise<boolean> {
   return invoke("sync_library", { path });
 }
+
+// --- Similar shots -------------------------------------------------------------
+
+/** Mirrors `Shot` in src-tauri/src/similar.rs. */
+export interface SimilarShot {
+  fingerprint: string;
+  relPath: string;
+  sortDate: number;
+  width: number | null;
+  height: number | null;
+  favorite: boolean;
+  rating: number;
+}
+
+/** Shots taken moments apart that look alike, in the order they were taken. */
+export interface SimilarGroup {
+  shots: SimilarShot[];
+  /** The shot the app suggests keeping. */
+  keep: number;
+}
+
+/** Groups of similar shots among the photos that are not hidden, newest first. */
+export function similarGroups(path: string): Promise<SimilarGroup[]> {
+  return invoke("similar_groups", { path });
+}

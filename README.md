@@ -83,6 +83,11 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   user to delete in their file manager, or put back. This is the only
   feature that moves files, and only on request; nothing is ever deleted
   or changed.
+- Ratings (1 to 5 stars, keys 1–5) and colour labels (keys 6–9), shared
+  through the library like favorites, with filters for both.
+- Similar shots: bursts and near-identical photos taken within a minute are
+  grouped by a visual fingerprint of their thumbnails, with a suggested
+  shot to keep; the others can be hidden (not moved or deleted).
 - Right-click menus (the system's own) on photos, albums, folders and
   people, and "Show in Finder / Explorer / Files" for a photo.
 
