@@ -6,7 +6,7 @@
 <script lang="ts">
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
-  import { about, checkForUpdate } from "./about.svelte";
+  import { about, checkForUpdate, installUpdate } from "./about.svelte";
 
   let open = $state(false);
   const WEBSITE = "https://webcms.lu";
@@ -49,8 +49,21 @@
       {#if about.update}
         <div class="update">
           <span>v{about.update.version} is available</span>
-          <a href={about.update.url} onclick={(event) => visit(event, about.update?.url ?? "")}>Download ↗</a>
+          {#if about.installing}
+            <span class="installing">
+              {about.installing.total
+                ? `Downloading… ${Math.round((100 * about.installing.received) / about.installing.total)}%`
+                : "Downloading…"}
+            </span>
+          {:else if about.installable}
+            <button class="install" onclick={installUpdate}>Install and restart</button>
+          {:else}
+            <a href={about.update.url} onclick={(event) => visit(event, about.update?.url ?? "")}>Download ↗</a>
+          {/if}
         </div>
+        {#if about.installError}
+          <p class="install-error" role="alert">Couldn't install it: {about.installError}</p>
+        {/if}
       {/if}
       <div class="body">
         <p class="label">Developed by</p>
@@ -173,6 +186,38 @@
 
   .update a:hover {
     text-decoration: underline;
+  }
+
+  .install {
+    padding: 4px 10px;
+    border: none;
+    border-radius: 6px;
+    background: #16a34a;
+    color: #fff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .install:hover {
+    background: #15803d;
+  }
+
+  .installing {
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .install-error {
+    margin: 0;
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    color: var(--danger);
+    font-size: 12px;
+    user-select: text;
+    -webkit-user-select: text;
   }
 
   @media (prefers-color-scheme: dark) {

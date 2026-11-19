@@ -22,6 +22,14 @@
 # To set the two together, from the folder holding the exported .p12:
 #   base64 -i certificate.p12 | gh secret set APPLE_CERTIFICATE
 #   gh secret set APPLE_CERTIFICATE_PASSWORD      (asks for it; type or paste)
+#
+# Every build also signs the in-app updates, which needs these two secrets
+# (the key pair made with `npx tauri signer generate`; its public half is in
+# tauri.conf.json). Without them the build stops:
+#   TAURI_SIGNING_PRIVATE_KEY           the private key file's content
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password
+#   gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.tauri/photolib-updater.key
+#   gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD < ~/.tauri/photolib-updater.password
 name: Release
 
 on:
@@ -226,11 +234,23 @@ jobs:
             fi
           done
 
+      - name: Check the update signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set: the in-app updates can't be signed. See the header of release.yml."
+            exit 1
+          fi
+
       - name: Build and attach to a draft release
         if: github.ref_type == 'tag' || inputs.tag != ''
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           releaseId: ${{ needs.draft.outputs.id }}
           args: ${{ matrix.args }}
@@ -238,6 +258,9 @@ jobs:
       - name: Build only
         if: github.ref_type != 'tag' && inputs.tag == ''
         uses: tauri-apps/tauri-action@v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: ${{ matrix.args }}
 

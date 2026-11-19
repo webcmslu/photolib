@@ -10,6 +10,8 @@
     "dialog:allow-open",
     "core:window:allow-set-fullscreen",
     "core:window:allow-is-fullscreen",
-    "opener:default"
+    "opener:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }
