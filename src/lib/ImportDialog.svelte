@@ -4,8 +4,10 @@
   device is only read, so the photos can be deleted there afterwards.
 -->
 <script lang="ts">
+  import { convertFileSrc } from "@tauri-apps/api/core";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import {
     cancelJob,
     importFiles,
@@ -18,8 +20,9 @@
     type ImportProgress,
     type ImportSource,
     type ImportSummary,
+    type ImportTile,
   } from "./api";
-  import { formatBytes, formatDayRange } from "./format";
+  import { formatBytes, formatDateTime, formatDayRange } from "./format";
   import { errorText, t, tn } from "./i18n";
 
   interface Props {
@@ -44,6 +47,50 @@
   /** The phone is locked or doesn't trust this computer yet. */
   let needsTrust = $state(false);
   const running = $derived(progress !== null && summary === null);
+
+  // --- Choosing what to import ------------------------------------------------
+
+  /** The `group` of each tile to import. Everything new to begin with. */
+  const selected = new SvelteSet<number>();
+  /** Also show what is already in the library (always, if nothing is new). */
+  let showAlready = $state(false);
+  const shown = $derived(
+    preview ? preview.tiles.filter((tile) => showAlready || preview!.new === 0 || !tile.already) : [],
+  );
+  const selectable = (tile: ImportTile) => !tile.already && !tile.unreadable;
+  const selectedTiles = $derived(preview ? preview.tiles.filter((tile) => selected.has(tile.group)) : []);
+  const selectedBytes = $derived(selectedTiles.reduce((sum, tile) => sum + tile.bytes, 0));
+  /** Where a shift-click selects from. */
+  let anchor: number | null = null;
+
+  function selectAll() {
+    for (const tile of preview?.tiles ?? []) if (selectable(tile)) selected.add(tile.group);
+  }
+
+  /** Click: one tile on or off; shift-click: all from the last click to this one. */
+  function toggle(index: number, range: boolean) {
+    const tile = shown[index];
+    if (!tile || !selectable(tile)) return;
+    const on = !selected.has(tile.group);
+    if (range && anchor !== null) {
+      const [from, to] = anchor < index ? [anchor, index] : [index, anchor];
+      for (const other of shown.slice(from, to + 1)) {
+        if (!selectable(other)) continue;
+        if (on) selected.add(other.group);
+        else selected.delete(other.group);
+      }
+    } else if (on) {
+      selected.add(tile.group);
+    } else {
+      selected.delete(tile.group);
+    }
+    anchor = index;
+  }
+
+  const thumbUrl = (tile: ImportTile) =>
+    preview ? convertFileSrc(`${preview.generation}/${tile.thumb}`, "importthumb") : "";
+  /** Tiles whose thumbnail could not be made: they show their name instead. */
+  const noThumb = new SvelteSet<number>();
 
   /** The folder each source was last imported into, by name. */
   const folderKey = (name: string) => `photolib.importFolder.${name}`;
@@ -84,6 +131,10 @@
     }
     try {
       preview = await importPreview(libraryPath, chosen.path);
+      selected.clear();
+      noThumb.clear();
+      anchor = null;
+      selectAll();
     } catch (e) {
       error = errorText(e);
       needsTrust = error === t("Unlock the device and tap “Trust” on it, then try again.");
@@ -104,16 +155,16 @@
   }
 
   async function start() {
-    if (!source || !preview || !folder.trim()) return;
+    if (!source || !preview || !folder.trim() || selected.size === 0) return;
     error = null;
     try {
       localStorage.setItem(folderKey(source.name), folder.trim());
     } catch {
       // Not remembered; no harm.
     }
-    progress = { done: 0, total: preview.new, bytes: 0, totalBytes: preview.newBytes };
+    progress = { done: 0, total: selectedTiles.length, bytes: 0, totalBytes: selectedBytes };
     try {
-      summary = await importFiles(libraryPath, source.path, folder.trim());
+      summary = await importFiles(libraryPath, source.path, folder.trim(), [...selected]);
       if (summary.imported > 0) onimported();
     } catch (e) {
       error = errorText(e);
@@ -134,7 +185,7 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={() => !running && onclose()}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="box" role="dialog" aria-modal="true" aria-label={t("Import")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
+  <div class="box" class:wide={!!preview && !summary && !progress} role="dialog" aria-modal="true" aria-label={t("Import")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
     <header>
       <h2>{source ? t("Import from “{name}”", { name: source.name }) : t("Import photos")}</h2>
       {#if !running}
@@ -178,33 +229,85 @@
       <footer>
         <button class="secondary" onclick={cancelJob}>{t("Stop")}</button>
       </footer>
-    {:else if source}
-      <section>
-        {#if preview}
-          {#if preview.new > 0}
-            <p>
-              <strong>{t("{items} to import ({size})", { items: items(preview.new), size: formatBytes(preview.newBytes) })}</strong>
-              {#if preview.firstDay !== null && preview.lastDay !== null}
-                <br /><span class="note">{formatDayRange(preview.firstDay, preview.lastDay)}</span>
-              {/if}
-            </p>
+    {:else if source && preview}
+      <section class="bar">
+        <span>
+          {#if preview.tiles.length === 0}
+            <strong>{t("The device shows no photos.")}</strong>
+          {:else if preview.new === 0}
+            <strong>{t("Everything here is already in the library.")}</strong>
           {:else}
-            <p><strong>{t("Nothing new to import.")}</strong></p>
+            <strong>{t("{items} to import ({size})", { items: items(preview.new), size: formatBytes(preview.newBytes) })}</strong>
           {/if}
-          {#if preview.already > 0}
-            <p class="note">{t("{items} already in the library, skipped.", { items: items(preview.already) })}</p>
+          {#if preview.firstDay !== null && preview.lastDay !== null}
+            <span class="note">· {formatDayRange(preview.firstDay, preview.lastDay)}</span>
           {/if}
           {#if preview.unreadable > 0}
-            <p class="error">{t("{n} can't be read.", { n: preview.unreadable })}</p>
+            <span class="error">· {t("{n} can't be read.", { n: preview.unreadable })}</span>
           {/if}
-          {#if preview.new > 0}
-            <label class="folder">
-              <span class="label">{t("Into the folder")}</span>
-              <input type="text" bind:value={folder} spellcheck="false" />
-              <span class="note">{t("In the library, by month: {example}", { example: `${folder.trim() || "…"}/${exampleMonth}/` })}</span>
+        </span>
+        <span class="spacer"></span>
+        {#if preview.new > 0}
+          {#if preview.already > 0}
+            <label class="check">
+              <input type="checkbox" bind:checked={showAlready} />
+              {t("Show the {n} already imported", { n: preview.tiles.length - preview.tiles.filter(selectable).length })}
             </label>
           {/if}
-        {:else if !error}
+          <button class="secondary small" onclick={selectAll}>{t("Select all")}</button>
+          <button class="secondary small" onclick={() => selected.clear()} disabled={selected.size === 0}>{t("Select none")}</button>
+        {/if}
+      </section>
+      <div class="grid" role="listbox" aria-multiselectable="true" aria-label={t("Photos to import")}>
+        {#each shown as tile, index (tile.group)}
+          <button
+            class="tile"
+            class:on={selected.has(tile.group)}
+            class:done={tile.already}
+            role="option"
+            aria-selected={selected.has(tile.group)}
+            disabled={!selectable(tile)}
+            title={`${tile.name}${tile.taken !== null ? " · " + formatDateTime(tile.taken) : ""}`}
+            onclick={(event) => toggle(index, event.shiftKey)}
+          >
+            {#if noThumb.has(tile.group)}
+              <span class="name">{tile.name}</span>
+            {:else}
+              <img src={thumbUrl(tile)} alt={tile.name} loading="lazy" draggable="false" onerror={() => noThumb.add(tile.group)} />
+            {/if}
+            {#if tile.live}<span class="badge">LIVE</span>{:else if tile.video}<span class="badge">▶</span>{/if}
+            {#if tile.already}
+              <span class="state">✓ {t("In the library")}</span>
+            {:else if tile.unreadable}
+              <span class="state">{t("Can't be read")}</span>
+            {:else}
+              <span class="mark" aria-hidden="true">{selected.has(tile.group) ? "✓" : ""}</span>
+            {/if}
+          </button>
+        {/each}
+      </div>
+      <footer class="split">
+        {#if preview.new > 0}
+          <label class="folder">
+            <span class="label">{t("Into the folder")}</span>
+            <input type="text" bind:value={folder} spellcheck="false" />
+            <span class="note">{`${folder.trim() || "…"}/${exampleMonth}/`}</span>
+          </label>
+        {/if}
+        <span class="spacer"></span>
+        {#if error}
+          <span class="error" role="alert">{error}</span>
+        {/if}
+        <button class="secondary" onclick={onclose}>{t("Cancel")}</button>
+        <button class="primary" onclick={start} disabled={selected.size === 0 || !folder.trim()}>
+          {selected.size > 0
+            ? t("Import {items} ({size})", { items: items(selectedTiles.length), size: formatBytes(selectedBytes) })
+            : t("Import")}
+        </button>
+      </footer>
+    {:else if source}
+      <section>
+        {#if !error}
           <p>
             {t("Looking for new photos…")}
             {#if surveyed && surveyed[1] > 0}
@@ -227,9 +330,6 @@
       </section>
       <footer>
         <button class="secondary" onclick={onclose}>{t("Cancel")}</button>
-        <button class="primary" onclick={start} disabled={!preview || preview.new === 0 || !folder.trim()}>
-          {t("Import")}
-        </button>
       </footer>
     {:else}
       <section>
@@ -383,6 +483,153 @@
 
   .secondary:hover {
     background: var(--surface-hover);
+  }
+
+  .box.wide {
+    display: flex;
+    flex-direction: column;
+    width: min(1100px, calc(100vw - 32px));
+    height: calc(100vh - 48px);
+    overflow: hidden;
+  }
+
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .check {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .bar button.small {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .grid {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 4px;
+    padding: 8px 12px;
+    align-content: start;
+  }
+
+  .tile {
+    position: relative;
+    aspect-ratio: 1;
+    padding: 0;
+    border: 3px solid transparent;
+    border-radius: 6px;
+    overflow: hidden;
+    background: var(--surface-hover);
+    cursor: pointer;
+    content-visibility: auto;
+    contain-intrinsic-size: 120px;
+  }
+
+  .tile.on {
+    border-color: var(--accent);
+  }
+
+  .tile.done {
+    cursor: default;
+  }
+
+  .tile.done img {
+    opacity: 0.4;
+  }
+
+  .tile img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+
+  .tile .name {
+    display: block;
+    padding: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+    word-break: break-all;
+  }
+
+  .mark {
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.25);
+    color: #fff;
+    font-size: 12px;
+    line-height: 16px;
+    text-align: center;
+    box-shadow: 0 0 3px rgb(0 0 0 / 0.5);
+  }
+
+  .tile.on .mark {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .badge {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgb(0 0 0 / 0.55);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .state {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 3px 5px;
+    background: rgb(0 0 0 / 0.6);
+    color: #fff;
+    font-size: 11px;
+  }
+
+  footer.split {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  footer.split .folder {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+  }
+
+  footer.split .error {
+    font-size: 12px;
   }
 
   .folder {

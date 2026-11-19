@@ -1197,8 +1197,11 @@ fn import_files(
     path: String,
     source: String,
     folder: String,
+    groups: Option<Vec<usize>>,
     state: State<'_, AppState>,
 ) -> Result<importer::Summary, String> {
+    let selection: Option<std::collections::HashSet<usize>> =
+        groups.map(|groups| groups.into_iter().collect());
     let open = editable_library(&state, &path)?;
     if !open.writable {
         return Err("The library folder is read-only, so nothing can be imported into it.".into());
@@ -1210,6 +1213,7 @@ fn import_files(
         Path::new(&path),
         &conn,
         &folder,
+        selection.as_ref(),
         &state.device,
         &state.job_cancel,
         |done, total| {
@@ -1421,6 +1425,31 @@ pub fn run() {
             // busy, and what the user is looking at must not queue behind it.
             tauri::async_runtime::spawn_blocking(move || {
                 responder.respond(thumb_response(&app, &path));
+            });
+        })
+        // `importthumb://localhost/<generation>/<file>`: thumbnails in the import window.
+        .register_asynchronous_uri_scheme_protocol("importthumb", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            let path = request.uri().path().to_owned();
+            tauri::async_runtime::spawn_blocking(move || {
+                let mut parts = path.trim_start_matches('/').split('/');
+                let generation = parts.next().and_then(|p| p.parse().ok());
+                let id = parts.next().and_then(|p| p.parse().ok());
+                let jpeg = generation.zip(id).and_then(|(generation, id)| {
+                    let state = app.state::<AppState>();
+                    let _permit = state.on_demand.acquire();
+                    importer::thumbnail(generation, id)
+                });
+                let response = match jpeg {
+                    Some(bytes) => Response::builder()
+                        .header(header::CONTENT_TYPE, "image/jpeg")
+                        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+                        .body(bytes),
+                    None => Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Vec::new()),
+                };
+                responder.respond(response.expect("static response"));
             });
         })
         .register_asynchronous_uri_scheme_protocol("photo", |ctx, request, responder| {

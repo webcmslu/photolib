@@ -52,7 +52,24 @@ export interface ImportSource {
   restricted: boolean;
 }
 
+/** A photo or video of the source with its companions (Live Photo video, RAW). */
+export interface ImportTile {
+  group: number;
+  name: string;
+  taken: number | null;
+  bytes: number;
+  video: boolean;
+  live: boolean;
+  already: boolean;
+  unreadable: boolean;
+  /** For the thumbnail: importthumb://localhost/<generation>/<thumb>. */
+  thumb: number;
+}
+
 export interface ImportPreview {
+  /** Newest first. */
+  tiles: ImportTile[];
+  generation: number;
   new: number;
   newBytes: number;
   already: number;
@@ -85,8 +102,14 @@ export function importPreview(path: string, source: string): Promise<ImportPrevi
   return invoke("import_preview", { path, source });
 }
 
-export function importFiles(path: string, source: string, folder: string): Promise<ImportSummary> {
-  return invoke("import_files", { path, source, folder });
+/** Imports what is new on `source`, or only the tiles whose `group` is in `groups`. */
+export function importFiles(
+  path: string,
+  source: string,
+  folder: string,
+  groups: number[] | null = null,
+): Promise<ImportSummary> {
+  return invoke("import_files", { path, source, folder, groups });
 }
 
 export function onImportProgress(handler: (progress: ImportProgress) => void): Promise<UnlistenFn> {

@@ -383,3 +383,40 @@ char *pl_camera_download(const char *device_id, long index, const char *dir, con
     }
     return failure ? copy_string(failure) : NULL;
 }
+
+/// A JPEG thumbnail of file `index`, at most `max_side` pixels: returns its
+/// length and puts it in `*out` (malloc, freed with `pl_camera_free`), or -1
+/// with `*error` set.
+long long pl_camera_thumbnail(const char *device_id, long index, long max_side, uint8_t **out, char **error) {
+    PLCameras *shared = cameras();
+    ICCameraFile *file = file_at(shared, [NSString stringWithUTF8String:device_id], index);
+    if (!file) {
+        *error = copy_string(@"the file is no longer on the device");
+        return -1;
+    }
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block NSData *jpeg = nil;
+    __block NSString *failure = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [file requestThumbnailDataWithOptions:@{ICImageSourceThumbnailMaxPixelSize : @(max_side)}
+                                   completion:^(NSData *data, NSError *thumbError) {
+                                       if (data.length > 0 && !thumbError) {
+                                           jpeg = data;
+                                       } else {
+                                           failure = thumbError.localizedDescription ?: @"no thumbnail";
+                                       }
+                                       dispatch_semaphore_signal(done);
+                                   }];
+    });
+    if (!wait_for(done, 30)) {
+        *error = copy_string(@"the device doesn't answer");
+        return -1;
+    }
+    if (!jpeg) {
+        *error = copy_string(failure);
+        return -1;
+    }
+    *out = malloc(jpeg.length);
+    memcpy(*out, jpeg.bytes, jpeg.length);
+    return (long long)jpeg.length;
+}

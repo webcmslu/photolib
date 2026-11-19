@@ -19,6 +19,13 @@ extern "C" {
         out: *mut u8,
         error: *mut *mut c_char,
     ) -> i64;
+    fn pl_camera_thumbnail(
+        device: *const c_char,
+        index: c_long,
+        max_side: c_long,
+        out: *mut *mut u8,
+        error: *mut *mut c_char,
+    ) -> i64;
     fn pl_camera_download(
         device: *const c_char,
         index: c_long,
@@ -177,4 +184,29 @@ pub fn download(
         finished.store(true, Ordering::Relaxed);
         error.map_or(Ok(()), Err)
     })
+}
+
+/// A small JPEG of file `index`, made by the device (photos and videos).
+pub fn thumbnail(device: &str, index: usize, max_side: u32) -> Result<Vec<u8>, String> {
+    let id = c_string(device);
+    let mut out: *mut u8 = std::ptr::null_mut();
+    let mut error: *mut c_char = std::ptr::null_mut();
+    // SAFETY: the bridge sets `out` to a malloc'd buffer of the returned length.
+    let length = unsafe {
+        pl_camera_thumbnail(
+            id.as_ptr(),
+            index as c_long,
+            max_side as c_long,
+            &mut out,
+            &mut error,
+        )
+    };
+    let error = take(error);
+    if length < 0 || out.is_null() {
+        return Err(error.unwrap_or_else(|| "no thumbnail".into()));
+    }
+    // SAFETY: `out` holds `length` bytes, released right after the copy.
+    let bytes = unsafe { std::slice::from_raw_parts(out, length as usize) }.to_vec();
+    unsafe { pl_camera_free(out.cast()) };
+    Ok(bytes)
 }

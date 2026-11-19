@@ -156,10 +156,37 @@ struct Item {
     group: usize,
 }
 
+/// One photo or video as the import window shows it: a file with its
+/// companions (a Live Photo's video, a RAW file).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tile {
+    /// Names it in [`import`]'s selection.
+    pub group: usize,
+    pub name: String,
+    /// When it was taken, in wall-clock milliseconds.
+    pub taken: Option<i64>,
+    /// Bytes to copy (all of its files that are new).
+    pub bytes: u64,
+    pub video: bool,
+    /// A photo with its video (Live Photo).
+    pub live: bool,
+    /// Already in the library, or imported before.
+    pub already: bool,
+    /// None of its new files could be read.
+    pub unreadable: bool,
+    /// The file whose thumbnail stands for it (see [`thumbnail`]).
+    pub thumb: usize,
+}
+
 /// What an import would do.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Preview {
+    /// Everything on the source, newest first.
+    pub tiles: Vec<Tile>,
+    /// Changes with every preview; thumbnails are asked for with it.
+    pub generation: u64,
     /// Photos and videos to copy, and their size in bytes.
     pub new: usize,
     pub new_bytes: u64,
@@ -200,7 +227,15 @@ struct Survey {
     already: usize,
     unreadable: Vec<(String, String)>,
     days: Vec<i64>,
+    tiles: Vec<Tile>,
+    /// Every file found, by number, for thumbnails.
+    origins: Vec<(Origin, bool)>,
+    generation: u64,
 }
+
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// Thumbnails in the import window, in pixels.
+const THUMB_SIDE: u32 = 320;
 
 /// The last survey, so that importing right after the preview does not read
 /// a phone's files a second time: (source, library, when, survey).
@@ -362,14 +397,18 @@ fn survey(
         None => folder_entries(Path::new(source), &mut unreadable)?,
     };
 
-    // Grouped by folder and name stem.
-    let mut groups: BTreeMap<(String, String), Vec<Entry>> = BTreeMap::new();
-    for entry in entries {
+    // Grouped by folder and name stem, each file with its number.
+    let origins: Vec<(Origin, bool)> = entries
+        .iter()
+        .map(|entry| (entry.origin.clone(), entry.is_video))
+        .collect();
+    let mut groups: BTreeMap<(String, String), Vec<(usize, Entry)>> = BTreeMap::new();
+    for (id, entry) in entries.into_iter().enumerate() {
         let stem = group_stem(Path::new(&entry.name));
         groups
             .entry((entry.folder.clone(), stem))
             .or_default()
-            .push(entry);
+            .push((id, entry));
     }
 
     let imported = imported_before(library);
@@ -378,6 +417,9 @@ fn survey(
         already: 0,
         unreadable,
         days: Vec::new(),
+        tiles: Vec::new(),
+        origins,
+        generation: GENERATION.fetch_add(1, Ordering::Relaxed),
     };
     let mut in_library = conn
         .prepare("SELECT 1 FROM photos WHERE fingerprint = ?1 LIMIT 1")
@@ -386,23 +428,40 @@ fn survey(
     let mut done = 0;
     let mut last_report = Instant::now();
     for (group, (_, mut files)) in groups.into_iter().enumerate() {
-        files.sort_by(|a, b| a.name.cmp(&b.name));
+        files.sort_by(|a, b| a.1.name.cmp(&b.1.name));
         // The group's date: its photo's, else its video's, else the file's.
         let mut dated: Vec<(bool, i64)> = files
             .iter()
-            .filter_map(|entry| entry.taken.map(|ms| (entry.is_video, ms)))
+            .filter_map(|(_, entry)| entry.taken.map(|ms| (entry.is_video, ms)))
             .collect();
         dated.sort();
         let taken = dated.first().map(|&(_, ms)| ms).or_else(|| {
             files
                 .iter()
-                .find_map(|entry| entry.modified.map(crate::indexer::wall_clock_ms))
+                .find_map(|(_, entry)| entry.modified.map(crate::indexer::wall_clock_ms))
         });
+        // Its tile shows the photo (not the video of a Live Photo).
+        let main = files
+            .iter()
+            .find(|(_, entry)| !entry.is_video)
+            .unwrap_or(&files[0]);
+        let mut tile = Tile {
+            group,
+            name: main.1.name.clone(),
+            taken,
+            bytes: 0,
+            video: files.iter().all(|(_, entry)| entry.is_video),
+            live: files.iter().any(|(_, e)| e.is_video) && files.iter().any(|(_, e)| !e.is_video),
+            already: false,
+            unreadable: false,
+            thumb: main.0,
+        };
+        let (mut new_files, mut unreadable_files) = (0, 0);
         let date = taken
             .and_then(DateTime::from_timestamp_millis)
             .unwrap_or_default();
         let month = format!("{0}/{0}-{1:02}", date.year(), date.month());
-        for entry in files {
+        for (_, entry) in files {
             done += 1;
             if last_report.elapsed() >= PROGRESS_INTERVAL {
                 last_report = Instant::now();
@@ -417,6 +476,7 @@ fn survey(
                 Ok(fingerprint) => fingerprint,
                 Err(e) => {
                     survey.unreadable.push((entry.name, e.to_string()));
+                    unreadable_files += 1;
                     continue;
                 }
             };
@@ -433,6 +493,8 @@ fn survey(
             if let Some(ms) = taken {
                 survey.days.push(ms.div_euclid(86_400_000));
             }
+            new_files += 1;
+            tile.bytes += entry.size;
             survey.new.push(Item {
                 origin: entry.origin,
                 name: entry.name,
@@ -444,9 +506,56 @@ fn survey(
                 group,
             });
         }
+        tile.unreadable = new_files == 0 && unreadable_files > 0;
+        tile.already = new_files == 0 && unreadable_files == 0;
+        survey.tiles.push(tile);
     }
+    // Newest first, as in the library.
+    survey
+        .tiles
+        .sort_by(|a, b| b.taken.cmp(&a.taken).then(a.name.cmp(&b.name)));
     on_read(total, total);
     Ok(survey)
+}
+
+/// A small JPEG of file `id` of the last preview (`generation`), for the
+/// import window. `None` if there is none (a video on a drive, say).
+pub fn thumbnail(generation: u64, id: usize) -> Option<Vec<u8>> {
+    let (origin, is_video) = {
+        let last = LAST_SURVEY.lock().unwrap();
+        let (_, _, _, survey) = last.as_ref()?;
+        if survey.generation != generation {
+            return None;
+        }
+        survey.origins.get(id)?.clone()
+    };
+    match origin {
+        #[cfg(target_os = "macos")]
+        Origin::Camera { device, index } => {
+            crate::camera_macos::thumbnail(&device, index, THUMB_SIDE).ok()
+        }
+        #[cfg(not(target_os = "macos"))]
+        Origin::Camera { .. } => None,
+        Origin::File(_) if is_video => None,
+        Origin::File(path) => {
+            let orientation = metadata::read(&path).orientation;
+            let picture = crate::thumbs::decode_upright(&path, orientation).ok()?;
+            let (width, height) = picture.dimensions();
+            let scale = f64::from(THUMB_SIDE) / f64::from(width.max(height));
+            let picture = if scale < 1.0 {
+                let w = ((f64::from(width) * scale).round() as u32).max(1);
+                let h = ((f64::from(height) * scale).round() as u32).max(1);
+                crate::thumbs::resize(picture, w, h).ok()?
+            } else {
+                picture
+            };
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 75)
+                .encode_image(&picture)
+                .ok()?;
+            Some(jpeg)
+        }
+    }
 }
 
 /// The part of a file name that ties it to its companions: `IMG_1234` for
@@ -472,6 +581,8 @@ pub fn preview(
 ) -> io::Result<Preview> {
     let survey = survey(source, library, conn, &on_read)?;
     let preview = Preview {
+        tiles: survey.tiles.clone(),
+        generation: survey.generation,
         new: survey.new.len(),
         new_bytes: survey.new.iter().map(|item| item.size).sum(),
         already: survey.already,
@@ -488,7 +599,8 @@ pub fn preview(
     Ok(preview)
 }
 
-/// Copies what is new on `source` into `<library>/<folder>/<year>/<year>-<month>`.
+/// Copies what is new on `source` into `<library>/<folder>/<year>/<year>-<month>`:
+/// everything, or only the tiles whose `group` is in `selection`.
 /// Returns what was done; the caller then scans the library for the new files.
 #[allow(clippy::too_many_arguments)]
 pub fn import(
@@ -496,6 +608,7 @@ pub fn import(
     library: &Path,
     conn: &Connection,
     folder: &str,
+    selection: Option<&HashSet<usize>>,
     device: &str,
     cancel: &AtomicBool,
     on_read: impl Fn(usize, usize),
@@ -507,14 +620,17 @@ pub fn import(
         LAST_SURVEY
             .lock()
             .unwrap()
-            .take()
+            .clone()
             .filter(|(last_source, last_library, when, _)| {
                 last_source == source && last_library == library && when.elapsed() < SURVEY_REUSE
             });
-    let survey = match recent {
+    let mut survey = match recent {
         Some((_, _, _, survey)) => survey,
         None => survey(source, library, conn, &on_read)?,
     };
+    if let Some(selection) = selection {
+        survey.new.retain(|item| selection.contains(&item.group));
+    }
     let mut summary = Summary {
         already: survey.already,
         failed: survey.unreadable,
@@ -845,6 +961,11 @@ mod tests {
         let card = card.to_string_lossy().into_owned();
         let first = preview(&card, &library, &conn, |_, _| {}).unwrap();
         assert_eq!((first.new, first.already), (3, 0));
+        // Two tiles: the Live Photo (photo + video) and the plain photo.
+        assert_eq!(first.tiles.len(), 2);
+        let live = first.tiles.iter().find(|tile| tile.live).unwrap();
+        assert_eq!(live.name, "IMG_0001.JPG");
+        assert!(!live.already && !live.video);
 
         // A file of the same name, different content, is already there.
         let modified = fs::metadata(Path::new(&card).join("DCIM/100APPLE/IMG_0001.JPG"))
@@ -863,6 +984,7 @@ mod tests {
             &library,
             &conn,
             "Card",
+            None,
             "dev1",
             &cancel,
             |_, _| {},
@@ -894,6 +1016,35 @@ mod tests {
         // Connected again: nothing new.
         let again = preview(&card, &library, &conn, |_, _| {}).unwrap();
         assert_eq!((again.new, again.already), (0, 3));
+    }
+
+    #[test]
+    fn imports_only_the_selected_tiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let card = card(dir.path()).to_string_lossy().into_owned();
+        let library = dir.path().join("library");
+        fs::create_dir_all(&library).unwrap();
+        let conn = index(dir.path());
+        let preview = preview(&card, &library, &conn, |_, _| {}).unwrap();
+        let plain = preview.tiles.iter().find(|tile| !tile.live).unwrap();
+        let selection = HashSet::from([plain.group]);
+        let cancel = AtomicBool::new(false);
+        let summary = import(
+            &card,
+            &library,
+            &conn,
+            "Card",
+            Some(&selection),
+            "dev1",
+            &cancel,
+            |_, _| {},
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(summary.imported, 1);
+        // The Live Photo is still to import; the plain photo is done.
+        let after = super::preview(&card, &library, &conn, |_, _| {}).unwrap();
+        assert_eq!((after.new, after.already), (2, 1));
     }
 
     #[test]
