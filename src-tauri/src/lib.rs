@@ -1,5 +1,6 @@
 mod apple;
 mod db;
+mod export;
 mod faces;
 mod fingerprint;
 mod frames;
@@ -60,6 +61,8 @@ struct AppState {
     /// Where the viewer loads videos from when the webview can't play them
     /// from `photo://` (Linux; see media_server.rs). `None` elsewhere.
     media_base: Option<String>,
+    /// Set to stop the export that is running.
+    export_cancel: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1055,6 +1058,42 @@ fn split_person(
     Ok(Some(new))
 }
 
+/// Copies photos into `dest`: the originals, or JPEGs with their edits,
+/// optionally smaller. Reports `export-progress` as `[done, total]`.
+#[tauri::command(async)]
+fn export_photos(
+    app: AppHandle,
+    path: String,
+    photos: Vec<String>,
+    dest: String,
+    size: export::Size,
+    state: State<'_, AppState>,
+) -> Result<export::Summary, String> {
+    let root = Path::new(&path);
+    if !root.is_dir() {
+        return Err("The library can't be reached right now.".into());
+    }
+    let items =
+        db::export_items(&open_index(&state, &path)?, &photos).map_err(|e| e.to_string())?;
+    state.export_cancel.store(false, Ordering::Relaxed);
+    export::export(
+        root,
+        &items,
+        Path::new(&dest),
+        size,
+        &state.export_cancel,
+        |done, total| {
+            let _ = app.emit("export-progress", [done, total]);
+        },
+    )
+    .map_err(|e| format!("Couldn't write to {dest}: {e}"))
+}
+
+#[tauri::command]
+fn cancel_export(state: State<'_, AppState>) {
+    state.export_cancel.store(true, Ordering::Relaxed);
+}
+
 /// Says what importing an Apple Photos library would do, without doing it.
 #[tauri::command(async)]
 fn apple_import_preview(
@@ -1169,6 +1208,7 @@ pub fn run() {
             };
             app.manage(AppState {
                 face_finder: Mutex::new(None),
+                export_cancel: Arc::new(AtomicBool::new(false)),
                 media_base,
                 device,
                 keys: Mutex::new(keys),
@@ -1228,6 +1268,8 @@ pub fn run() {
             set_person_hidden,
             remove_from_person,
             split_person,
+            export_photos,
+            cancel_export,
             people,
             name_person,
             months,

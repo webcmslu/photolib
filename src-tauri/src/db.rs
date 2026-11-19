@@ -680,6 +680,46 @@ pub fn find_by_fingerprint(
     .optional()
 }
 
+/// What exporting a photo needs to know about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportItem {
+    pub rel_path: String,
+    pub orientation: Option<u8>,
+    pub video: bool,
+    pub sort_date: i64,
+    pub edit: Option<crate::org::Edit>,
+}
+
+/// The photos to export, in the order given; unknown fingerprints are left out.
+pub fn export_items(
+    conn: &Connection,
+    fingerprints: &[String],
+) -> rusqlite::Result<Vec<ExportItem>> {
+    let mut stmt = conn.prepare(
+        "SELECT rel_path, orientation, kind = 1, sort_date,
+                (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint)
+         FROM photos WHERE fingerprint = ?1 LIMIT 1",
+    )?;
+    let mut items = Vec::new();
+    for fingerprint in fingerprints {
+        let item = stmt
+            .query_row([fingerprint], |row| {
+                Ok(ExportItem {
+                    rel_path: row.get(0)?,
+                    orientation: row.get(1)?,
+                    video: row.get(2)?,
+                    sort_date: row.get(3)?,
+                    edit: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|json| serde_json::from_str(&json).ok()),
+                })
+            })
+            .optional()?;
+        items.extend(item);
+    }
+    Ok(items)
+}
+
 /// `"2024/summer/img_1"` for `"2024/summer/IMG_1.HEIC"`.
 fn stem_of(rel_path: &str) -> String {
     let name_at = rel_path.rfind('/').map_or(0, |slash| slash + 1);

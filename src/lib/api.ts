@@ -34,6 +34,40 @@ export async function pickLibraryFolder(): Promise<string | null> {
   return typeof picked === "string" ? picked : null;
 }
 
+/** Lets the user choose the folder to export photos into. */
+export async function pickExportFolder(): Promise<string | null> {
+  const picked = await open({ directory: true, multiple: false, title: "Export to" });
+  return typeof picked === "string" ? picked : null;
+}
+
+/** The original files, or JPEGs with the edits applied, optionally smaller. */
+export type ExportSize = { kind: "original" } | { kind: "jpeg"; longSide: number | null };
+
+export interface ExportSummary {
+  exported: number;
+  /** Library-relative paths that failed, with why. */
+  failed: [string, string][];
+  cancelled: boolean;
+}
+
+export function exportPhotos(
+  path: string,
+  photos: string[],
+  dest: string,
+  size: ExportSize,
+): Promise<ExportSummary> {
+  return invoke("export_photos", { path, photos, dest, size });
+}
+
+export function cancelExport(): Promise<void> {
+  return invoke("cancel_export");
+}
+
+/** `[done, total]` while an export runs. */
+export function onExportProgress(handler: (done: number, total: number) => void): Promise<UnlistenFn> {
+  return listen<[number, number]>("export-progress", (event) => handler(...event.payload));
+}
+
 /**
  * Lets the user choose an Apple Photos library. On macOS it is a "package":
  * a folder that the file picker shows as one file.

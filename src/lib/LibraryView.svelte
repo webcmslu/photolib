@@ -50,6 +50,7 @@
   import Slideshow from "./Slideshow.svelte";
   import AboutButton from "./AboutButton.svelte";
   import SettingsButton from "./SettingsButton.svelte";
+  import ExportDialog from "./ExportDialog.svelte";
   import { saveSettings, settings } from "./settings.svelte";
 
   interface Props {
@@ -749,6 +750,15 @@
     }
   }
 
+  /** The fingerprints being exported, while the Export dialog is open. */
+  let exporting = $state<string[] | null>(null);
+  async function exportSelection() {
+    const target = pages;
+    const photos = await Promise.all([...selected].sort((a, b) => a - b).map((index) => target.load(index)));
+    if (target !== pages) return;
+    exporting = photos.flatMap((photo) => (photo ? [photo.fingerprint] : []));
+  }
+
   async function togglePersonHidden() {
     if (listing.kind !== "person") return;
     try {
@@ -1138,6 +1148,14 @@
           >
             {listing.kind === "hidden" ? "Unhide" : "Hide"}
           </button>
+          <button
+            class="secondary"
+            disabled={!online}
+            onclick={exportSelection}
+            title="Copy the selected photos into a folder, optionally smaller"
+          >
+            Export…
+          </button>
           <button class="secondary" onclick={() => selected.clear()}>Clear</button>
         {:else if renaming !== null}
           <form onsubmit={submitRename}>
@@ -1378,6 +1396,10 @@
     </main>
   </div>
 </div>
+
+{#if exporting}
+  <ExportDialog libraryPath={library.path} photos={exporting} onclose={() => (exporting = null)} />
+{/if}
 
 {#if slideshow}
   <Slideshow

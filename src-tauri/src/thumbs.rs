@@ -312,6 +312,21 @@ fn is_heic(source: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("heic") || ext.eq_ignore_ascii_case("heif"))
 }
 
+/// Decodes a photo at full size, the right way up (its EXIF `orientation`
+/// applied, unless the decoder already did).
+pub(crate) fn decode_upright(
+    source: &Path,
+    orientation: Option<u8>,
+) -> Result<RgbImage, ThumbError> {
+    let decoded = decode(source)?;
+    let exif_orientation = orientation.filter(|_| !decoded.upright).unwrap_or(1);
+    let mut image = DynamicImage::ImageRgb8(decoded.pixels);
+    image.apply_orientation(
+        Orientation::from_exif(exif_orientation).unwrap_or(Orientation::NoTransforms),
+    );
+    Ok(image.into_rgb8())
+}
+
 struct Decoded {
     pixels: RgbImage,
     /// True when the decoder already applied the file's rotation.
@@ -410,7 +425,7 @@ fn flatten(image: DynamicImage) -> RgbImage {
     rgb
 }
 
-fn resize(source: RgbImage, width: u32, height: u32) -> Result<RgbImage, ThumbError> {
+pub(crate) fn resize(source: RgbImage, width: u32, height: u32) -> Result<RgbImage, ThumbError> {
     if source.dimensions() == (width, height) {
         return Ok(source);
     }
@@ -433,7 +448,7 @@ fn resize(source: RgbImage, width: u32, height: u32) -> Result<RgbImage, ThumbEr
 }
 
 /// Scales down (never up) so the long side is at most `max`.
-fn fit_long_side(width: u32, height: u32, max: u32) -> (u32, u32) {
+pub(crate) fn fit_long_side(width: u32, height: u32, max: u32) -> (u32, u32) {
     let long = width.max(height);
     if long <= max {
         return (width, height);
