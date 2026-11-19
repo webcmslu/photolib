@@ -208,7 +208,8 @@ pub fn merge_groups(conn: &mut Connection) -> rusqlite::Result<usize> {
         .map(|(cluster, name)| (cluster, name.to_lowercase()))
         .collect();
     let refused = db::not_person(conn)?;
-    let merges = plan_merges(&sums, &names, &refused);
+    let apart = db::kept_apart(conn)?;
+    let merges = plan_merges(&sums, &names, &refused, &apart);
     if merges.is_empty() {
         return Ok(0);
     }
@@ -225,6 +226,7 @@ fn plan_merges(
     sums: &HashMap<i64, (Vec<f32>, usize)>,
     names: &HashMap<i64, String>,
     refused: &HashSet<(i64, String)>,
+    apart: &HashSet<(i64, i64)>,
 ) -> Vec<(i64, i64)> {
     // A group of one face is no steadier than a face, and it was already
     // compared with every group when it was made: only larger ones merge.
@@ -262,6 +264,17 @@ fn plan_merges(
                 .collect()
         })
         .collect();
+    // The groups each merged group holds, and those it must stay apart from.
+    let mut members: Vec<HashSet<i64>> = ids.iter().map(|id| HashSet::from([*id])).collect();
+    let mut avoid: Vec<HashSet<i64>> = ids
+        .iter()
+        .map(|id| {
+            apart
+                .iter()
+                .filter_map(|&(a, b)| (a == *id).then_some(b).or((b == *id).then_some(a)))
+                .collect()
+        })
+        .collect();
     fn root(parent: &mut [usize], mut i: usize) -> usize {
         while parent[i] != i {
             parent[i] = parent[parent[i]];
@@ -285,7 +298,7 @@ fn plan_merges(
             (None, Some(y)) => refusals[ra].contains(y),
             (None, None) => false,
         };
-        if clash {
+        if clash || !avoid[ra].is_disjoint(&members[rb]) || !avoid[rb].is_disjoint(&members[ra]) {
             continue;
         }
         let (into, from) = if count[ra] >= count[rb] {
@@ -304,6 +317,10 @@ fn plan_merges(
         }
         let moved = std::mem::take(&mut refusals[from]);
         refusals[into].extend(moved);
+        let moved = std::mem::take(&mut members[from]);
+        members[into].extend(moved);
+        let moved = std::mem::take(&mut avoid[from]);
+        avoid[into].extend(moved);
         merges.push((ids[from], ids[into]));
     }
     // Applied in this order, a group merged into one that is merged later
@@ -836,9 +853,12 @@ mod tests {
             (8, "tom".to_owned()),
         ]);
         let refused = HashSet::from([(7, "tom".to_owned())]);
-        assert_eq!(plan_merges(&sums, &names, &refused), [(1, 2)]);
+        assert_eq!(
+            plan_merges(&sums, &names, &refused, &HashSet::new()),
+            [(1, 2)]
+        );
         // Without the names and the refusal, those merge too.
-        let mut all = plan_merges(&sums, &HashMap::new(), &HashSet::new());
+        let mut all = plan_merges(&sums, &HashMap::new(), &HashSet::new(), &HashSet::new());
         all.sort_unstable();
         assert_eq!(all, [(1, 2), (6, 5), (8, 7)]);
     }
@@ -908,5 +928,79 @@ mod tests {
         assert_eq!(group_faces(&mut conn).unwrap(), 0);
         let listing = db::Listing::Person { clusters: vec![1] };
         assert_eq!(db::photos_page(&conn, &listing, 0, 10).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn a_split_group_stays_apart_and_loses_the_name() {
+        let mut conn = db::open_in_memory().unwrap();
+        // Four photos of what the grouping took for one person.
+        let shots = ["aa", "bb", "cc", "dd"];
+        for (n, name) in shots.iter().enumerate() {
+            photo(&mut conn, name);
+            let embedding = face_of(0, 0.02 * n as f32);
+            let tx = conn.transaction().unwrap();
+            let face = NewFace {
+                bounds: [0.1, 0.1, 0.2, 0.2],
+                score: 0.9,
+                embedding: &embedding,
+            };
+            db::save_faces(&tx, &name.repeat(32), &[face]).unwrap();
+            tx.commit().unwrap();
+        }
+        group_faces(&mut conn).unwrap();
+        let group = db::face_groups(&conn).unwrap()[0].clone();
+        let apply = |conn: &mut Connection, ops: Vec<Op>, ts: i64| {
+            let tx = conn.transaction().unwrap();
+            for (i, op) in ops.into_iter().enumerate() {
+                db::apply_event(
+                    &tx,
+                    "device",
+                    &Event {
+                        ts: ts + i as i64,
+                        op,
+                    },
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        };
+        let ops = naming_ops(&conn, &[group.cluster], "Alice").unwrap();
+        apply(&mut conn, ops, 1);
+
+        // The named cover photo and one more are someone else.
+        let other = shots
+            .iter()
+            .map(|s| s.repeat(32))
+            .find(|f| *f != group.cover)
+            .unwrap();
+        let moved = [group.cover.clone(), other];
+        let new = db::split_faces(&mut conn, &[group.cluster], &moved)
+            .unwrap()
+            .unwrap();
+        db::add_not_person(&conn, new, "Alice").unwrap();
+        let mut ops = naming_ops(&conn, &[new], "").unwrap();
+        ops.extend(naming_ops(&conn, &[group.cluster], "Alice").unwrap());
+        apply(&mut conn, ops, 10);
+
+        let names: HashMap<i64, String> = group_names(&conn).unwrap().into_iter().collect();
+        assert_eq!(names.get(&group.cluster).map(String::as_str), Some("Alice"));
+        assert_eq!(names.get(&new), None);
+        // Just as alike as before, but never merged back.
+        assert_eq!(merge_groups(&mut conn).unwrap(), 0);
+        assert!(suggestions(&conn, &[group.cluster], "Alice")
+            .unwrap()
+            .is_empty());
+
+        // A group merged into one of them takes over the rule.
+        let tx = conn.transaction().unwrap();
+        db::merge_face_group(&tx, group.cluster, 99).unwrap();
+        tx.commit().unwrap();
+        assert_eq!(db::kept_apart(&conn).unwrap(), HashSet::from([(new, 99)]));
+
+        // Splitting photos with no face in the group changes nothing.
+        assert_eq!(
+            db::split_faces(&mut conn, &[new], &["zz".repeat(32)]).unwrap(),
+            None
+        );
     }
 }

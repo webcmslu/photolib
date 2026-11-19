@@ -1015,6 +1015,46 @@ fn remove_from_person(
     Ok(removed)
 }
 
+/// Moves the faces of `photos` in a person's groups into a new group of
+/// their own (a group that mixed two people), which is never merged back.
+/// If the person has a name, the new group is not them, and another of their
+/// faces carries the name. Returns the new group, if any face moved.
+#[tauri::command(async)]
+fn split_person(
+    path: String,
+    clusters: Vec<i64>,
+    photos: Vec<String>,
+    name: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<Option<i64>, String> {
+    let name = name.filter(|name| !name.trim().is_empty());
+    let open = match name {
+        Some(_) => Some(editable_library(&state, &path)?),
+        None => None,
+    };
+    let mut conn = open_index(&state, &path)?;
+    let Some(new) = db::split_faces(&mut conn, &clusters, &photos).map_err(|e| e.to_string())?
+    else {
+        return Ok(None);
+    };
+    if let (Some(name), Some(open)) = (name, open) {
+        db::add_not_person(&conn, new, &name).map_err(|e| e.to_string())?;
+        // A face that carried the name may have moved: it loses it, and a
+        // face that stayed carries it.
+        let mut ops = people::naming_ops(&conn, &[new], "").map_err(|e| e.to_string())?;
+        ops.extend(people::naming_ops(&conn, &clusters, name.trim()).map_err(|e| e.to_string())?);
+        org::record(
+            &mut conn,
+            &state.org_paths(&path),
+            &state.device,
+            open.writable,
+            ops,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(Some(new))
+}
+
 /// Says what importing an Apple Photos library would do, without doing it.
 #[tauri::command(async)]
 fn apple_import_preview(
@@ -1187,6 +1227,7 @@ pub fn run() {
             reject_suggestion,
             set_person_hidden,
             remove_from_person,
+            split_person,
             people,
             name_person,
             months,

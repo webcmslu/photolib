@@ -19,6 +19,7 @@
     onIndexEvent,
     pickPhotosLibrary,
     removeFromPerson,
+    splitPerson,
     rescanLibrary,
     setPersonHidden,
     syncLibrary,
@@ -722,6 +723,32 @@
     }
   }
 
+  /** The selected photos show someone else: they become a person of their own, opened to be named. */
+  async function splitSelectionFromPerson() {
+    if (listing.kind !== "person") return;
+    const target = pages;
+    const clusters = listing.clusters;
+    const photos = await Promise.all([...selected].map((index) => target.load(index)));
+    if (target !== pages) return;
+    try {
+      const made = await splitPerson(
+        library.path,
+        clusters,
+        photos.flatMap((photo) => (photo ? [photo.fingerprint] : [])),
+        personName,
+      );
+      selected.clear();
+      if (made !== null) {
+        personName = null;
+        personHidden = false;
+        listing = { kind: "person", clusters: [made] };
+      }
+      refreshAll();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
   async function togglePersonHidden() {
     if (listing.kind !== "person") return;
     try {
@@ -1093,6 +1120,14 @@
               title="Their face in these photos is someone else's: take the photos out"
             >
               Not {personName ?? "this person"}
+            </button>
+            <button
+              class="secondary"
+              disabled={!online && personName !== null}
+              onclick={splitSelectionFromPerson}
+              title="These photos show one other person: make them a person of their own"
+            >
+              Someone else
             </button>
           {/if}
           <button

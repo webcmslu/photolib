@@ -175,6 +175,12 @@ CREATE TABLE IF NOT EXISTS faces.not_person (
     name    TEXT NOT NULL,
     PRIMARY KEY (cluster, name)
 ) WITHOUT ROWID;
+-- Two groups the user split apart, which must not be merged again (a < b).
+CREATE TABLE IF NOT EXISTS faces.kept_apart (
+    a INTEGER NOT NULL,
+    b INTEGER NOT NULL,
+    PRIMARY KEY (a, b)
+) WITHOUT ROWID;
 ";
 
 fn attach_faces(conn: &Connection, file: &str) -> rusqlite::Result<()> {
@@ -398,7 +404,67 @@ pub fn merge_face_group(tx: &Transaction<'_>, from: i64, into: i64) -> rusqlite:
     )?;
     tx.execute("DELETE FROM faces.not_person WHERE cluster = ?1", [from])?;
     tx.execute("DELETE FROM faces.hidden_group WHERE cluster = ?1", [from])?;
+    // What was kept apart from `from` is now kept apart from `into`.
+    tx.execute(
+        "INSERT OR IGNORE INTO faces.kept_apart (a, b)
+         SELECT MIN(other, ?2), MAX(other, ?2) FROM (
+             SELECT b AS other FROM faces.kept_apart WHERE a = ?1
+             UNION SELECT a FROM faces.kept_apart WHERE b = ?1)
+         WHERE other != ?2",
+        [from, into],
+    )?;
+    tx.execute(
+        "DELETE FROM faces.kept_apart WHERE a = ?1 OR b = ?1",
+        [from],
+    )?;
     Ok(())
+}
+
+/// The pairs of groups that must not be merged, `(a, b)` with `a < b`.
+pub fn kept_apart(conn: &Connection) -> rusqlite::Result<HashSet<(i64, i64)>> {
+    conn.prepare("SELECT a, b FROM faces.kept_apart")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
+/// Moves the faces of `photos` that are in `clusters` into a new group,
+/// kept apart from those clusters. Returns the new group's id, or `None` if
+/// none of those photos had a face there.
+pub fn split_faces(
+    conn: &mut Connection,
+    clusters: &[i64],
+    photos: &[String],
+) -> rusqlite::Result<Option<i64>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let new: i64 = tx.query_row(
+        "SELECT MAX(
+             (SELECT COALESCE(MAX(cluster), 0) FROM faces.face),
+             (SELECT COALESCE(MAX(b), 0) FROM faces.kept_apart)) + 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let mut moved = 0;
+    {
+        let mut update = tx.prepare(
+            "UPDATE faces.face SET cluster = ?3 WHERE fingerprint = ?1 AND cluster = ?2",
+        )?;
+        for photo in photos {
+            for cluster in clusters {
+                moved += update.execute(params![photo, cluster, new])?;
+            }
+        }
+    }
+    if moved == 0 {
+        return Ok(None);
+    }
+    for cluster in clusters {
+        tx.execute(
+            "INSERT OR IGNORE INTO faces.kept_apart (a, b) VALUES (?1, ?2)",
+            [*cluster, new],
+        )?;
+    }
+    tx.commit()?;
+    Ok(Some(new))
 }
 
 /// The groups hidden from the People screen.

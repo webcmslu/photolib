@@ -421,6 +421,19 @@ export function removeFromPerson(
   return invoke("remove_from_person", { path, clusters, photos, name });
 }
 
+/**
+ * Moves these photos' faces in a person into a new person of their own, kept
+ * apart from them. Returns the new person's group, or null if none moved.
+ */
+export function splitPerson(
+  path: string,
+  clusters: number[],
+  photos: string[],
+  name: string | null,
+): Promise<number | null> {
+  return invoke("split_person", { path, clusters, photos, name });
+}
+
 /** Names a person; an empty name removes it. The same name merges two people. */
 export function namePerson(path: string, clusters: number[], name: string): Promise<void> {
   return invoke("name_person", { path, clusters, name });
