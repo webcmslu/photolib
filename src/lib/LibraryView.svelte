@@ -54,6 +54,7 @@
   import DuplicatesView from "./DuplicatesView.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { showMenu, type MenuEntry } from "./contextMenu";
+  import { LABELS, labelForKey, type LabelColor } from "./labels";
   import { sep } from "@tauri-apps/api/path";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { saveSettings, settings } from "./settings.svelte";
@@ -587,6 +588,27 @@
       scanMenuOpen = false;
       return;
     }
+    if (
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      viewerIndex === null &&
+      section === "photos" &&
+      selected.size > 0 &&
+      !(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)
+    ) {
+      if (/^[1-5]$/.test(event.key)) {
+        event.preventDefault();
+        rateSelection(Number(event.key));
+        return;
+      }
+      const color = labelForKey(event.key);
+      if (color) {
+        event.preventDefault();
+        labelSelection(color);
+        return;
+      }
+    }
     if (!(event.ctrlKey || event.metaKey) || viewerIndex !== null) return;
     const factor = event.key === "+" || event.key === "=" ? 1.25 : event.key === "-" ? 0.8 : 0;
     if (factor === 0) return;
@@ -840,6 +862,52 @@
     await apply([{ op: "album_deleted", album, on: true }]);
   }
 
+  // --- Ratings and labels -------------------------------------------------------
+
+  /** Gives the selection `stars`; if they all have it already, takes it away. */
+  async function rateSelection(stars: number) {
+    if (!online) return;
+    const target = pages;
+    const photos = (await Promise.all([...selected].map((index) => target.load(index)))).flatMap((p) => (p ? [p] : []));
+    if (target !== pages || photos.length === 0) return;
+    const value = photos.every((photo) => photo.rating === stars) ? 0 : stars;
+    await apply(photos.map((photo) => ({ op: "rating", photo: photo.fingerprint, stars: value })));
+  }
+
+  /** Gives the selection a label; if they all have it already, takes it away. */
+  async function labelSelection(color: LabelColor | "") {
+    if (!online) return;
+    const target = pages;
+    const photos = (await Promise.all([...selected].map((index) => target.load(index)))).flatMap((p) => (p ? [p] : []));
+    if (target !== pages || photos.length === 0) return;
+    const value = color && photos.every((photo) => photo.label === color) ? "" : color;
+    await apply(photos.map((photo) => ({ op: "label", photo: photo.fingerprint, color: value })));
+  }
+
+  const ratingMenu = (): MenuEntry => ({
+    label: "Rating",
+    enabled: online,
+    items: [
+      { label: "No Rating", action: () => applyToSelection((photo) => ({ op: "rating", photo, stars: 0 })) },
+      ...[1, 2, 3, 4, 5].map((stars) => ({
+        label: `${"★".repeat(stars)}    ${stars}`,
+        action: () => applyToSelection((photo) => ({ op: "rating", photo, stars })),
+      })),
+    ],
+  });
+
+  const labelMenu = (): MenuEntry => ({
+    label: "Label",
+    enabled: online,
+    items: [
+      { label: "No Label", action: () => applyToSelection((photo) => ({ op: "label", photo, color: "" })) },
+      ...LABELS.map((label) => ({
+        label: label.key ? `${label.name}    ${label.key}` : label.name,
+        action: () => applyToSelection((photo) => ({ op: "label", photo, color: label.color })),
+      })),
+    ],
+  });
+
   // --- Right-click menus --------------------------------------------------------
 
   /** A photo's menu acts on the selection; a photo outside it becomes the selection. */
@@ -861,6 +929,8 @@
       "-",
       { label: "Add to Favorites", enabled: online, action: fav(true) },
       { label: "Remove from Favorites", enabled: online, action: fav(false) },
+      ratingMenu(),
+      labelMenu(),
       {
         label: "Add to Album",
         enabled: online && albums.length > 0,
@@ -1426,6 +1496,22 @@
                     <span class="mark">{only === value ? "✓" : ""}</span>{label}
                   </button>
                 {/each}
+                <hr />
+                {#each [1, 2, 3, 4, 5] as stars (stars)}
+                  {@const value = `stars${stars}` as Only}
+                  <button role="menuitemradio" aria-checked={only === value} onclick={() => chooseFilter(value)}>
+                    <span class="mark">{only === value ? "✓" : ""}</span>{"★".repeat(stars)}{stars < 5 ? " or more" : ""}
+                  </button>
+                {/each}
+                <hr />
+                {#each LABELS as label (label.color)}
+                  <button role="menuitemradio" aria-checked={only === label.color} onclick={() => chooseFilter(label.color)}>
+                    <span class="mark">{only === label.color ? "✓" : ""}</span><span
+                      class="swatch"
+                      style:background={label.css}
+                    ></span>{label.name}
+                  </button>
+                {/each}
               </div>
             {/if}
           </span>
@@ -1852,6 +1938,15 @@
   .menu button:focus-visible {
     background: var(--accent);
     color: var(--accent-text);
+  }
+
+  .swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    margin-right: 8px;
+    border-radius: 50%;
+    vertical-align: -1px;
   }
 
   .menu hr {

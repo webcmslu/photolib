@@ -13,6 +13,7 @@
   import { thumbUrl, type DayGroup } from "./api";
   import { formatDay, formatDuration, formatMonth, formatNumber, monthKey, rawPairLabel } from "./format";
   import EditedImage from "./EditedImage.svelte";
+  import { labelCss } from "./labels";
   import type { PhotoPages } from "./pages.svelte";
 
   interface Props {
@@ -549,8 +550,12 @@
           <!-- Short on small cells, so it leaves room for the heart. -->
           <span class="badge">{cell.width < 190 ? "RAW" : rawPairLabel(photo.relPath)}</span>
         {/if}
-        {#if photo?.favorite}
-          <span class="favorite" aria-label="Favorite">♥</span>
+        {#if photo && (photo.favorite || photo.rating > 0 || photo.label)}
+          <span class="marks">
+            {#if photo.label}<span class="label" style:background={labelCss(photo.label)} aria-label="{photo.label} label"></span>{/if}
+            {#if photo.favorite}<span aria-label="Favorite">♥</span>{/if}
+            {#if photo.rating > 0 && cell.width >= 110}<span class="stars" aria-label="{photo.rating} stars">{"★".repeat(photo.rating)}</span>{/if}
+          </span>
         {/if}
         <button
           class="check"
@@ -764,14 +769,31 @@
     opacity: 0.8;
   }
 
-  .favorite {
+  /* Label, heart and stars, in the bottom left corner. */
+  .marks {
     position: absolute;
     left: 6px;
     bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
     color: #fff;
     font-size: 15px;
     text-shadow: 0 0 3px rgb(0 0 0 / 0.8);
     pointer-events: none;
+  }
+
+  .marks .label {
+    width: 10px;
+    height: 10px;
+    border: 1.5px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 3px rgb(0 0 0 / 0.6);
+  }
+
+  .marks .stars {
+    font-size: 11px;
+    letter-spacing: 1px;
   }
 
   /* The round checkbox in the corner: shown on hover, and always once

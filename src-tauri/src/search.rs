@@ -13,6 +13,8 @@
 //! | `live`                       | Live Photos                          |
 //! | `raw`                        | camera RAW files                     |
 //! | `favorite`, `favorites`      | favorites                            |
+//! | `red`, `blue`… (label names) | photos with that colour label        |
+//! | `rated`, `★★★`               | photos with a rating (at least ★★★)  |
 
 use chrono::NaiveDate;
 
@@ -108,6 +110,20 @@ fn meaning(word: &str) -> Option<String> {
             "fingerprint IN (SELECT key FROM org_state WHERE kind = 'fav' AND value = '1')"
                 .to_owned(),
         ),
+        "rated" => Some(
+            "fingerprint IN (SELECT key FROM org_state WHERE kind = 'rating' AND value != '0')"
+                .to_owned(),
+        ),
+        _ if crate::org::LABELS.contains(&word) => Some(format!(
+            "fingerprint IN (SELECT key FROM org_state WHERE kind = 'label' AND value = '{word}')"
+        )),
+        _ if !word.is_empty() && word.chars().all(|c| c == '★') && word.chars().count() <= 5 => {
+            Some(format!(
+                "fingerprint IN (SELECT key FROM org_state
+                     WHERE kind = 'rating' AND CAST(value AS INTEGER) >= {})",
+                word.chars().count()
+            ))
+        }
         // A RAW file by itself, or a JPEG + RAW pair.
         "raw" => Some(format!(
             "(raw_file IS NOT NULL OR {})",
@@ -204,6 +220,10 @@ mod tests {
         assert_eq!(meaning("marc"), None);
         assert_eq!(meaning("video").as_deref(), Some("kind = 1"));
         assert!(meaning("raw").unwrap().contains("'%.nef'"));
+        assert!(meaning("red").unwrap().contains("value = 'red'"));
+        assert!(meaning("★★★").unwrap().contains(">= 3"));
+        assert!(meaning("rated").is_some());
+        assert_eq!(meaning("redd"), None);
         assert_eq!(meaning("canon"), None);
     }
 

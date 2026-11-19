@@ -1,6 +1,7 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Edit } from "./edit";
+import type { LabelColor } from "./labels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
@@ -278,6 +279,10 @@ export interface PhotoItem {
   rawFile: string | null;
   /** How the photo is shown, if it was edited. */
   edit: Edit | null;
+  /** 0 (not rated) to 5 stars. */
+  rating: number;
+  /** Its colour label, if any. */
+  label: LabelColor | null;
 }
 
 /** Mirrors `FolderEntry` in src-tauri/src/db.rs. */
@@ -335,7 +340,19 @@ export type Listing =
   | { kind: "only"; within: Listing; only: Only };
 
 /** What the filter menu can narrow a listing down to. Mirrors `Only`. */
-export type Only = "favorites" | "edited" | "photos" | "videos" | "notInAlbum";
+export type Only =
+  | "favorites"
+  | "edited"
+  | "photos"
+  | "videos"
+  | "notInAlbum"
+  /** Rated at least this many stars. */
+  | "stars1"
+  | "stars2"
+  | "stars3"
+  | "stars4"
+  | "stars5"
+  | LabelColor;
 
 /** Day groups of a listing, newest first. */
 /** How the photo grid orders a listing. Mirrors `Order` in src-tauri/src/db.rs. */
@@ -556,7 +573,11 @@ export type Op =
   /** Sets how a photo is shown; `null` shows it as it is again. */
   | { op: "edit"; photo: string; edit: Edit | null }
   /** Names the person whose face is at a point of a photo. */
-  | { op: "face_name"; photo: string; x: number; y: number; name: string };
+  | { op: "face_name"; photo: string; x: number; y: number; name: string }
+  /** 1 to 5 stars; 0 takes the rating away. */
+  | { op: "rating"; photo: string; stars: number }
+  /** A colour label; "" takes it away. */
+  | { op: "label"; photo: string; color: LabelColor | "" };
 
 /** Mirrors `Album` in src-tauri/src/db.rs. */
 export interface Album {

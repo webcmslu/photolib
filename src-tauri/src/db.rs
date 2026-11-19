@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -226,6 +226,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
         version = 7;
+    }
+    if version == 7 {
+        // Ratings and labels are new kinds of events. A build that did not
+        // know them skipped them and moved on: every log is read again from
+        // the start (applying an event twice changes nothing).
+        conn.execute_batch(
+            "BEGIN;
+             DELETE FROM log_offsets;
+             PRAGMA user_version = 8;
+             COMMIT;",
+        )?;
+        version = 8;
     }
     if version == SCHEMA_VERSION {
         return Ok(());
@@ -787,6 +799,19 @@ pub enum Only {
     Photos,
     Videos,
     NotInAlbum,
+    /// Rated at least this many stars.
+    Stars1,
+    Stars2,
+    Stars3,
+    Stars4,
+    Stars5,
+    /// With this colour label.
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Purple,
 }
 
 impl Only {
@@ -804,6 +829,33 @@ impl Only {
                        AND NOT EXISTS (SELECT 1 FROM org_state d
                            WHERE d.kind = 'album_deleted' AND d.key = m.key AND d.value = '1'))"
                 .to_owned(),
+            Only::Stars1 | Only::Stars2 | Only::Stars3 | Only::Stars4 | Only::Stars5 => {
+                let least = match self {
+                    Only::Stars1 => 1,
+                    Only::Stars2 => 2,
+                    Only::Stars3 => 3,
+                    Only::Stars4 => 4,
+                    _ => 5,
+                };
+                format!(
+                    "fingerprint IN (SELECT key FROM org_state
+                         WHERE kind = 'rating' AND CAST(value AS INTEGER) >= {least})"
+                )
+            }
+            Only::Red | Only::Orange | Only::Yellow | Only::Green | Only::Blue | Only::Purple => {
+                let color = match self {
+                    Only::Red => "red",
+                    Only::Orange => "orange",
+                    Only::Yellow => "yellow",
+                    Only::Green => "green",
+                    Only::Blue => "blue",
+                    _ => "purple",
+                };
+                format!(
+                    "fingerprint IN (SELECT key FROM org_state
+                         WHERE kind = 'label' AND value = '{color}')"
+                )
+            }
         }
     }
 }
@@ -1097,6 +1149,10 @@ pub struct PhotoItem {
     pub raw_file: Option<String>,
     /// How the photo is shown, if it was edited.
     pub edit: Option<crate::org::Edit>,
+    /// 0 (not rated) to 5 stars.
+    pub rating: u8,
+    /// Its colour label, if any.
+    pub label: Option<String>,
 }
 
 /// A slice of the listing, newest first (ties broken by path).
@@ -1124,7 +1180,9 @@ pub fn photos_page_in(
         "SELECT fingerprint, rel_path, sort_date, width, height, {IS_FAVORITE},
                 kind, duration_ms, live_video,
                 (SELECT value FROM org_state WHERE kind = 'edit' AND key = photos.fingerprint),
-                raw_file
+                raw_file,
+                (SELECT value FROM org_state WHERE kind = 'rating' AND key = photos.fingerprint),
+                (SELECT value FROM org_state WHERE kind = 'label' AND key = photos.fingerprint)
          FROM photos {filter} ORDER BY {order} LIMIT ?3 OFFSET ?2"
     ))?;
     let rows = stmt.query_map(params![param, offset, limit], |row| {
@@ -1142,6 +1200,13 @@ pub fn photos_page_in(
                 .get::<_, Option<String>>(9)?
                 .and_then(|json| serde_json::from_str(&json).ok()),
             raw_file: row.get(10)?,
+            rating: row
+                .get::<_, Option<String>>(11)?
+                .and_then(|stars| stars.parse().ok())
+                .unwrap_or(0),
+            label: row
+                .get::<_, Option<String>>(12)?
+                .filter(|color| !color.is_empty()),
         })
     })?;
     rows.collect()
@@ -1522,6 +1587,7 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
     let flag = |on: &bool| if *on { "1" } else { "0" };
     let edit_json: String;
     let face_point: String;
+    let rating: String;
     let (kind, key, photo, value) = match &event.op {
         Op::Fav { photo, on } => ("fav", photo.as_str(), "", flag(on)),
         Op::Hide { photo, on } => ("hide", photo.as_str(), "", flag(on)),
@@ -1539,6 +1605,11 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
                 name.trim(),
             )
         }
+        Op::Rating { photo, stars } => {
+            rating = stars.to_string();
+            ("rating", photo.as_str(), "", rating.as_str())
+        }
+        Op::Label { photo, color } => ("label", photo.as_str(), "", color.as_str()),
         Op::Edit { photo, edit } => {
             // The edit as JSON; an empty value means "not edited".
             edit_json = edit
@@ -1648,6 +1719,86 @@ mod tests {
             duration_ms: None,
             live_candidate: false,
         }
+    }
+
+    #[test]
+    fn ratings_and_labels_show_and_filter() {
+        use crate::org::{Event, Op};
+        let mut conn = open_in_memory().unwrap();
+        let (a, b) = ("a".repeat(64), "b".repeat(64));
+        let tx = conn.transaction().unwrap();
+        for (rel_path, fingerprint) in [("a.jpg", &a), ("b.jpg", &b)] {
+            upsert(
+                &tx,
+                &PhotoRow {
+                    fingerprint: fingerprint.clone(),
+                    ..row(rel_path, 10)
+                },
+            )
+            .unwrap();
+        }
+        let events = [
+            Op::Rating {
+                photo: a.clone(),
+                stars: 4,
+            },
+            Op::Rating {
+                photo: b.clone(),
+                stars: 2,
+            },
+            Op::Label {
+                photo: a.clone(),
+                color: "red".into(),
+            },
+            Op::Label {
+                photo: b.clone(),
+                color: "blue".into(),
+            },
+            // Taken away again.
+            Op::Label {
+                photo: b.clone(),
+                color: String::new(),
+            },
+        ];
+        for (ts, op) in events.into_iter().enumerate() {
+            apply_event(
+                &tx,
+                "device",
+                &Event {
+                    ts: ts as i64 + 1,
+                    op,
+                },
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+
+        let shown = |only: Option<Only>| -> Vec<(String, u8, Option<String>)> {
+            let listing = match only {
+                Some(only) => Listing::Only {
+                    within: Box::new(Listing::Library),
+                    only,
+                },
+                None => Listing::Library,
+            };
+            photos_page_in(&conn, &listing, Order::NameAsc, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|photo| (photo.rel_path, photo.rating, photo.label))
+                .collect()
+        };
+        assert_eq!(
+            shown(None),
+            [
+                ("a.jpg".into(), 4, Some("red".into())),
+                ("b.jpg".into(), 2, None)
+            ]
+        );
+        assert_eq!(shown(Some(Only::Stars2)).len(), 2);
+        assert_eq!(shown(Some(Only::Stars3))[0].0, "a.jpg");
+        assert_eq!(shown(Some(Only::Stars5)).len(), 0);
+        assert_eq!(shown(Some(Only::Red)).len(), 1);
+        assert_eq!(shown(Some(Only::Blue)).len(), 0);
     }
 
     #[test]

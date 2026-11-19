@@ -1,7 +1,7 @@
 <!--
   Full-window photo viewer: arrow keys to move, wheel / double-click / +/- to
   zoom, drag to pan, "i" for the info panel, "f" for full screen, "." to
-  favorite, "h" to hide, Esc to close. Videos play in place (space to pause);
+  favorite, 1 to 5 to rate, 6 to 9 for a colour label, "h" to hide, Esc to close. Videos play in place (space to pause);
   a Live Photo plays its short video with the LIVE button or "l". "e" opens
   the editing panel: rotate, mirror, crop and adjust, without changing the file.
 
@@ -26,6 +26,7 @@
   import { formatBytes, formatDateTime, formatDuration, formatNumber, rawPairLabel } from "./format";
   import type { PhotoPages } from "./pages.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
+  import { LABELS, labelForKey, type LabelColor } from "./labels";
 
   interface Props {
     pages: PhotoPages;
@@ -371,6 +372,20 @@
     if (photo && canEdit) apply([{ op: "fav", photo: photo.fingerprint, on: !photo.favorite }]);
   }
 
+  /** Gives the photo `stars`, or takes its rating away if it has them already. */
+  function rate(stars: number) {
+    if (photo && canEdit) {
+      apply([{ op: "rating", photo: photo.fingerprint, stars: photo.rating === stars ? 0 : stars }]);
+    }
+  }
+
+  /** Gives the photo a label, or takes it away if it has that one already. */
+  function setLabel(color: LabelColor) {
+    if (photo && canEdit) {
+      apply([{ op: "label", photo: photo.fingerprint, color: photo.label === color ? "" : color }]);
+    }
+  }
+
   function toggleHidden() {
     if (photo && canEdit) apply([{ op: "hide", photo: photo.fingerprint, on: !showingHidden }]);
   }
@@ -455,6 +470,19 @@
         break;
       case "0":
         zoomTo(1);
+        break;
+      case "1":
+      case "2":
+      case "3":
+      case "4":
+      case "5":
+        rate(Number(event.key));
+        break;
+      case "6":
+      case "7":
+      case "8":
+      case "9":
+        setLabel(labelForKey(event.key)!);
         break;
       default:
         return;
@@ -688,6 +716,34 @@
           <dd>{folder}</dd>
         {/if}
         {#if photo}
+          <dt>Rating</dt>
+          <dd class="stars">
+            {#each [1, 2, 3, 4, 5] as stars (stars)}
+              <button
+                class:on={photo.rating >= stars}
+                disabled={!canEdit}
+                onclick={() => rate(stars)}
+                title="{stars} {stars === 1 ? 'star' : 'stars'} ({stars})"
+                aria-label="{stars} {stars === 1 ? 'star' : 'stars'}"
+              >
+                ★
+              </button>
+            {/each}
+          </dd>
+          <dt>Label</dt>
+          <dd class="labels">
+            {#each LABELS as label (label.color)}
+              <button
+                class:on={photo.label === label.color}
+                style:background={label.css}
+                disabled={!canEdit}
+                onclick={() => setLabel(label.color)}
+                title={label.key ? `${label.name} (${label.key})` : label.name}
+                aria-label={label.name}
+                aria-pressed={photo.label === label.color}
+              ></button>
+            {/each}
+          </dd>
           <dd>
             <button
               class="reveal"
@@ -1063,6 +1119,51 @@
     display: block;
     font-size: 12px;
     color: #a0a0a8;
+  }
+
+  .stars {
+    display: flex;
+    gap: 2px;
+  }
+
+  .stars button {
+    padding: 0 1px;
+    border: none;
+    background: none;
+    color: #5a5a62;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .stars button.on {
+    color: #facc15;
+  }
+
+  .labels {
+    display: flex;
+    gap: 8px;
+    padding-top: 3px;
+  }
+
+  .labels button {
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 50%;
+    cursor: pointer;
+    opacity: 0.55;
+  }
+
+  .labels button.on {
+    border-color: #fff;
+    opacity: 1;
+  }
+
+  .stars button:disabled,
+  .labels button:disabled {
+    cursor: default;
   }
 
   .reveal {

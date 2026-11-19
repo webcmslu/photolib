@@ -86,7 +86,21 @@ pub enum Op {
         photo: String,
         edit: Option<Edit>,
     },
+    /// Gives a photo 1 to 5 stars, or with 0 takes its rating away.
+    Rating {
+        photo: String,
+        stars: u8,
+    },
+    /// Gives a photo a colour label (one of [`LABELS`]), or with an empty
+    /// colour takes it away.
+    Label {
+        photo: String,
+        color: String,
+    },
 }
+
+/// The colour labels a photo can have.
+pub const LABELS: [&str; 6] = ["red", "orange", "yellow", "green", "blue", "purple"];
 
 /// Adjustments to how a photo is shown. They are applied when the photo is
 /// displayed; the original file stays as it is.
@@ -148,6 +162,10 @@ impl Op {
                     && name.chars().count() <= MAX_ALBUM_NAME_CHARS
             }
             Op::Edit { photo, edit } => is_id(photo, 64) && edit.is_none_or(|edit| edit.is_valid()),
+            Op::Rating { photo, stars } => is_id(photo, 64) && *stars <= 5,
+            Op::Label { photo, color } => {
+                is_id(photo, 64) && (color.is_empty() || LABELS.contains(&color.as_str()))
+            }
         }
     }
 }
