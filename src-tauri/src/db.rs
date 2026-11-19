@@ -3,7 +3,7 @@
 //! It is a cache of what is in the library folder and can always be rebuilt by
 //! rescanning. It never lives on the library volume itself.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -156,11 +156,25 @@ CREATE TABLE IF NOT EXISTS faces.face (
     score       REAL NOT NULL,
     -- 128 little-endian 32-bit floats; see faces.rs.
     embedding   BLOB NOT NULL,
-    -- The group of look-alike faces this one was put in; NULL until grouped.
+    -- The group of look-alike faces this one was put in; NULL until grouped,
+    -- and below zero for a face that was taken out of its group by hand: it
+    -- belongs to nobody and is not grouped again.
     cluster     INTEGER
 );
 CREATE INDEX IF NOT EXISTS faces.face_fingerprint ON face (fingerprint);
 CREATE INDEX IF NOT EXISTS faces.face_cluster ON face (cluster);
+-- Corrections made on this computer (groups are local, so these are too).
+-- People hidden from the People screen, e.g. strangers.
+CREATE TABLE IF NOT EXISTS faces.hidden_group (
+    cluster INTEGER PRIMARY KEY
+);
+-- A group the user said is not the named person, so it is neither suggested
+-- for them again nor merged into them.
+CREATE TABLE IF NOT EXISTS faces.not_person (
+    cluster INTEGER NOT NULL,
+    name    TEXT NOT NULL,
+    PRIMARY KEY (cluster, name)
+) WITHOUT ROWID;
 ";
 
 fn attach_faces(conn: &Connection, file: &str) -> rusqlite::Result<()> {
@@ -368,6 +382,90 @@ pub fn mark_thumb_ready(
             size.map(|(_, height)| height)
         ],
     )
+}
+
+/// Moves every face of group `from` into group `into`, with the corrections
+/// made to `from`.
+pub fn merge_face_group(tx: &Transaction<'_>, from: i64, into: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE faces.face SET cluster = ?2 WHERE cluster = ?1",
+        [from, into],
+    )?;
+    tx.execute(
+        "INSERT OR IGNORE INTO faces.not_person (cluster, name)
+         SELECT ?2, name FROM faces.not_person WHERE cluster = ?1",
+        [from, into],
+    )?;
+    tx.execute("DELETE FROM faces.not_person WHERE cluster = ?1", [from])?;
+    tx.execute("DELETE FROM faces.hidden_group WHERE cluster = ?1", [from])?;
+    Ok(())
+}
+
+/// The groups hidden from the People screen.
+pub fn hidden_face_groups(conn: &Connection) -> rusqlite::Result<HashSet<i64>> {
+    conn.prepare("SELECT cluster FROM faces.hidden_group")?
+        .query_map([], |row| row.get(0))?
+        .collect()
+}
+
+pub fn set_face_groups_hidden(
+    conn: &mut Connection,
+    clusters: &[i64],
+    hidden: bool,
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction()?;
+    for cluster in clusters {
+        if hidden {
+            tx.execute(
+                "INSERT OR IGNORE INTO faces.hidden_group (cluster) VALUES (?1)",
+                [cluster],
+            )?;
+        } else {
+            tx.execute(
+                "DELETE FROM faces.hidden_group WHERE cluster = ?1",
+                [cluster],
+            )?;
+        }
+    }
+    tx.commit()
+}
+
+/// `(group, lowercased name)` pairs the user said don't go together.
+pub fn not_person(conn: &Connection) -> rusqlite::Result<HashSet<(i64, String)>> {
+    conn.prepare("SELECT cluster, name FROM faces.not_person")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
+pub fn add_not_person(conn: &Connection, cluster: i64, name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO faces.not_person (cluster, name) VALUES (?1, ?2)",
+        params![cluster, name.trim().to_lowercase()],
+    )?;
+    Ok(())
+}
+
+/// Takes the faces of `clusters` in the given photos out of their group, for
+/// good. Returns how many faces were taken out.
+pub fn remove_faces(
+    conn: &mut Connection,
+    clusters: &[i64],
+    photos: &[String],
+) -> rusqlite::Result<usize> {
+    let tx = conn.transaction()?;
+    let mut removed = 0;
+    {
+        let mut update = tx.prepare(
+            "UPDATE faces.face SET cluster = -id WHERE fingerprint = ?1 AND cluster = ?2",
+        )?;
+        for photo in photos {
+            for cluster in clusters {
+                removed += update.execute(params![photo, cluster])?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(removed)
 }
 
 /// Names the place of every photo that has a position but no place yet.
@@ -1236,7 +1334,7 @@ pub fn face_groups(conn: &Connection) -> rusqlite::Result<Vec<FaceGroup>> {
         "SELECT f.cluster, COUNT(DISTINCT f.fingerprint), MAX(f.width * f.height * f.score),
                 f.fingerprint, p.width, p.height, f.left, f.top, f.width, f.height
          FROM faces.face f JOIN photos p ON p.fingerprint = f.fingerprint
-         WHERE f.cluster IS NOT NULL
+         WHERE f.cluster > 0
            AND p.thumb_state != 2 AND p.part = 0
            AND NOT p.{IS_HIDDEN}
          GROUP BY f.cluster"
@@ -1290,7 +1388,7 @@ pub fn cluster_at(
 ) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
         "SELECT cluster FROM faces.face
-         WHERE fingerprint = ?1 AND cluster IS NOT NULL
+         WHERE fingerprint = ?1 AND cluster > 0
            AND ?2 BETWEEN left AND left + width AND ?3 BETWEEN top AND top + height
          ORDER BY width * height DESC LIMIT 1",
         params![fingerprint, x, y],

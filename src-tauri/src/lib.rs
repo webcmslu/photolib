@@ -319,7 +319,16 @@ fn run_scan(
         }
     }
 
-    let summary = indexer::scan_with(root, &mut conn, mode, cancel, &on_progress)?;
+    let summary = match indexer::scan_with(root, &mut conn, mode, cancel, &on_progress) {
+        Ok(summary) => summary,
+        Err(e @ indexer::ScanError::RootUnreachable(_)) => {
+            // Faces are searched in the cached thumbnails: no need for the
+            // library to be reachable.
+            find_people(app, library_path, &mut conn, cache, cancel, &on_progress)?;
+            return Err(e);
+        }
+        Err(e) => return Err(e),
+    };
     if summary.cancelled {
         return Ok((summary, ThumbSummary::default()));
     }
@@ -338,17 +347,35 @@ fn run_scan(
     // Last, and only if the user switched it on: look for faces in the new
     // photos and put them into groups.
     if !thumbnails.cancelled {
-        if let Some(finder) = face_finder(&state) {
-            let searched = people::find_faces(&mut conn, cache, &finder, cancel, &on_progress)?;
-            if people::group_faces(&mut conn)? > 0 || searched > 0 {
-                // Makes the UI read the people again.
-                emit(IndexEvent::Synced {
-                    library_path: library_path.to_owned(),
-                });
-            }
-        }
+        find_people(app, library_path, &mut conn, cache, cancel, &on_progress)?;
     }
     Ok((summary, thumbnails))
+}
+
+/// If face grouping is switched on: looks for faces in the photos not
+/// searched yet, and puts them into groups.
+fn find_people(
+    app: &AppHandle,
+    library_path: &str,
+    conn: &mut rusqlite::Connection,
+    cache: &ThumbCache,
+    cancel: &AtomicBool,
+    on_progress: &dyn Fn(indexer::Progress),
+) -> rusqlite::Result<()> {
+    let Some(finder) = face_finder(&app.state::<AppState>()) else {
+        return Ok(());
+    };
+    let searched = people::find_faces(conn, cache, &finder, cancel, on_progress)?;
+    if people::group_faces(conn)? > 0 || searched > 0 {
+        // Makes the UI read the people again.
+        let _ = app.emit(
+            INDEX_EVENT,
+            IndexEvent::Synced {
+                library_path: library_path.to_owned(),
+            },
+        );
+    }
+    Ok(())
 }
 
 /// The loaded face models, or `None` if face grouping is not switched on
@@ -920,6 +947,74 @@ fn name_person(
     .map_err(|e| e.to_string())
 }
 
+/// Unnamed groups of faces that might be the person `name`, made of `clusters`.
+#[tauri::command(async)]
+fn person_suggestions(
+    path: String,
+    clusters: Vec<i64>,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<people::Person>, String> {
+    people::suggestions(&open_index(&state, &path)?, &clusters, &name).map_err(|e| e.to_string())
+}
+
+/// Records that the group `cluster` is not the person `name`: it is no longer
+/// suggested for them.
+#[tauri::command(async)]
+fn reject_suggestion(
+    path: String,
+    cluster: i64,
+    name: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::add_not_person(&open_index(&state, &path)?, cluster, &name).map_err(|e| e.to_string())
+}
+
+/// Hides a person from the People screen, or shows them again.
+#[tauri::command(async)]
+fn set_person_hidden(
+    path: String,
+    clusters: Vec<i64>,
+    hidden: bool,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::set_face_groups_hidden(&mut open_index(&state, &path)?, &clusters, hidden)
+        .map_err(|e| e.to_string())
+}
+
+/// Takes `photos` out of the person made of `clusters`: their faces there
+/// were someone else. If the person has a name, another of their faces
+/// carries it from now on.
+#[tauri::command(async)]
+fn remove_from_person(
+    path: String,
+    clusters: Vec<i64>,
+    photos: Vec<String>,
+    name: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let name = name.filter(|name| !name.trim().is_empty());
+    // Checked first: the name must be able to move to another face.
+    let open = match name {
+        Some(_) => Some(editable_library(&state, &path)?),
+        None => None,
+    };
+    let mut conn = open_index(&state, &path)?;
+    let removed = db::remove_faces(&mut conn, &clusters, &photos).map_err(|e| e.to_string())?;
+    if let (Some(name), Some(open)) = (name, open) {
+        let ops = people::naming_ops(&conn, &clusters, name.trim()).map_err(|e| e.to_string())?;
+        org::record(
+            &mut conn,
+            &state.org_paths(&path),
+            &state.device,
+            open.writable,
+            ops,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(removed)
+}
+
 /// Says what importing an Apple Photos library would do, without doing it.
 #[tauri::command(async)]
 fn apple_import_preview(
@@ -1086,6 +1181,10 @@ pub fn run() {
             faces_status,
             enable_faces,
             disable_faces,
+            person_suggestions,
+            reject_suggestion,
+            set_person_hidden,
+            remove_from_person,
             people,
             name_person,
             months,

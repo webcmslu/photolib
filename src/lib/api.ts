@@ -364,6 +364,8 @@ export interface Person {
   clusters: number[];
   /** Photos they appear in (approximate for merged people). */
   photos: number;
+  /** Hidden from the People screen, on this computer. */
+  hidden: boolean;
   /** The photo to show them with, and the square around their face in it. */
   cover: string;
   coverCrop: [number, number, number, number];
@@ -392,6 +394,31 @@ export function onFacesDownload(handler: (received: number) => void): Promise<Un
 
 export function listPeople(path: string): Promise<Person[]> {
   return invoke("people", { path });
+}
+
+/** Unnamed groups of faces that might be the person `name`, most alike first. */
+export function personSuggestions(path: string, clusters: number[], name: string): Promise<Person[]> {
+  return invoke("person_suggestions", { path, clusters, name });
+}
+
+/** Says a suggested group is not the person `name`: it isn't suggested again. */
+export function rejectSuggestion(path: string, cluster: number, name: string): Promise<void> {
+  return invoke("reject_suggestion", { path, cluster, name });
+}
+
+/** Hides a person from the People screen (on this computer), or shows them again. */
+export function setPersonHidden(path: string, clusters: number[], hidden: boolean): Promise<void> {
+  return invoke("set_person_hidden", { path, clusters, hidden });
+}
+
+/** Takes photos out of a person, whose face in them was someone else's. */
+export function removeFromPerson(
+  path: string,
+  clusters: number[],
+  photos: string[],
+  name: string | null,
+): Promise<number> {
+  return invoke("remove_from_person", { path, clusters, photos, name });
 }
 
 /** Names a person; an empty name removes it. The same name merges two people. */

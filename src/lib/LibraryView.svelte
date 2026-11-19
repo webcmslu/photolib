@@ -18,7 +18,9 @@
     listMonths,
     onIndexEvent,
     pickPhotosLibrary,
+    removeFromPerson,
     rescanLibrary,
+    setPersonHidden,
     syncLibrary,
     timeline,
     shapes,
@@ -41,6 +43,7 @@
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
   import PeopleView from "./PeopleView.svelte";
+  import PersonSuggestions from "./PersonSuggestions.svelte";
   import { PhotoPages } from "./pages.svelte";
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
@@ -219,6 +222,7 @@
   let section = $state<"photos" | "map" | "people">("photos");
   /** The name of the person whose photos are listed. */
   let personName = $state<string | null>(null);
+  let personHidden = $state(false);
 
   async function loadSidebar() {
     try {
@@ -700,6 +704,37 @@
   }
 
   /** Applies one change per selected photo. */
+  /** Takes the selected photos out of the person listed: it wasn't them. */
+  async function removeSelectionFromPerson() {
+    if (listing.kind !== "person") return;
+    const target = pages;
+    const clusters = listing.clusters;
+    const photos = await Promise.all([...selected].map((index) => target.load(index)));
+    if (target !== pages) return;
+    try {
+      await removeFromPerson(
+        library.path,
+        clusters,
+        photos.flatMap((photo) => (photo ? [photo.fingerprint] : [])),
+        personName,
+      );
+      selected.clear();
+      refreshAll();
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
+  async function togglePersonHidden() {
+    if (listing.kind !== "person") return;
+    try {
+      await setPersonHidden(library.path, listing.clusters, !personHidden);
+      personHidden = !personHidden;
+    } catch (e) {
+      error = String(e);
+    }
+  }
+
   async function applyToSelection(makeOp: (fingerprint: string) => Op) {
     const target = pages;
     const photos = await Promise.all([...selected].map((index) => target.load(index)));
@@ -1006,6 +1041,7 @@
             searching={scanning && progress?.phase === "faces"}
             onopen={(person) => {
               personName = person.name;
+              personHidden = person.hidden;
               listing = { kind: "person", clusters: person.clusters };
               section = "photos";
             }}
@@ -1052,6 +1088,16 @@
               Remove from album
             </button>
           {/if}
+          {#if listing.kind === "person"}
+            <button
+              class="secondary"
+              disabled={!online && personName !== null}
+              onclick={removeSelectionFromPerson}
+              title="Their face in these photos is someone else's: take the photos out"
+            >
+              Not {personName ?? "this person"}
+            </button>
+          {/if}
           <button
             class="secondary"
             disabled={!online}
@@ -1089,6 +1135,17 @@
               {shownRange ? formatDayRange(shownRange.oldest, shownRange.newest) : ""}
             </span>
           </span>
+          {#if listing.kind === "person"}
+            <button
+              class="secondary"
+              onclick={togglePersonHidden}
+              title={personHidden
+                ? "List this person on the People screen again"
+                : "Leave this person out of the People screen (e.g. a stranger)"}
+            >
+              {personHidden ? "Show in People" : "Hide from People"}
+            </button>
+          {/if}
           <span class="spacer"></span>
           <div class="segmented" role="group" aria-label="View">
             {#each [["years", "Years"], ["months", "Months"], ["all", "All Photos"]] as const as [mode, label] (mode)}
@@ -1239,6 +1296,15 @@
         {/if}
       </div>
 
+      {#if listing.kind === "person" && personName}
+        <PersonSuggestions
+          libraryPath={library.path}
+          name={personName}
+          clusters={listing.clusters}
+          canEdit={online}
+          onadded={(clusters) => (listing = { kind: "person", clusters })}
+        />
+      {/if}
       <div class="grid">
         {#if groups.length > 0 && viewMode !== "all"}
           <Overview

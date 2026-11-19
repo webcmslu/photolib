@@ -14,6 +14,7 @@
     listPeople,
     namePerson,
     onFacesDownload,
+    setPersonHidden,
     thumbUrl,
     type FacesStatus,
     type Person,
@@ -42,6 +43,19 @@
   /** The person being named (by their first group), and the text typed. */
   let naming = $state<number | null>(null);
   let nameText = $state("");
+  /** True to list the people hidden on this computer too. */
+  let showHidden = $state(false);
+  const hiddenCount = $derived(people?.filter((person) => person.hidden).length ?? 0);
+  const listed = $derived(people?.filter((person) => showHidden || !person.hidden) ?? []);
+
+  async function setHidden(person: Person, hidden: boolean) {
+    try {
+      await setPersonHidden(libraryPath, person.clusters, hidden);
+      people = await listPeople(libraryPath);
+    } catch (e) {
+      error = String(e);
+    }
+  }
 
   onMount(() => {
     facesStatus()
@@ -135,8 +149,16 @@
       </p>
     {:else}
       <ul>
-        {#each people as person (person.clusters[0])}
-          <li>
+        {#each listed as person (person.clusters[0])}
+          <li class:hidden-person={person.hidden}>
+            <button
+              class="hide"
+              onclick={() => setHidden(person, !person.hidden)}
+              title={person.hidden ? "Show this person again" : "Hide this person (e.g. a stranger)"}
+              aria-label={person.hidden ? "Show this person again" : "Hide this person"}
+            >
+              {person.hidden ? "Show" : "Hide"}
+            </button>
             <button class="face" onclick={() => onopen(person)} aria-label={person.name ?? "Unnamed person"}>
               <EditedImage
                 src={thumbUrl(person.cover, "preview")}
@@ -177,6 +199,13 @@
           </li>
         {/each}
       </ul>
+      {#if hiddenCount > 0}
+        <p class="hidden-toggle">
+          <button class="link" onclick={() => (showHidden = !showHidden)}>
+            {showHidden ? "Leave out hidden people" : `Show hidden people (${formatNumber(hiddenCount)})`}
+          </button>
+        </p>
+      {/if}
     {/if}
   {/if}
 </div>
@@ -237,11 +266,55 @@
   }
 
   li {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 6px;
     min-width: 0;
+  }
+
+  .hidden-person .face {
+    opacity: 0.45;
+  }
+
+  .hide {
+    position: absolute;
+    top: 0;
+    right: calc(50% - 64px);
+    z-index: 1;
+    padding: 2px 7px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--text-dim);
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  li:hover .hide,
+  .hide:focus-visible {
+    opacity: 1;
+  }
+
+  .hide:hover {
+    color: var(--text);
+  }
+
+  .hidden-toggle {
+    margin: 28px 0 0;
+    text-align: center;
+  }
+
+  .link {
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
   }
 
   .face {

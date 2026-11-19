@@ -5,6 +5,9 @@
 //!    cache only, so it also works while the library is offline.
 //! 2. **Grouping** ([`group_faces`]): each new face joins the existing group
 //!    it resembles most, or starts a new group.
+//!    Then groups that are clearly the same person are merged
+//!    ([`merge_groups`]): the same person at different ages or angles often
+//!    starts several groups.
 //! 3. **People** ([`people`]): a group is a person. Groups are local to this
 //!    computer, but names are shared: a name is attached to one face of a
 //!    photo (`face_name` in the library's log), every computer gives it to
@@ -12,7 +15,7 @@
 //!    one person. That is also how two groups of the same person are merged:
 //!    give them the same name.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -34,6 +37,14 @@ const SAME_PERSON: f32 = 0.45;
 /// A group nobody named is shown once it appears in this many photos;
 /// smaller ones are mostly strangers in the background.
 const MIN_PHOTOS_UNNAMED: u32 = 3;
+/// Two groups whose average faces are at least this alike are merged. The
+/// average of many faces is steadier than one face, so this is much higher
+/// than `SAME_PERSON`; it stays clear of brothers, sisters and parents,
+/// whose groups score up to about 0.7. The rest is left to suggestions.
+const MERGE_GROUPS: f32 = 0.78;
+/// Groups at least this alike to a named person are suggested as maybe them.
+const SUGGEST: f32 = 0.5;
+const MAX_SUGGESTIONS: usize = 12;
 const MAX_PEOPLE: usize = 500;
 const WRITE_BATCH: usize = 50;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
@@ -114,12 +125,239 @@ pub fn find_faces(
     Ok(done)
 }
 
-/// Puts every face that has no group yet into one. Returns how many were.
+/// Puts every face that has no group yet into one, then merges the groups
+/// that are clearly the same person. Returns how many faces and groups
+/// changed.
 pub fn group_faces(conn: &mut Connection) -> rusqlite::Result<usize> {
     let faces = db::face_embeddings(conn)?;
     let assigned = assign_groups(&faces);
     db::set_face_clusters(conn, &assigned)?;
-    Ok(assigned.len())
+    let merged = if assigned.is_empty() {
+        0
+    } else {
+        merge_groups(conn)?
+    };
+    Ok(assigned.len() + merged)
+}
+
+/// The sum of the embeddings of each group's faces (pointing to the group's
+/// average face) and its number of faces.
+fn group_sums(conn: &Connection) -> rusqlite::Result<HashMap<i64, (Vec<f32>, usize)>> {
+    let mut sums: HashMap<i64, (Vec<f32>, usize)> = HashMap::new();
+    for (_, cluster, embedding) in db::face_embeddings(conn)? {
+        let Some(cluster) = cluster.filter(|c| *c > 0) else {
+            continue;
+        };
+        let entry = sums
+            .entry(cluster)
+            .or_insert_with(|| (vec![0.0; embedding.len()], 0));
+        for (total, value) in entry.0.iter_mut().zip(&embedding) {
+            *total += value;
+        }
+        entry.1 += 1;
+    }
+    Ok(sums)
+}
+
+fn unit(vector: &[f32]) -> Vec<f32> {
+    let length = vector
+        .iter()
+        .map(|v| v * v)
+        .sum::<f32>()
+        .sqrt()
+        .max(f32::EPSILON);
+    vector.iter().map(|v| v / length).collect()
+}
+
+/// The (lowercased) name of each named group.
+fn group_names(conn: &Connection) -> rusqlite::Result<HashMap<i64, String>> {
+    let mut name_of: HashMap<i64, String> = HashMap::new();
+    for (fingerprint, x, y, name) in db::face_names(conn)? {
+        if let Some(cluster) = db::cluster_at(conn, &fingerprint, x, y)? {
+            name_of.entry(cluster).or_insert(name);
+        }
+    }
+    Ok(name_of)
+}
+
+/// Merges the groups whose average faces are at least `MERGE_GROUPS` alike,
+/// most alike first, never two groups with different names nor a group the
+/// user said is not that person. Returns how many groups were merged away.
+pub fn merge_groups(conn: &mut Connection) -> rusqlite::Result<usize> {
+    let sums = group_sums(conn)?;
+    let names: HashMap<i64, String> = group_names(conn)?
+        .into_iter()
+        .map(|(cluster, name)| (cluster, name.to_lowercase()))
+        .collect();
+    let refused = db::not_person(conn)?;
+    let merges = plan_merges(&sums, &names, &refused);
+    if merges.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.transaction()?;
+    for (from, into) in &merges {
+        db::merge_face_group(&tx, *from, *into)?;
+    }
+    tx.commit()?;
+    Ok(merges.len())
+}
+
+/// Which groups go into which: `(from, into)`, in the order to apply them.
+fn plan_merges(
+    sums: &HashMap<i64, (Vec<f32>, usize)>,
+    names: &HashMap<i64, String>,
+    refused: &HashSet<(i64, String)>,
+) -> Vec<(i64, i64)> {
+    // A group of one face is no steadier than a face, and it was already
+    // compared with every group when it was made: only larger ones merge.
+    let mut ids: Vec<i64> = sums
+        .iter()
+        .filter(|(_, (_, count))| *count >= 2)
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_unstable();
+    let units: Vec<Vec<f32>> = ids.iter().map(|id| unit(&sums[id].0)).collect();
+    let mut pairs: Vec<(f32, usize, usize)> = (0..ids.len())
+        .into_par_iter()
+        .flat_map_iter(|a| {
+            let units = &units;
+            (a + 1..units.len()).filter_map(move |b| {
+                let alike = similarity(&units[a], &units[b]);
+                (alike >= MERGE_GROUPS).then_some((alike, a, b))
+            })
+        })
+        .collect();
+    pairs.sort_by(|x, y| y.0.total_cmp(&x.0));
+
+    // Union-find over the groups; a merged group keeps the id of the larger.
+    let mut parent: Vec<usize> = (0..ids.len()).collect();
+    let mut sum: Vec<Vec<f32>> = ids.iter().map(|id| sums[id].0.clone()).collect();
+    let mut count: Vec<usize> = ids.iter().map(|id| sums[id].1).collect();
+    let mut name: Vec<Option<String>> = ids.iter().map(|id| names.get(id).cloned()).collect();
+    let mut refusals: Vec<HashSet<String>> = ids
+        .iter()
+        .map(|id| {
+            refused
+                .iter()
+                .filter(|(cluster, _)| cluster == id)
+                .map(|(_, name)| name.clone())
+                .collect()
+        })
+        .collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut merges = Vec::new();
+    for (_, a, b) in pairs {
+        let (ra, rb) = (root(&mut parent, a), root(&mut parent, b));
+        if ra == rb {
+            continue;
+        }
+        // Earlier merges moved both averages: check again.
+        if similarity(&unit(&sum[ra]), &unit(&sum[rb])) < MERGE_GROUPS {
+            continue;
+        }
+        let clash = match (&name[ra], &name[rb]) {
+            (Some(x), Some(y)) => x != y,
+            (Some(x), None) => refusals[rb].contains(x),
+            (None, Some(y)) => refusals[ra].contains(y),
+            (None, None) => false,
+        };
+        if clash {
+            continue;
+        }
+        let (into, from) = if count[ra] >= count[rb] {
+            (ra, rb)
+        } else {
+            (rb, ra)
+        };
+        parent[from] = into;
+        let moved = std::mem::take(&mut sum[from]);
+        for (total, value) in sum[into].iter_mut().zip(&moved) {
+            *total += value;
+        }
+        count[into] += count[from];
+        if name[into].is_none() {
+            name[into] = name[from].take();
+        }
+        let moved = std::mem::take(&mut refusals[from]);
+        refusals[into].extend(moved);
+        merges.push((ids[from], ids[into]));
+    }
+    // Applied in this order, a group merged into one that is merged later
+    // follows it.
+    merges
+}
+
+/// Unnamed groups that might be the person named `name`, made of
+/// `clusters`: most alike first.
+pub fn suggestions(
+    conn: &Connection,
+    clusters: &[i64],
+    name: &str,
+) -> rusqlite::Result<Vec<Person>> {
+    let sums = group_sums(conn)?;
+    let names = group_names(conn)?;
+    let hidden = db::hidden_face_groups(conn)?;
+    let name = name.trim().to_lowercase();
+    let refused: HashSet<i64> = db::not_person(conn)?
+        .into_iter()
+        .filter(|(_, refused)| *refused == name)
+        .map(|(cluster, _)| cluster)
+        .collect();
+    let person: Vec<Vec<f32>> = clusters
+        .iter()
+        .filter_map(|cluster| sums.get(cluster))
+        .map(|(sum, _)| unit(sum))
+        .collect();
+    if person.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut found: Vec<(f32, Person)> = Vec::new();
+    for group in db::face_groups(conn)? {
+        let id = group.cluster;
+        if clusters.contains(&id)
+            || names.contains_key(&id)
+            || hidden.contains(&id)
+            || refused.contains(&id)
+        {
+            continue;
+        }
+        let Some((sum, _)) = sums.get(&id) else {
+            continue;
+        };
+        let candidate = unit(sum);
+        let alike = person
+            .iter()
+            .map(|face| similarity(face, &candidate))
+            .fold(f32::MIN, f32::max);
+        if alike >= SUGGEST {
+            found.push((alike, person_of(&group, None)));
+        }
+    }
+    found.sort_by(|a, b| b.0.total_cmp(&a.0));
+    Ok(found
+        .into_iter()
+        .take(MAX_SUGGESTIONS)
+        .map(|(_, p)| p)
+        .collect())
+}
+
+fn person_of(group: &db::FaceGroup, name: Option<String>) -> Person {
+    Person {
+        name,
+        clusters: vec![group.cluster],
+        photos: group.photos,
+        hidden: false,
+        cover_crop: square_around(group.cover_bounds, group.cover_size),
+        cover: group.cover.clone(),
+        cover_width: group.cover_size.map(|(width, _)| width),
+        cover_height: group.cover_size.map(|(_, height)| height),
+    }
 }
 
 /// The grouping itself: `faces` are `(id, group, embedding)`; returns the
@@ -142,10 +380,13 @@ fn assign_groups(faces: &[db::StoredFace]) -> Vec<(i64, i64)> {
     let mut groups: Vec<Group> = Vec::new();
     let mut index_of: HashMap<i64, usize> = HashMap::new();
     for (_, cluster, embedding) in faces {
-        let Some(cluster) = cluster else { continue };
-        let index = *index_of.entry(*cluster).or_insert_with(|| {
+        // Below zero: taken out of its group by hand, it stays out.
+        let Some(cluster) = cluster.filter(|c| *c > 0) else {
+            continue;
+        };
+        let index = *index_of.entry(cluster).or_insert_with(|| {
             groups.push(Group {
-                id: *cluster,
+                id: cluster,
                 sum: vec![0.0; embedding.len()],
                 length: 0.0,
             });
@@ -195,6 +436,8 @@ pub struct Person {
     /// Photos they appear in. For a person made of several groups this can
     /// count a photo twice; it is only used for ordering and as a hint.
     pub photos: u32,
+    /// Hidden from the People screen (on this computer).
+    pub hidden: bool,
     /// The photo to show them with, and the square part of it around their
     /// face: left, top, width, height in ten-thousandths of the photo.
     pub cover: String,
@@ -205,12 +448,8 @@ pub struct Person {
 
 /// The people of a library: named ones first, then by number of photos.
 pub fn people(conn: &Connection) -> rusqlite::Result<Vec<Person>> {
-    let mut name_of: HashMap<i64, String> = HashMap::new();
-    for (fingerprint, x, y, name) in db::face_names(conn)? {
-        if let Some(cluster) = db::cluster_at(conn, &fingerprint, x, y)? {
-            name_of.entry(cluster).or_insert(name);
-        }
-    }
+    let name_of = group_names(conn)?;
+    let hidden = db::hidden_face_groups(conn)?;
 
     let mut named: HashMap<String, Person> = HashMap::new();
     let mut unnamed: Vec<Person> = Vec::new();
@@ -218,20 +457,15 @@ pub fn people(conn: &Connection) -> rusqlite::Result<Vec<Person>> {
     // Largest first, so that a person's biggest group provides the cover.
     groups.sort_by(|a, b| b.photos.cmp(&a.photos).then(a.cluster.cmp(&b.cluster)));
     for group in groups {
-        let person = Person {
-            name: name_of.get(&group.cluster).cloned(),
-            clusters: vec![group.cluster],
-            photos: group.photos,
-            cover_crop: square_around(group.cover_bounds, group.cover_size),
-            cover: group.cover,
-            cover_width: group.cover_size.map(|(width, _)| width),
-            cover_height: group.cover_size.map(|(_, height)| height),
-        };
+        let mut person = person_of(&group, name_of.get(&group.cluster).cloned());
+        person.hidden = hidden.contains(&group.cluster);
         match &person.name {
             Some(name) => match named.get_mut(&name.to_lowercase()) {
                 Some(same) => {
                     same.clusters.push(group.cluster);
                     same.photos += group.photos;
+                    // Hidden only if every group of theirs is.
+                    same.hidden &= person.hidden;
                 }
                 None => {
                     named.insert(name.to_lowercase(), person);
@@ -312,6 +546,91 @@ pub fn naming_ops(conn: &Connection, clusters: &[i64], name: &str) -> rusqlite::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Measures face search and grouping on a copy of a real library:
+    /// `PHOTOLIB_BENCH_DIR` holds `index.db` and `faces.db`, and
+    /// `PHOTOLIB_APP_DATA` is the app's data folder (models and thumbnails).
+    /// `PHOTOLIB_BENCH_PHOTOS` limits how many photos are searched.
+    /// Prints numbers only, never names or file paths.
+    #[test]
+    #[ignore]
+    fn benchmark_real_library() {
+        let (Ok(dir), Ok(data)) = (
+            std::env::var("PHOTOLIB_BENCH_DIR"),
+            std::env::var("PHOTOLIB_APP_DATA"),
+        ) else {
+            return;
+        };
+        let limit: u64 = std::env::var("PHOTOLIB_BENCH_PHOTOS")
+            .ok()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(1000);
+        let data = std::path::Path::new(&data);
+        let mut conn = db::open(&std::path::Path::new(&dir).join("index.db")).unwrap();
+        let cache = ThumbCache::new(data);
+        let finder = FaceFinder::load(data).unwrap();
+        let cancel = AtomicBool::new(false);
+        let started = Instant::now();
+        let searched = find_faces(&mut conn, &cache, &finder, &cancel, &|progress| {
+            if progress.done >= limit {
+                cancel.store(true, Ordering::Relaxed);
+            }
+        })
+        .unwrap();
+        let search_ms = started.elapsed().as_millis();
+        let faces: i64 = conn
+            .query_row("SELECT count(*) FROM faces.face", [], |row| row.get(0))
+            .unwrap();
+        let scanned: i64 = conn
+            .query_row("SELECT count(*) FROM faces.scanned", [], |row| row.get(0))
+            .unwrap();
+        println!(
+            "searched {searched} photos in {search_ms} ms ({:.1} ms/photo); {scanned} scanned in all, {faces} faces",
+            search_ms as f64 / searched.max(1) as f64
+        );
+
+        let started = Instant::now();
+        let grouped = group_faces(&mut conn).unwrap();
+        println!(
+            "grouped {grouped} faces in {} ms",
+            started.elapsed().as_millis()
+        );
+        let started = Instant::now();
+        let merged = merge_groups(&mut conn).unwrap();
+        println!(
+            "merged {merged} groups in {} ms",
+            started.elapsed().as_millis()
+        );
+        let sizes: Vec<(i64, i64)> = conn
+            .prepare(
+                "SELECT n, count(*) FROM (SELECT cluster, count(DISTINCT fingerprint) AS n
+                   FROM faces.face GROUP BY cluster) GROUP BY n ORDER BY n",
+            )
+            .unwrap()
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let groups: i64 = sizes.iter().map(|(_, count)| count).sum();
+        let shown: i64 = sizes.iter().filter(|(n, _)| *n >= 3).map(|(_, c)| c).sum();
+        println!("{groups} groups, {shown} with 3+ photos");
+        let mut largest: Vec<(i64, i64)> = sizes.clone();
+        largest.reverse();
+        println!(
+            "photos per group (largest first): {:?}",
+            &largest[..largest.len().min(25)]
+        );
+        println!("people listed: {}", people(&conn).unwrap().len());
+        for person in people(&conn).unwrap().iter().take(8) {
+            let found = suggestions(&conn, &person.clusters, "someone").unwrap();
+            let sizes: Vec<u32> = found.iter().map(|p| p.photos).collect();
+            println!(
+                "person with {} photos: suggestions {sizes:?}",
+                person.photos
+            );
+        }
+    }
+
     use crate::db::PhotoRow;
     use crate::org::Event;
 
@@ -464,5 +783,112 @@ mod tests {
         let renamed = people(&conn).unwrap();
         assert_eq!(renamed[0].name.as_deref(), Some("Alice B."));
         assert_eq!(renamed[0].clusters.len(), 2);
+    }
+
+    #[test]
+    fn groups_merge_only_when_clearly_the_same_person() {
+        let sum = |faces: &[Vec<f32>]| -> (Vec<f32>, usize) {
+            let mut total = vec![0.0; faces[0].len()];
+            for face in faces {
+                for (t, v) in total.iter_mut().zip(face) {
+                    *t += v;
+                }
+            }
+            (total, faces.len())
+        };
+        let mut sums = HashMap::new();
+        // 1 and 2: the same person, 2 the larger group. 3: someone else.
+        sums.insert(1, sum(&[face_of(0, 0.1), face_of(0, 0.2)]));
+        sums.insert(
+            2,
+            sum(&[face_of(0, 0.15), face_of(0, 0.0), face_of(0, 0.1)]),
+        );
+        sums.insert(3, sum(&[face_of(4, 0.0), face_of(4, 0.1)]));
+        // A single face just like them is not merged: it was compared already.
+        sums.insert(4, sum(&[face_of(0, 0.1)]));
+        // 5 and 6 look alike but carry different names; 7 looks like 8, but
+        // the user said 7 is not 8's person.
+        sums.insert(5, sum(&[face_of(2, 0.0), face_of(2, 0.1)]));
+        sums.insert(6, sum(&[face_of(2, 0.05), face_of(2, 0.1)]));
+        sums.insert(7, sum(&[face_of(6, 0.0), face_of(6, 0.1)]));
+        sums.insert(8, sum(&[face_of(6, 0.05), face_of(6, 0.1)]));
+        let names = HashMap::from([
+            (5, "anna".to_owned()),
+            (6, "eva".to_owned()),
+            (8, "tom".to_owned()),
+        ]);
+        let refused = HashSet::from([(7, "tom".to_owned())]);
+        assert_eq!(plan_merges(&sums, &names, &refused), [(1, 2)]);
+        // Without the names and the refusal, those merge too.
+        let mut all = plan_merges(&sums, &HashMap::new(), &HashSet::new());
+        all.sort_unstable();
+        assert_eq!(all, [(1, 2), (6, 5), (8, 7)]);
+    }
+
+    #[test]
+    fn suggestions_corrections_and_hidden_people() {
+        let mut conn = db::open_in_memory().unwrap();
+        // Alice in aa, bb, cc; someone like her (maybe her, younger) in dd
+        // and ee; a stranger in ff.
+        let cast = [
+            ("aa", face_of(0, 0.0)),
+            ("bb", face_of(0, 0.1)),
+            ("cc", face_of(0, 0.05)),
+            ("dd", face_of(0, 1.0)),
+            ("ee", face_of(0, 1.1)),
+            ("ff", face_of(4, 0.0)),
+        ];
+        for (name, embedding) in &cast {
+            photo(&mut conn, name);
+            let tx = conn.transaction().unwrap();
+            let face = NewFace {
+                bounds: [0.1, 0.1, 0.2, 0.2],
+                score: 0.9,
+                embedding,
+            };
+            db::save_faces(&tx, &name.repeat(32), &[face]).unwrap();
+            tx.commit().unwrap();
+        }
+        // Grouped by hand, as the grouping might have: dd and ee apart.
+        let ids: Vec<i64> = db::face_embeddings(&conn)
+            .unwrap()
+            .iter()
+            .map(|(id, _, _)| *id)
+            .collect();
+        let groups = [1, 1, 1, 2, 2, 3];
+        let assigned: Vec<(i64, i64)> = ids.iter().copied().zip(groups).collect();
+        db::set_face_clusters(&mut conn, &assigned).unwrap();
+        // 0.7 alike: not merged, only suggested.
+        assert_eq!(merge_groups(&mut conn).unwrap(), 0);
+        let ops = naming_ops(&conn, &[1], "Alice").unwrap();
+        let tx = conn.transaction().unwrap();
+        for op in ops {
+            db::apply_event(&tx, "device", &Event { ts: 1, op }).unwrap();
+        }
+        tx.commit().unwrap();
+
+        let suggested = suggestions(&conn, &[1], "Alice").unwrap();
+        assert_eq!(
+            suggested.iter().map(|p| p.clusters[0]).collect::<Vec<_>>(),
+            [2]
+        );
+        // "Not Alice": no longer suggested, and never merged into her.
+        db::add_not_person(&conn, 2, "alice").unwrap();
+        assert!(suggestions(&conn, &[1], "Alice").unwrap().is_empty());
+
+        // Hiding someone keeps them, marked hidden. (Groups 2 and 3 are too
+        // small to be listed.)
+        db::set_face_groups_hidden(&mut conn, &[1], true).unwrap();
+        let listed: Vec<bool> = people(&conn).unwrap().iter().map(|p| p.hidden).collect();
+        assert_eq!(listed, [true]);
+        db::set_face_groups_hidden(&mut conn, &[1], false).unwrap();
+        assert!(!people(&conn).unwrap()[0].hidden);
+
+        // Taking a photo out of Alice: her listing loses it, for good.
+        let removed = db::remove_faces(&mut conn, &[1], &["aa".repeat(32)]).unwrap();
+        assert_eq!(removed, 1);
+        assert_eq!(group_faces(&mut conn).unwrap(), 0);
+        let listing = db::Listing::Person { clusters: vec![1] };
+        assert_eq!(db::photos_page(&conn, &listing, 0, 10).unwrap().len(), 2);
     }
 }
