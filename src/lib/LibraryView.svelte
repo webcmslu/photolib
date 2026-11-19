@@ -328,6 +328,8 @@
         return "Favorites";
       case "hidden":
         return "Hidden";
+      case "duplicates":
+        return "Duplicates";
       case "album":
         return currentAlbum?.name ?? "Album";
       case "folder":
@@ -416,6 +418,8 @@
         return "No favorites yet. Open a photo and press the heart, or select photos in the grid.";
       case "hidden":
         return "No hidden photos.";
+      case "duplicates":
+        return "No duplicates: every photo is stored once.";
       case "album":
         return "This album is empty. Select photos in the grid and choose “Add to album”.";
       case "search":
@@ -965,6 +969,7 @@
       {@render row({ kind: "library" }, "Library", null)}
       {@render row({ kind: "favorites" }, "Favorites", null)}
       {@render row({ kind: "hidden" }, "Hidden", null)}
+      {@render row({ kind: "duplicates" }, "Duplicates", null)}
       <button
         class="row"
         class:selected={section === "map" || (section === "photos" && listing.kind === "area")}

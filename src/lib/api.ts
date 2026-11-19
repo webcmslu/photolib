@@ -270,6 +270,8 @@ export type Listing =
   | { kind: "favorites" }
   | { kind: "album"; album: string }
   | { kind: "hidden" }
+  /** The photos stored more than once, every copy listed. */
+  | { kind: "duplicates" }
   /** The photos that show one person: the given groups of faces. */
   | { kind: "person"; clusters: number[] }
   /** The photos that match what was typed in the search box. */

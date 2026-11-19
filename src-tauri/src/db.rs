@@ -753,6 +753,9 @@ pub enum Listing {
         album: String,
     },
     Hidden,
+    /// The photos stored more than once (the same content in several files),
+    /// every copy listed.
+    Duplicates,
     /// The photos that show one person: the given groups of faces.
     Person {
         clusters: Vec<i64>,
@@ -849,6 +852,14 @@ impl Listing {
             ),
             Listing::Hidden => (
                 format!("WHERE {IS_LISTED} AND {IS_HIDDEN} AND ?1 IS NULL"),
+                None,
+            ),
+            Listing::Duplicates => (
+                format!(
+                    "WHERE {visible} AND fingerprint IN (SELECT fingerprint FROM photos
+                         WHERE {IS_LISTED} GROUP BY fingerprint HAVING COUNT(*) > 1)
+                       AND ?1 IS NULL"
+                ),
                 None,
             ),
             Listing::Person { clusters } => {
@@ -1637,6 +1648,33 @@ mod tests {
             duration_ms: None,
             live_candidate: false,
         }
+    }
+
+    #[test]
+    fn duplicates_lists_every_copy_of_a_photo_stored_twice() {
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for (rel_path, fingerprint) in [
+            ("a.jpg", "same"),
+            ("copy/a.jpg", "same"),
+            ("b.jpg", "other"),
+        ] {
+            upsert(
+                &tx,
+                &PhotoRow {
+                    fingerprint: fingerprint.into(),
+                    ..row(rel_path, 10)
+                },
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let listed: Vec<String> = photos_page(&conn, &Listing::Duplicates, 0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|photo| photo.rel_path)
+            .collect();
+        assert_eq!(listed, ["a.jpg", "copy/a.jpg"]);
     }
 
     #[test]
