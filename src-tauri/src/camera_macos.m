@@ -21,6 +21,8 @@
 @property(strong) NSMutableSet<NSString *> *ready;
 /// The files of each device, by UUID, as numbered for Rust.
 @property(strong) NSMutableDictionary<NSString *, NSArray<ICCameraFile *> *> *catalogs;
+/// UUIDs of the devices a session is being opened on.
+@property(strong) NSMutableSet<NSString *> *opening;
 @end
 
 @implementation PLCameras
@@ -30,6 +32,7 @@
         _devices = [NSMutableArray array];
         _ready = [NSMutableSet set];
         _catalogs = [NSMutableDictionary dictionary];
+        _opening = [NSMutableSet set];
         _browser = [[ICDeviceBrowser alloc] init];
         _browser.delegate = self;
         _browser.browsedDeviceTypeMask = (ICDeviceTypeMask)(ICDeviceTypeMaskCamera | ICDeviceLocationTypeMaskLocal);
@@ -48,6 +51,31 @@
     }
     device.delegate = self;
     [self.devices addObject:(ICCameraDevice *)device];
+    // A session at once: the phone's "locked" state is only up to date with
+    // one open, and the list of its photos starts loading.
+    [self openSessionOn:(ICCameraDevice *)device];
+}
+
+/// Opens a session on the device unless one is open or being opened.
+- (void)openSessionOn:(ICCameraDevice *)device {
+    NSString *uuid = device.UUIDString;
+    if (!uuid || device.hasOpenSession || [self.opening containsObject:uuid]) return;
+    [self.opening addObject:uuid];
+    [device requestOpenSessionWithOptions:nil
+                               completion:^(NSError *error) {
+                                   (void)error;
+                                   dispatch_async(dispatch_get_main_queue(), ^{
+                                       [self.opening removeObject:uuid];
+                                   });
+                               }];
+}
+
+/// True while the phone is locked or doesn't trust this computer: it says
+/// so, and has not started giving its list of photos. (The flag alone can
+/// lag behind: a phone that lists its photos is not restricted.)
+- (BOOL)isRestricted:(ICCameraDevice *)device {
+    return device.accessRestrictedAppleDevice && ![self.ready containsObject:device.UUIDString ?: @""] &&
+           device.contentCatalogPercentCompleted == 0 && device.mediaFiles.count == 0;
 }
 
 - (void)deviceBrowser:(ICDeviceBrowser *)browser didRemoveDevice:(ICDevice *)device moreGoing:(BOOL)moreGoing {
@@ -101,6 +129,23 @@
 - (void)cameraDevice:(ICCameraDevice *)camera didReceivePTPEvent:(NSData *)eventData {
 }
 - (void)cameraDeviceDidRemoveAccessRestriction:(ICDevice *)device {
+    // Unlocked and trusted: read its list of photos again, from a new session.
+    NSString *uuid = device.UUIDString;
+    if (!uuid) return;
+    [self.ready removeObject:uuid];
+    [self.catalogs removeObjectForKey:uuid];
+    ICCameraDevice *camera = (ICCameraDevice *)device;
+    if (camera.hasOpenSession) {
+        [camera requestCloseSessionWithOptions:nil
+                                    completion:^(NSError *error) {
+                                        (void)error;
+                                        dispatch_async(dispatch_get_main_queue(), ^{
+                                            [self openSessionOn:camera];
+                                        });
+                                    }];
+    } else {
+        [self openSessionOn:camera];
+    }
 }
 - (void)cameraDeviceDidEnableAccessRestriction:(ICDevice *)device {
     if (device.UUIDString) {
@@ -189,11 +234,12 @@ char *pl_camera_list(void) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         for (ICCameraDevice *device in shared.devices) {
             if (!device.UUIDString) continue;
+            [shared openSessionOn:device];
             [list addObject:@{
                 @"id" : device.UUIDString,
                 @"name" : device.name ?: @"",
                 // Locked, or "Trust this computer" not answered yet.
-                @"restricted" : @(device.accessRestrictedAppleDevice),
+                @"restricted" : @([shared isRestricted:device]),
             }];
         }
     });
@@ -207,43 +253,35 @@ char *pl_camera_files(const char *device_id, double timeout) {
     NSString *uuid = [NSString stringWithUTF8String:device_id];
 
     __block ICCameraDevice *device = nil;
-    __block BOOL open = NO;
-    __block BOOL restricted = NO;
     dispatch_sync(dispatch_get_main_queue(), ^{
         device = [shared deviceWithId:uuid];
-        open = device.hasOpenSession;
-        restricted = device.accessRestrictedAppleDevice;
+        if (device) [shared openSessionOn:device];
     });
     if (!device) return error_json(@"not connected");
-    if (restricted) return error_json(@"restricted");
 
-    if (!open) {
-        dispatch_semaphore_t opened = dispatch_semaphore_create(0);
-        __block NSString *failure = nil;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [device requestOpenSessionWithOptions:nil
-                                       completion:^(NSError *error) {
-                                           if (error) failure = error.localizedDescription ?: @"can't open";
-                                           dispatch_semaphore_signal(opened);
-                                       }];
-        });
-        if (!wait_for(opened, 30)) return error_json(@"the device doesn't answer");
-        if (failure) return error_json(failure);
-    }
-
-    // Wait for the complete list of files.
+    // Wait for the complete list of files. A phone that stays locked (or
+    // untrusted) for a while is reported as such; one that gives its list is
+    // fine whatever it says.
     NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    NSDate *restrictedSince = nil;
     for (;;) {
         __block BOOL ready = NO;
         __block BOOL gone = NO;
+        __block BOOL restricted = NO;
         dispatch_sync(dispatch_get_main_queue(), ^{
             ready = [shared.ready containsObject:uuid];
             gone = [shared deviceWithId:uuid] == nil;
-            restricted = device.accessRestrictedAppleDevice;
+            restricted = [shared isRestricted:device];
+            if (!gone && !ready) [shared openSessionOn:device];
         });
         if (gone) return error_json(@"not connected");
-        if (restricted) return error_json(@"restricted");
         if (ready) break;
+        if (restricted) {
+            if (!restrictedSince) restrictedSince = [NSDate date];
+            if (-[restrictedSince timeIntervalSinceNow] > 15) return error_json(@"restricted");
+        } else {
+            restrictedSince = nil;
+        }
         if ([deadline timeIntervalSinceNow] < 0) return error_json(@"the device doesn't answer");
         [NSThread sleepForTimeInterval:0.1];
     }
