@@ -51,6 +51,7 @@
   import AboutButton from "./AboutButton.svelte";
   import SettingsButton from "./SettingsButton.svelte";
   import ExportDialog from "./ExportDialog.svelte";
+  import DuplicatesView from "./DuplicatesView.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { saveSettings, settings } from "./settings.svelte";
 
@@ -222,7 +223,7 @@
   // Raw (not a deep proxy): it is passed to the backend as is.
   let listing = $state.raw<Listing>({ kind: "library" });
   /** What the main area shows: a photo grid, the map or the people. */
-  let section = $state<"photos" | "map" | "people">("photos");
+  let section = $state<"photos" | "map" | "people" | "duplicates">("photos");
   /** The name of the person whose photos are listed. */
   let personName = $state<string | null>(null);
   let personHidden = $state(false);
@@ -976,7 +977,6 @@
       {@render row({ kind: "library" }, "Library", null)}
       {@render row({ kind: "favorites" }, "Favorites", null)}
       {@render row({ kind: "hidden" }, "Hidden", null)}
-      {@render row({ kind: "duplicates" }, "Duplicates", null)}
       <button
         class="row"
         class:selected={section === "map" || (section === "photos" && listing.kind === "area")}
@@ -990,6 +990,9 @@
         onclick={() => (section = "people")}
       >
         <span class="row-name">People</span>
+      </button>
+      <button class="row" class:selected={section === "duplicates"} onclick={() => (section = "duplicates")}>
+        <span class="row-name">Duplicates</span>
       </button>
 
       <h2>
@@ -1093,6 +1096,15 @@
             }}
           />
           {/key}
+        </div>
+      {:else if section === "duplicates"}
+        <div class="map">
+          <DuplicatesView
+            libraryPath={library.path}
+            {revision}
+            canEdit={online && writable}
+            onchanged={refreshAll}
+          />
         </div>
       {:else}
       <div class="toolbar">

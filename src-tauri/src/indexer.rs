@@ -392,11 +392,14 @@ fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
     })
 }
 
-/// Hidden entries (`.photolib`, `.DS_Store`, macOS `._name.jpg` companions) and
-/// NAS housekeeping folders.
+/// Hidden entries (`.photolib`, `.DS_Store`, macOS `._name.jpg` companions),
+/// NAS housekeeping folders, and the `Duplicates to delete` folder.
 fn is_skipped(entry: &DirEntry) -> bool {
     let name = entry.file_name().to_string_lossy();
-    name.starts_with('.') || (entry.file_type().is_dir() && SKIPPED_DIRS.contains(&name.as_ref()))
+    name.starts_with('.')
+        || (entry.file_type().is_dir() && SKIPPED_DIRS.contains(&name.as_ref()))
+        // Extra copies set aside for deletion (see duplicates.rs).
+        || (entry.depth() == 1 && entry.file_type().is_dir() && name == crate::duplicates::PARKED)
 }
 
 /// Path relative to the library root with '/' separators, so the same library
@@ -473,14 +476,35 @@ mod tests {
         fs::write(root.join("._a.jpg"), b"appledouble").unwrap();
         fs::write(root.join(".photolib/devices/x.jpg"), b"hidden").unwrap();
         fs::write(root.join("@eaDir/thumb.jpg"), b"nas thumbnail").unwrap();
+        // Extra copies set aside are skipped at the top only.
+        fs::create_dir_all(root.join("Duplicates to delete/2024")).unwrap();
+        fs::write(
+            root.join("Duplicates to delete/2024/a.jpg"),
+            photo("2024:01:01 10:00:00"),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("2024/Duplicates to delete")).unwrap();
+        fs::write(
+            root.join("2024/Duplicates to delete/d.jpg"),
+            photo("2024:01:03 10:00:00"),
+        )
+        .unwrap();
 
         let mut conn = db::open_in_memory().unwrap();
         let summary = run(root, &mut conn);
 
-        assert_eq!((summary.added, summary.total, summary.failed), (3, 3, 0));
+        assert_eq!((summary.added, summary.total, summary.failed), (4, 4, 0));
         let mut paths: Vec<String> = db::load_known(&conn).unwrap().into_keys().collect();
         paths.sort();
-        assert_eq!(paths, ["2024/c.png", "2024/summer/b.JPEG", "a.jpg"]);
+        assert_eq!(
+            paths,
+            [
+                "2024/Duplicates to delete/d.jpg",
+                "2024/c.png",
+                "2024/summer/b.JPEG",
+                "a.jpg"
+            ]
+        );
 
         let sources: Vec<(String, String)> = conn
             .prepare("SELECT rel_path, date_source FROM photos ORDER BY sort_date")
@@ -490,8 +514,8 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(sources[0], ("a.jpg".into(), "exif".into()));
-        assert_eq!(sources[1], ("2024/summer/b.JPEG".into(), "exif".into()));
-        assert_eq!(sources[2], ("2024/c.png".into(), "file".into()));
+        assert_eq!(sources[2], ("2024/summer/b.JPEG".into(), "exif".into()));
+        assert_eq!(sources[3], ("2024/c.png".into(), "file".into()));
     }
 
     #[test]

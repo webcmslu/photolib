@@ -1,5 +1,6 @@
 mod apple;
 mod db;
+mod duplicates;
 mod export;
 mod faces;
 mod fingerprint;
@@ -61,8 +62,8 @@ struct AppState {
     /// Where the viewer loads videos from when the webview can't play them
     /// from `photo://` (Linux; see media_server.rs). `None` elsewhere.
     media_base: Option<String>,
-    /// Set to stop the export that is running.
-    export_cancel: Arc<AtomicBool>,
+    /// Set to stop the export, or the moving of duplicates, that is running.
+    job_cancel: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -1075,13 +1076,13 @@ fn export_photos(
     }
     let items =
         db::export_items(&open_index(&state, &path)?, &photos).map_err(|e| e.to_string())?;
-    state.export_cancel.store(false, Ordering::Relaxed);
+    state.job_cancel.store(false, Ordering::Relaxed);
     export::export(
         root,
         &items,
         Path::new(&dest),
         size,
-        &state.export_cancel,
+        &state.job_cancel,
         |done, total| {
             let _ = app.emit("export-progress", [done, total]);
         },
@@ -1089,9 +1090,67 @@ fn export_photos(
     .map_err(|e| format!("Couldn't write to {dest}: {e}"))
 }
 
+/// Stops the export, or the moving of duplicates, that is running.
 #[tauri::command]
-fn cancel_export(state: State<'_, AppState>) {
-    state.export_cancel.store(true, Ordering::Relaxed);
+fn cancel_job(state: State<'_, AppState>) {
+    state.job_cancel.store(true, Ordering::Relaxed);
+}
+
+/// Every photo stored more than once, with the copy the app suggests keeping.
+#[tauri::command(async)]
+fn duplicate_groups(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<duplicates::Group>, String> {
+    duplicates::groups(&open_index(&state, &path)?).map_err(|e| e.to_string())
+}
+
+/// Moves extra copies into the library's `Duplicates to delete` folder.
+/// Reports `duplicates-progress` as `[done, total]`.
+#[tauri::command(async)]
+fn park_duplicates(
+    app: AppHandle,
+    path: String,
+    choices: Vec<duplicates::Choice>,
+    state: State<'_, AppState>,
+) -> Result<duplicates::Summary, String> {
+    let open = editable_library(&state, &path)?;
+    if !open.writable {
+        return Err("The library folder is read-only, so copies can't be moved.".into());
+    }
+    let mut conn = open_index(&state, &path)?;
+    state.job_cancel.store(false, Ordering::Relaxed);
+    Ok(duplicates::park(
+        Path::new(&path),
+        &mut conn,
+        &choices,
+        &state.job_cancel,
+        |done, total| {
+            let _ = app.emit("duplicates-progress", [done, total]);
+        },
+    ))
+}
+
+/// How many copies wait in the `Duplicates to delete` folder.
+#[tauri::command(async)]
+fn parked_duplicates(path: String) -> usize {
+    duplicates::parked_count(Path::new(&path))
+}
+
+/// Moves the copies in `Duplicates to delete` back where they came from,
+/// then looks for them again.
+#[tauri::command(async)]
+fn put_back_duplicates(
+    app: AppHandle,
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<duplicates::Summary, String> {
+    editable_library(&state, &path)?;
+    let summary = duplicates::put_back(Path::new(&path));
+    if summary.moved > 0 {
+        start_scan(&app, &path, indexer::Mode::Changes);
+    }
+    Ok(summary)
 }
 
 /// Says what importing an Apple Photos library would do, without doing it.
@@ -1208,7 +1267,7 @@ pub fn run() {
             };
             app.manage(AppState {
                 face_finder: Mutex::new(None),
-                export_cancel: Arc::new(AtomicBool::new(false)),
+                job_cancel: Arc::new(AtomicBool::new(false)),
                 media_base,
                 device,
                 keys: Mutex::new(keys),
@@ -1269,7 +1328,11 @@ pub fn run() {
             remove_from_person,
             split_person,
             export_photos,
-            cancel_export,
+            cancel_job,
+            duplicate_groups,
+            park_duplicates,
+            parked_duplicates,
+            put_back_duplicates,
             people,
             name_person,
             months,

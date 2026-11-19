@@ -7,7 +7,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
   import {
-    cancelExport,
+    cancelJob,
     exportPhotos,
     onExportProgress,
     pickExportFolder,
@@ -77,7 +77,7 @@
   }
 
   function close() {
-    if (running) cancelExport();
+    if (running) cancelJob();
     else onclose();
   }
 </script>
@@ -121,7 +121,7 @@
         <progress value={progress[0]} max={progress[1]}></progress>
       </section>
       <footer>
-        <button class="secondary" onclick={cancelExport}>Stop</button>
+        <button class="secondary" onclick={cancelJob}>Stop</button>
       </footer>
     {:else}
       <section>

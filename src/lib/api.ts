@@ -59,8 +59,61 @@ export function exportPhotos(
   return invoke("export_photos", { path, photos, dest, size });
 }
 
-export function cancelExport(): Promise<void> {
-  return invoke("cancel_export");
+/** Stops the export, or the moving of duplicates, that is running. */
+export function cancelJob(): Promise<void> {
+  return invoke("cancel_job");
+}
+
+export interface DuplicateCopy {
+  relPath: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/** A photo stored in several files. */
+export interface DuplicateGroup {
+  fingerprint: string;
+  sortDate: number;
+  video: boolean;
+  copies: DuplicateCopy[];
+  /** The copy the app suggests keeping. */
+  keep: number;
+}
+
+/** Where extra copies are moved, at the top of the library. */
+export const PARKED_FOLDER = "Duplicates to delete";
+
+export function duplicateGroups(path: string): Promise<DuplicateGroup[]> {
+  return invoke("duplicate_groups", { path });
+}
+
+export interface MoveSummary {
+  moved: number;
+  /** Copies left where they were, with why. */
+  skipped: [string, string][];
+  cancelled: boolean;
+}
+
+/** Moves the extra copies into the Duplicates to delete folder. */
+export function parkDuplicates(
+  path: string,
+  choices: { keep: string; extras: string[] }[],
+): Promise<MoveSummary> {
+  return invoke("park_duplicates", { path, choices });
+}
+
+/** How many copies wait in the Duplicates to delete folder. */
+export function parkedDuplicates(path: string): Promise<number> {
+  return invoke("parked_duplicates", { path });
+}
+
+export function putBackDuplicates(path: string): Promise<MoveSummary> {
+  return invoke("put_back_duplicates", { path });
+}
+
+/** `[done, total]` while extra copies are moved. */
+export function onDuplicatesProgress(handler: (done: number, total: number) => void): Promise<UnlistenFn> {
+  return listen<[number, number]>("duplicates-progress", (event) => handler(...event.payload));
 }
 
 /** `[done, total]` while an export runs. */
