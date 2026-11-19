@@ -797,8 +797,12 @@
   // --- Organizing ----------------------------------------------------------------
 
   /** Records changes, then reloads what is on screen. */
+  /** Records `ops` and reloads; with no ops, only reloads (a file changed). */
   async function apply(ops: Op[]) {
-    if (ops.length === 0) return;
+    if (ops.length === 0) {
+      refreshAll();
+      return;
+    }
     error = null;
     try {
       await applyOps(library.path, ops);

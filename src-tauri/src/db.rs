@@ -711,6 +711,19 @@ pub fn find_by_fingerprint(
     .optional()
 }
 
+/// The fingerprint and EXIF orientation of the file at `rel_path`.
+pub fn find_by_path(
+    conn: &Connection,
+    rel_path: &str,
+) -> rusqlite::Result<Option<(String, Option<u8>)>> {
+    conn.query_row(
+        "SELECT fingerprint, orientation FROM photos WHERE rel_path = ?1",
+        [rel_path],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )
+    .optional()
+}
+
 /// What exporting a photo needs to know about it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportItem {
@@ -1646,6 +1659,25 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
     )?
     .execute(params![kind, key, photo, value, event.ts, device])?;
     Ok(())
+}
+
+/// What the organization says about one photo: `(kind, key, photo, value)`
+/// rows of `org_state` that name it and set something (favorite, hidden,
+/// album, rating, label, face name).
+pub fn organization_of(
+    conn: &Connection,
+    fingerprint: &str,
+) -> rusqlite::Result<Vec<(String, String, String, String)>> {
+    let mut statement = conn.prepare(
+        "SELECT kind, key, photo, value FROM org_state
+         WHERE ((kind IN ('fav', 'hide', 'rating', 'label', 'face_name') AND key = ?1)
+                OR (kind = 'member' AND photo = ?1))
+           AND value NOT IN ('', '0')",
+    )?;
+    let rows = statement.query_map([fingerprint], |row| {
+        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+    })?;
+    rows.collect()
 }
 
 /// The newest event timestamp merged so far (0 if none), for the logical clock.

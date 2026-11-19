@@ -13,6 +13,7 @@ mod indexer;
 mod media_server;
 mod metadata;
 mod org;
+mod original;
 mod people;
 mod places;
 mod raw;
@@ -1115,6 +1116,46 @@ fn auto_enhance(fingerprint: String, state: State<'_, AppState>) -> Result<org::
     Ok(enhance::analyze(&preview))
 }
 
+/// Draws `edit` into a photo's file (JPEG only), after the user was warned. The photo keeps its favorite, albums, rating, label and named
+/// faces, which follow the file's new content.
+#[tauri::command(async)]
+fn apply_edit_to_original(
+    path: String,
+    rel_path: String,
+    fingerprint: String,
+    edit: org::Edit,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if !edit.is_valid() {
+        return Err("Not a valid edit.".into());
+    }
+    let open = editable_library(&state, &path)?;
+    if !open.writable {
+        return Err("The library folder is read-only, so the file can't be changed.".into());
+    }
+    let mut conn = open_index(&state, &path)?;
+    let root = Path::new(&path);
+    let (indexed, orientation) = db::find_by_path(&conn, &rel_path)
+        .map_err(|e| e.to_string())?
+        .ok_or("This library is not open.")?;
+    if indexed != fingerprint {
+        return Err("The file has changed since it was read. Try again after the next scan.".into());
+    }
+    let organization = db::organization_of(&conn, &fingerprint).map_err(|e| e.to_string())?;
+
+    original::rewrite(&root.join(&rel_path), orientation, &edit).map_err(|e| e.to_string())?;
+
+    let new_fingerprint = indexer::reindex_file(root, &conn, &rel_path)
+        .map_err(|e| e.to_string())?
+        .ok_or("The photo can't be read.")?;
+    let ops = original::carried_over(&organization, &new_fingerprint, &edit);
+    if ops.is_empty() {
+        return Ok(());
+    }
+    org::record(&mut conn, &state.org_paths(&path), &state.device, open.writable, ops)
+        .map_err(|e| e.to_string())
+}
+
 /// Groups of similar shots (bursts, near-identical photos), newest first.
 #[tauri::command(async)]
 fn similar_groups(path: String, state: State<'_, AppState>) -> Result<Vec<similar::Group>, String> {
@@ -1357,6 +1398,7 @@ pub fn run() {
             duplicate_groups,
             similar_groups,
             auto_enhance,
+            apply_edit_to_original,
             park_duplicates,
             parked_duplicates,
             put_back_duplicates,

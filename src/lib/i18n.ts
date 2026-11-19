@@ -104,6 +104,10 @@ const RUST_MESSAGES = [
   "Couldn't read the Photos library: {detail}",
   "Index database error: {detail}",
   "The photo can't be read.",
+  "The library folder is read-only, so the file can't be changed.",
+  "The file has changed since it was read. Try again after the next scan.",
+  "Only JPEG photos can be changed.",
+  "Not a valid edit.",
 ];
 
 /** An error to show: a message from the Rust side is translated when it is a known one. */

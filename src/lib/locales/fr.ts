@@ -385,6 +385,18 @@ const fr: Record<string, string> = {
   "Show original": "Voir l’original",
   "Revert to original": "Revenir à l’original",
   "The photo can't be read.": "La photo ne peut pas être lue.",
+  "Couldn't change the file: {detail}": "Impossible de modifier le fichier : {detail}",
+  "Original file": "Fichier original",
+  "This replaces the file “{name}” with the edited photo. It can't be undone, and other apps will see the change.": "Le fichier « {name} » sera remplacé par la photo modifiée. C’est irréversible, et les autres applications verront le changement.",
+  "Its RAW file is not changed.": "Son fichier RAW n’est pas modifié.",
+  "Replacing…": "Remplacement…",
+  "Replace the file": "Remplacer le fichier",
+  "Apply to original…": "Appliquer à l’original…",
+  "Writes the edit into the file itself.": "Enregistre la modification dans le fichier lui-même.",
+  "Only JPEG photos can be changed.": "Seules les photos JPEG peuvent être modifiées.",
+  "The library folder is read-only, so the file can't be changed.": "Le dossier de la bibliothèque est en lecture seule, le fichier ne peut donc pas être modifié.",
+  "The file has changed since it was read. Try again after the next scan.": "Le fichier a changé depuis sa lecture. Réessayez après la prochaine analyse.",
+  "Not a valid edit.": "Modification non valide.",
 };
 
 export default fr;

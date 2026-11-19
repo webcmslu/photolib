@@ -385,6 +385,18 @@ const de: Record<string, string> = {
   "Show original": "Original zeigen",
   "Revert to original": "Zum Original zurück",
   "The photo can't be read.": "Das Foto kann nicht gelesen werden.",
+  "Couldn't change the file: {detail}": "Die Datei konnte nicht geändert werden: {detail}",
+  "Original file": "Originaldatei",
+  "This replaces the file “{name}” with the edited photo. It can't be undone, and other apps will see the change.": "Die Datei „{name}“ wird durch das bearbeitete Foto ersetzt. Das lässt sich nicht rückgängig machen, und andere Apps sehen die Änderung.",
+  "Its RAW file is not changed.": "Die zugehörige RAW-Datei wird nicht geändert.",
+  "Replacing…": "Wird ersetzt…",
+  "Replace the file": "Datei ersetzen",
+  "Apply to original…": "Auf Original anwenden…",
+  "Writes the edit into the file itself.": "Schreibt die Bearbeitung in die Datei selbst.",
+  "Only JPEG photos can be changed.": "Nur JPEG-Fotos können geändert werden.",
+  "The library folder is read-only, so the file can't be changed.": "Der Mediatheksordner ist schreibgeschützt, daher kann die Datei nicht geändert werden.",
+  "The file has changed since it was read. Try again after the next scan.": "Die Datei hat sich seit dem Lesen geändert. Versuche es nach dem nächsten Scan erneut.",
+  "Not a valid edit.": "Ungültige Bearbeitung.",
 };
 
 export default de;

@@ -13,6 +13,7 @@
   import { errorText, t, tn } from "./i18n";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
+    applyEditToOriginal,
     autoEnhance,
     photoDetails,
     photoUrl,
@@ -225,6 +226,7 @@
   function startEditing() {
     if (!photo || photo.video || !canEdit) return;
     draft = { ...NO_EDIT, ...(photo.edit ?? {}) };
+    confirmingOriginal = false;
     aspect = "free";
     showInfo = false;
     scale = 1;
@@ -287,6 +289,35 @@
     const fingerprint = photo.fingerprint;
     const enhance = await enhanceFor(fingerprint);
     if (enhance && editing && photo?.fingerprint === fingerprint) draft.enhance = enhance;
+  }
+
+  // --- Apply to original: draws the edit into the file, after a warning -------
+
+  let confirmingOriginal = $state(false);
+  let rewriting = $state(false);
+  /** Only JPEG files are rewritten (see original.rs). */
+  const rewritable = $derived(!!photo && /\.jpe?g$/i.test(photo.relPath));
+
+  async function applyToOriginal() {
+    const current = photo;
+    if (!current || rewriting || isNeutral(draft)) return;
+    rewriting = true;
+    try {
+      await applyEditToOriginal(
+        pages.libraryPath,
+        current.relPath,
+        current.fingerprint,
+        $state.snapshot(draft),
+      );
+      editing = false;
+      // The file has new content, so a new fingerprint: list it again.
+      await apply([]);
+    } catch (e) {
+      notice = t("Couldn't change the file: {detail}", { detail: errorText(e) });
+    } finally {
+      rewriting = false;
+      confirmingOriginal = false;
+    }
   }
 
   async function saveEdit() {
@@ -788,6 +819,33 @@
         <button onclick={() => (editing = false)}>{t("Cancel")}</button>
         <button class="primary" onclick={saveEdit}>{t("Done")}</button>
       </div>
+
+      <h3>{t("Original file")}</h3>
+      {#if confirmingOriginal}
+        <div class="warning" role="alert">
+          <p>
+            {t("This replaces the file “{name}” with the edited photo. It can't be undone, and other apps will see the change.", { name: fileName })}
+          </p>
+          {#if photo?.rawFile}
+            <p>{t("Its RAW file is not changed.")}</p>
+          {/if}
+          <div class="buttons">
+            <button onclick={() => (confirmingOriginal = false)} disabled={rewriting}>{t("Cancel")}</button>
+            <button class="danger" onclick={applyToOriginal} disabled={rewriting}>
+              {rewriting ? t("Replacing…") : t("Replace the file")}
+            </button>
+          </div>
+        </div>
+      {:else}
+        <div class="buttons">
+          <button onclick={() => (confirmingOriginal = true)} disabled={!rewritable || isNeutral(draft)}>
+            {t("Apply to original…")}
+          </button>
+        </div>
+        <p class="note">
+          {rewritable ? t("Writes the edit into the file itself.") : t("Only JPEG photos can be changed.")}
+        </p>
+      {/if}
     </aside>
   {:else if showInfo}
     <aside>
@@ -1149,6 +1207,24 @@
   aside.edit button:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+
+  aside.edit button.danger {
+    border-color: #d70015;
+    background: #d70015;
+    color: #fff;
+  }
+
+  .warning {
+    padding: 10px;
+    border: 1px solid #d70015;
+    border-radius: 8px;
+    background: rgb(215 0 21 / 0.12);
+    font-size: 12px;
+  }
+
+  .warning p {
+    margin: 0 0 8px;
   }
 
   aside.edit label {

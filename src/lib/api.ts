@@ -628,6 +628,19 @@ export interface SimilarGroup {
 }
 
 /** Groups of similar shots among the photos that are not hidden, newest first. */
+/**
+ * Draws `edit` into the photo's file (JPEG only). The photo keeps its
+ * favorite, albums, rating, label and named faces.
+ */
+export function applyEditToOriginal(
+  path: string,
+  relPath: string,
+  fingerprint: string,
+  edit: Edit,
+): Promise<void> {
+  return invoke("apply_edit_to_original", { path, relPath, fingerprint, edit });
+}
+
 /** The magic wand's corrections for a photo (see enhance.rs). */
 export function autoEnhance(fingerprint: string): Promise<Enhance> {
   return invoke("auto_enhance", { fingerprint });

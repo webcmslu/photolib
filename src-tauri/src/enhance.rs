@@ -276,7 +276,8 @@ fn enhance_stats() {
     let pct = |p: f64| changes[((n - 1.0) * p) as usize];
     println!("{n} previews, {ms:.1} ms each");
     println!("mean curve change: median {:.3}, p90 {:.3}, max {:.3}", pct(0.5), pct(0.9), pct(1.0));
-    let mean = |f: &dyn Fn(&(f64, f64, u16, u8, u8)) -> f64| rows.iter().map(f).sum::<f64>() / n;
+    type Row = (f64, f64, u16, u8, u8);
+    let mean = |f: &dyn Fn(&Row) -> f64| rows.iter().map(f).sum::<f64>() / n;
     println!(
         "avg white-balance spread {:.1}%, gamma {:.2}, contrast {:.0}%, vibrance {:.0}%",
         mean(&|r| r.1),

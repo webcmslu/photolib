@@ -168,7 +168,7 @@ impl Enhance {
 }
 
 impl Edit {
-    fn is_valid(&self) -> bool {
+    pub fn is_valid(&self) -> bool {
         let crop_ok = self.crop.is_none_or(|[left, top, width, height]| {
             width >= 100
                 && height >= 100

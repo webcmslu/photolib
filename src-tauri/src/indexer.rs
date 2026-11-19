@@ -437,6 +437,29 @@ impl Walk<'_> {
     }
 }
 
+/// Reads one file of the library again, after the app changed it, and
+/// returns its new fingerprint. `None` if it could not be read.
+pub fn reindex_file(root: &Path, conn: &Connection, rel_path: &str) -> rusqlite::Result<Option<String>> {
+    let abs_path = root.join(rel_path);
+    let Ok(stat) = std::fs::metadata(&abs_path) else {
+        return Ok(None);
+    };
+    let candidate = Candidate {
+        abs_path,
+        rel_path: rel_path.to_string(),
+        size: stat.len(),
+        mtime_ms: stat.modified().map(unix_ms).unwrap_or(0),
+        is_new: false,
+    };
+    let Some(row) = index_file(&candidate) else {
+        return Ok(None);
+    };
+    let tx = conn.unchecked_transaction()?;
+    db::upsert(&tx, &row)?;
+    tx.commit()?;
+    Ok(Some(row.fingerprint))
+}
+
 /// Reads one file. `None` means it could not be read.
 fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
     let fingerprint = fingerprint::fingerprint(&candidate.abs_path).ok()?;
