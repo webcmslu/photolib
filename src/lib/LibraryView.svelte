@@ -33,7 +33,6 @@
     type Listing,
     type MonthSummary,
     type Only,
-    type Order,
     type Op,
     type ScanProgress,
     type ScanSummary,
@@ -50,6 +49,7 @@
   import Slideshow from "./Slideshow.svelte";
   import AboutButton from "./AboutButton.svelte";
   import SettingsButton from "./SettingsButton.svelte";
+  import { saveSettings, settings } from "./settings.svelte";
 
   interface Props {
     library: LibraryInfo;
@@ -445,19 +445,16 @@
     filterMenuOpen = false;
   }
 
-  /** The grid's order, remembered for every library. */
-  const ORDERS: Order[] = ["dateDesc", "dateAsc", "nameAsc", "nameDesc"];
-  let order = $state<Order>(
-    ORDERS.find((value) => value === localStorage.getItem("photolib.order")) ?? "dateDesc",
-  );
-  $effect(() => localStorage.setItem("photolib.order", order));
+  /** The grid's order, a setting shared by every library. */
+  const order = $derived(settings.order);
   let sortMenuOpen = $state(false);
   const byName = $derived(order === "nameAsc" || order === "nameDesc");
   const ascending = $derived(order === "dateAsc" || order === "nameAsc");
   function chooseSort(by: "date" | "name" | null, up: boolean | null) {
     const name = by === null ? byName : by === "name";
     const asc = up === null ? ascending : up;
-    order = name ? (asc ? "nameAsc" : "nameDesc") : asc ? "dateAsc" : "dateDesc";
+    settings.order = name ? (asc ? "nameAsc" : "nameDesc") : asc ? "dateAsc" : "dateDesc";
+    saveSettings();
     sortMenuOpen = false;
   }
 
@@ -1309,7 +1306,7 @@
         {#if groups.length > 0 && viewMode !== "all"}
           <Overview
             mode={viewMode}
-            {months}
+            months={ascending && !byName ? [...months].reverse() : months}
             {startYear}
             onyear={(year) => {
               startYear = year;

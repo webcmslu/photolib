@@ -6,7 +6,8 @@
   import { onMount } from "svelte";
   import { disableFaces, enableFaces, facesStatus, onFacesDownload, type FacesStatus } from "./api";
   import { formatBytes } from "./format";
-  import { saveSettings, settings, SLIDE_SECONDS, TRANSITIONS, type Transition } from "./settings.svelte";
+  import type { Order } from "./api";
+  import { ORDERS, saveSettings, settings, SLIDE_SECONDS, TRANSITIONS, type Transition } from "./settings.svelte";
 
   interface Props {
     /** Told when face grouping was switched on or off. */
@@ -58,6 +59,11 @@
     }
   }
 
+  function setOrder(value: string) {
+    settings.order = value as Order;
+    saveSettings();
+  }
+
   function setSeconds(value: string) {
     settings.slideSeconds = Number(value);
     saveSettings();
@@ -90,6 +96,19 @@
         <h2>Settings</h2>
         <button class="close" onclick={() => (open = false)} aria-label="Close">✕</button>
       </header>
+
+      <section>
+        <h3>Photos</h3>
+        <label class="row">
+          <span>Show photos</span>
+          <select value={settings.order} onchange={(event) => setOrder(event.currentTarget.value)}>
+            {#each Object.entries(ORDERS) as [value, label] (value)}
+              <option {value}>{label}</option>
+            {/each}
+          </select>
+        </label>
+        <p class="note">The Sort button above the photos changes it too.</p>
+      </section>
 
       <section>
         <h3>Slideshow</h3>
