@@ -435,6 +435,7 @@ const fr: Record<string, string> = {
   "The device shows no photos.": "L’appareil ne présente aucune photo.",
   "None of these files could be read.": "Aucun de ces fichiers n’a pu être lu.",
   "If the phone has photos, unlock it, wait a moment and try again.": "Si le téléphone contient des photos, déverrouillez-le, patientez un instant et réessayez.",
+  "Import {items} ({size} with their RAW files)": "Importer {items} ({size} avec leurs fichiers RAW)",
 };
 
 export default fr;

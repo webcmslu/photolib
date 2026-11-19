@@ -60,6 +60,8 @@
   const selectable = (tile: ImportTile) => !tile.already && !tile.unreadable;
   const selectedTiles = $derived(preview ? preview.tiles.filter((tile) => selected.has(tile.group)) : []);
   const selectedBytes = $derived(selectedTiles.reduce((sum, tile) => sum + tile.bytes, 0));
+  /** Some selected photos come with their RAW file, which counts in the size. */
+  const selectedRaw = $derived(selectedTiles.some((tile) => tile.raw));
   /** Where a shift-click selects from. */
   let anchor: number | null = null;
 
@@ -311,9 +313,11 @@
         {/if}
         <button class="secondary" onclick={onclose}>{t("Cancel")}</button>
         <button class="primary" onclick={start} disabled={selected.size === 0 || !folder.trim()}>
-          {selected.size > 0
-            ? t("Import {items} ({size})", { items: items(selectedTiles.length), size: formatBytes(selectedBytes) })
-            : t("Import")}
+          {selected.size === 0
+            ? t("Import")
+            : selectedRaw
+              ? t("Import {items} ({size} with their RAW files)", { items: items(selectedTiles.length), size: formatBytes(selectedBytes) })
+              : t("Import {items} ({size})", { items: items(selectedTiles.length), size: formatBytes(selectedBytes) })}
         </button>
       </footer>
     {:else if source}
