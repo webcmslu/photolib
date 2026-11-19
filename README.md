@@ -61,6 +61,30 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   collapsible tree where a folder lists its subfolders too; a slideshow (F5);
   sorting by date taken or name; a filmstrip in the viewer; and a "river"
   layout, rows of photos at their own shape filling the width.
+- Settings window: slideshow duration and transition, the photo order
+  (newest or oldest first, or by name), and face grouping on or off.
+  Slideshows can also start from a month's title; a folder can be dropped
+  on the welcome screen to open it.
+- Scanning: reopening a library only checks for new and changed files
+  ("Check for new"); "Rescan everything" reads every file again.
+- People on large libraries: groups that are clearly the same person are
+  merged; a named person's page suggests look-alike groups ("Is this also
+  …?"); "Not …" takes photos out of a person and "Someone else" splits them
+  into a new one; strangers can be hidden. Faces are searched in the cached
+  previews, so this works while the library is offline.
+- Automatic updates: the Info dialog installs a new version in one click
+  (signed with the updater key; see `release.yml`).
+- Export: the selected photos are copied into a folder, as the original
+  files or as JPEGs with their edits, at full size or smaller.
+- Duplicates: photos stored in several files are listed with all their
+  copies and a suggested copy to keep. The other copies, each first compared
+  byte for byte with the one kept, can be moved into a `Duplicates to
+  delete` folder at the top of the library (skipped by the scan) for the
+  user to delete in their file manager, or put back. This is the only
+  feature that moves files, and only on request; nothing is ever deleted
+  or changed.
+- Right-click menus (the system's own) on photos, albums, folders and
+  people, and "Show in Finder / Explorer / Files" for a photo.
 
 ## Develop
 
