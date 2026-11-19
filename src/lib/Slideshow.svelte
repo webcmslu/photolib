@@ -46,6 +46,9 @@
   let generation = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let hideTimer: ReturnType<typeof setTimeout> | undefined;
+  let leaveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** How long the photo that leaves takes to go (see the CSS animations). */
+  const LEAVE_MS = 950;
 
   /** Resolves with the full-size URL once loaded, or the preview's after a while. */
   function preload(photo: PhotoItem): Promise<string> {
@@ -75,8 +78,12 @@
       if (!photo || photo.video) continue;
       const src = await preload(photo);
       if (mine !== generation) return;
-      previous = shown;
+      // The photo that leaves goes away while the new one comes in: a
+      // photo of another shape doesn't hide all of it, so it must not stay.
+      clearTimeout(leaveTimer);
+      previous = transition === "none" ? null : shown;
       shown = { photo, src, key: next, direction: step };
+      if (previous) leaveTimer = setTimeout(() => (previous = null), LEAVE_MS);
       position = next;
       schedule();
       return;
@@ -139,6 +146,7 @@
     return () => {
       generation++;
       clearTimeout(timer);
+      clearTimeout(leaveTimer);
       clearTimeout(hideTimer);
       if (enteredFullscreen) appWindow.setFullscreen(false).catch(() => {});
     };
@@ -156,7 +164,8 @@
   onmousemove={wake} role="dialog" aria-label="Slideshow" aria-modal="true" tabindex="-1">
   {#each [previous, shown] as layer, which (layer?.key ?? `empty-${which}`)}
     {#if layer}
-      <div class="layer" class:current={which === 1} class:back={layer.direction === -1}>
+      <div class="layer" class:current={which === 1} class:back={layer.direction === -1}
+        class:leaving-back={which === 0 && shown?.direction === -1}>
         <div class="motion pan-{layer.key % 4}">
         {#if layer.photo.edit}
           <EditedImage
@@ -202,8 +211,8 @@
     cursor: none;
   }
 
-  /* The new photo fades in over the previous one, which stays as it is
-     underneath until it is replaced: no dip to black between photos. */
+  /* The new photo comes in over the previous one, which goes away at the
+     same time and is then removed. */
   .layer {
     position: absolute;
     inset: 0;
@@ -217,6 +226,20 @@
   .t-fade .layer.current,
   .t-kenburns .layer.current {
     animation: fade-in 0.9s ease;
+  }
+
+  .t-fade .layer:not(.current),
+  .t-kenburns .layer:not(.current),
+  .t-zoom .layer:not(.current) {
+    animation: fade-out 0.9s ease forwards;
+  }
+
+  .t-slide .layer:not(.current) {
+    animation: slide-out 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  }
+
+  .t-slide .layer:not(.current).leaving-back {
+    animation-name: slide-out-back;
   }
 
   .t-slide .layer.current {
@@ -257,6 +280,24 @@
   @keyframes fade-in {
     from {
       opacity: 0;
+    }
+  }
+
+  @keyframes fade-out {
+    to {
+      opacity: 0;
+    }
+  }
+
+  @keyframes slide-out {
+    to {
+      transform: translateX(-100%);
+    }
+  }
+
+  @keyframes slide-out-back {
+    to {
+      transform: translateX(100%);
     }
   }
 
