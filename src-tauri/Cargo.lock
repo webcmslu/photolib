@@ -3143,7 +3143,7 @@ dependencies = [
 
 [[package]]
 name = "photolib"
-version = "0.1.6"
+version = "0.1.7"
 dependencies = [
  "blake3",
  "chrono",
