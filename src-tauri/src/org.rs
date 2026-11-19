@@ -292,6 +292,12 @@ impl OrgPaths {
 }
 
 /// Appends events to a log as complete lines, in a single write.
+///
+/// Network shares support less than local disks: a share mounted by the
+/// Linux file manager (GVFS) can't seek in a file opened for appending, and
+/// macOS SMB shares refuse the full sync to disk. So the last byte is read
+/// through a separate read-only handle, and a sync the share doesn't support
+/// is skipped.
 fn append(log: &Path, events: &[Event]) -> io::Result<()> {
     if events.is_empty() {
         return Ok(());
@@ -299,30 +305,51 @@ fn append(log: &Path, events: &[Event]) -> io::Result<()> {
     if let Some(dir) = log.parent() {
         fs::create_dir_all(dir)?;
     }
-    let mut file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(log)?;
 
     let mut buffer = Vec::new();
     // If an earlier write was cut short, start on a fresh line so that only
     // the torn line is lost, not ours.
-    let len = file.metadata()?.len();
-    if len > 0 {
-        let mut last = [0u8; 1];
-        file.seek(SeekFrom::End(-1))?;
-        file.read_exact(&mut last)?;
-        if last[0] != b'\n' {
-            buffer.push(b'\n');
-        }
+    if !ends_with_newline(log)? {
+        buffer.push(b'\n');
     }
     for event in events {
         serde_json::to_writer(&mut buffer, event)?;
         buffer.push(b'\n');
     }
+
+    let mut file = OpenOptions::new().append(true).create(true).open(log)?;
     file.write_all(&buffer)?;
-    file.sync_data()
+    match file.sync_data() {
+        Err(e) if sync_unsupported(&e) => Ok(()),
+        result => result,
+    }
+}
+
+/// True if the log is missing, empty, or ends with a complete line.
+fn ends_with_newline(log: &Path) -> io::Result<bool> {
+    let mut file = match File::open(log) {
+        Ok(file) => file,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(true),
+        Err(e) => return Err(e),
+    };
+    if file.metadata()?.len() == 0 {
+        return Ok(true);
+    }
+    let mut last = [0u8; 1];
+    file.seek(SeekFrom::End(-1))?;
+    file.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
+}
+
+/// True for the errors of a file system that has no way to sync to disk:
+/// the data was written, it just can't be forced out any sooner.
+fn sync_unsupported(e: &io::Error) -> bool {
+    // ENOTSUP is 45 on macOS; EOPNOTSUPP is 95 and EINVAL 22 on Linux.
+    matches!(
+        e.kind(),
+        io::ErrorKind::Unsupported | io::ErrorKind::InvalidInput
+    ) || matches!(e.raw_os_error(), Some(45) if cfg!(target_os = "macos"))
+        || matches!(e.raw_os_error(), Some(95) if cfg!(target_os = "linux"))
 }
 
 /// Reads the complete lines of `log` from byte `offset` on. Returns the valid
