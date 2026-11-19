@@ -49,12 +49,17 @@ pub struct Group {
 
 /// Every photo stored more than once, newest first.
 pub fn groups(conn: &Connection) -> rusqlite::Result<Vec<Group>> {
+    // The copies of a photo can have different dates (taken from the file
+    // when the photo has none), so a group is placed by its newest copy and
+    // its copies are kept together.
     let mut stmt = conn.prepare(
-        "SELECT fingerprint, rel_path, size, mtime_ms, sort_date, kind = 1 FROM photos
+        "SELECT fingerprint, rel_path, size, mtime_ms,
+                MAX(sort_date) OVER (PARTITION BY fingerprint) AS newest, kind = 1
+         FROM photos
          WHERE thumb_state != 2 AND part = 0 AND fingerprint IN (
              SELECT fingerprint FROM photos WHERE thumb_state != 2 AND part = 0
              GROUP BY fingerprint HAVING COUNT(*) > 1)
-         ORDER BY sort_date DESC, fingerprint, rel_path",
+         ORDER BY newest DESC, fingerprint, rel_path",
     )?;
     let mut rows = stmt.query([])?;
     let mut groups: Vec<Group> = Vec::new();
@@ -395,19 +400,33 @@ mod tests {
 
         let mut conn = db::open_in_memory().unwrap();
         let tx = conn.transaction().unwrap();
-        for (rel_path, fingerprint) in [
-            ("2018/IMG_1.jpg", "f1"),
-            ("2018/backup/IMG_1.jpg", "f1"),
-            ("2018/IMG_2.jpg", "f2"),
-            ("2018/backup/IMG_2.jpg", "f2"),
-            ("2018/IMG_3.jpg", "f3"),
+        // Copies dated differently (file dates), with another photo dated
+        // between them: each photo's copies must still come together.
+        for (rel_path, fingerprint, sort_date) in [
+            ("2018/IMG_1.jpg", "f1", 1),
+            ("2018/backup/IMG_1.jpg", "f1", 30),
+            ("2018/IMG_2.jpg", "f2", 20),
+            ("2018/backup/IMG_2.jpg", "f2", 20),
+            ("2018/IMG_3.jpg", "f3", 2),
         ] {
-            db::upsert(&tx, &photo(rel_path, fingerprint)).unwrap();
+            db::upsert(
+                &tx,
+                &PhotoRow {
+                    sort_date,
+                    ..photo(rel_path, fingerprint)
+                },
+            )
+            .unwrap();
         }
         tx.commit().unwrap();
 
         let found = groups(&conn).unwrap();
         assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|group| group.copies.len() == 2));
+        assert_eq!(
+            (found[0].fingerprint.as_str(), found[0].sort_date),
+            ("f1", 30)
+        );
         assert!(found
             .iter()
             .all(|group| group.copies[group.keep].rel_path.len() < 20));
