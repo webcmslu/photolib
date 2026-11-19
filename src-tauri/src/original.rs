@@ -81,7 +81,9 @@ pub fn rewrite(source: &Path, orientation: Option<u8>, edit: &Edit) -> Result<()
     let check = image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
         .map_err(|e| RewriteError::Decode(e.to_string()))?;
     if (check.width(), check.height()) != picture.dimensions() {
-        return Err(RewriteError::Decode("the new file doesn't read back".into()));
+        return Err(RewriteError::Decode(
+            "the new file doesn't read back".into(),
+        ));
     }
 
     let partial = partial_path(source);
@@ -99,7 +101,10 @@ pub fn rewrite(source: &Path, orientation: Option<u8>, edit: &Edit) -> Result<()
 
 /// `.<name>.photolib-new` next to `source`: hidden, so a scan meanwhile skips it.
 fn partial_path(source: &Path) -> PathBuf {
-    let name = source.file_name().and_then(|n| n.to_str()).unwrap_or("photo");
+    let name = source
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("photo");
     source.with_file_name(format!(".{name}.photolib-new"))
 }
 
@@ -187,14 +192,31 @@ fn make_exif_upright(tiff: &mut [u8]) {
     };
     let read16 = |data: &[u8], at: usize| -> Option<u16> {
         let bytes = [*data.get(at)?, *data.get(at + 1)?];
-        Some(if little { u16::from_le_bytes(bytes) } else { u16::from_be_bytes(bytes) })
+        Some(if little {
+            u16::from_le_bytes(bytes)
+        } else {
+            u16::from_be_bytes(bytes)
+        })
     };
     let read32 = |data: &[u8], at: usize| -> Option<u32> {
-        let bytes = [*data.get(at)?, *data.get(at + 1)?, *data.get(at + 2)?, *data.get(at + 3)?];
-        Some(if little { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) })
+        let bytes = [
+            *data.get(at)?,
+            *data.get(at + 1)?,
+            *data.get(at + 2)?,
+            *data.get(at + 3)?,
+        ];
+        Some(if little {
+            u32::from_le_bytes(bytes)
+        } else {
+            u32::from_be_bytes(bytes)
+        })
     };
-    let Some(ifd0) = read32(tiff, 4).map(|offset| offset as usize) else { return };
-    let Some(count) = read16(tiff, ifd0).map(usize::from) else { return };
+    let Some(ifd0) = read32(tiff, 4).map(|offset| offset as usize) else {
+        return;
+    };
+    let Some(count) = read16(tiff, ifd0).map(usize::from) else {
+        return;
+    };
     for entry in 0..count {
         let at = ifd0 + 2 + entry * 12;
         // Tag 0x0112, type SHORT: the value sits in the entry itself.
@@ -225,7 +247,9 @@ fn set_values(text: &str, open: &str, close: &str) -> String {
     let mut rest = text;
     while let Some(start) = rest.find(open) {
         let value_start = start + open.len();
-        let Some(length) = rest[value_start..].find(close) else { break };
+        let Some(length) = rest[value_start..].find(close) else {
+            break;
+        };
         out.push_str(&rest[..value_start]);
         out.push('1');
         rest = &rest[value_start + length..];
@@ -237,20 +261,45 @@ fn set_values(text: &str, open: &str, close: &str) -> String {
 /// The events that give the rewritten file (`fingerprint`) what the old one
 /// had: `organization` as [`crate::db::organization_of`] lists it. Face names
 /// move with the edit, and are dropped when cropped away.
-pub fn carried_over(organization: &[(String, String, String, String)], fingerprint: &str, edit: &Edit) -> Vec<Op> {
+pub fn carried_over(
+    organization: &[(String, String, String, String)],
+    fingerprint: &str,
+    edit: &Edit,
+) -> Vec<Op> {
     let photo = || fingerprint.to_string();
     organization
         .iter()
         .filter_map(|(kind, key, point, value)| match kind.as_str() {
-            "fav" => Some(Op::Fav { photo: photo(), on: true }),
-            "hide" => Some(Op::Hide { photo: photo(), on: true }),
-            "rating" => value.parse().ok().map(|stars| Op::Rating { photo: photo(), stars }),
-            "label" => Some(Op::Label { photo: photo(), color: value.clone() }),
-            "member" => Some(Op::AlbumMember { album: key.clone(), photo: photo(), on: true }),
+            "fav" => Some(Op::Fav {
+                photo: photo(),
+                on: true,
+            }),
+            "hide" => Some(Op::Hide {
+                photo: photo(),
+                on: true,
+            }),
+            "rating" => value.parse().ok().map(|stars| Op::Rating {
+                photo: photo(),
+                stars,
+            }),
+            "label" => Some(Op::Label {
+                photo: photo(),
+                color: value.clone(),
+            }),
+            "member" => Some(Op::AlbumMember {
+                album: key.clone(),
+                photo: photo(),
+                on: true,
+            }),
             "face_name" => {
                 let (x, y) = point.split_once(',')?;
                 let (x, y) = edited_point(edit, x.parse().ok()?, y.parse().ok()?)?;
-                Some(Op::FaceName { photo: photo(), x, y, name: value.clone() })
+                Some(Op::FaceName {
+                    photo: photo(),
+                    x,
+                    y,
+                    name: value.clone(),
+                })
             }
             _ => None,
         })
@@ -274,7 +323,11 @@ pub fn edited_point(edit: &Edit, x: u16, y: u16) -> Option<(u16, u16)> {
         x = (x - f64::from(left) / 10_000.0) / (f64::from(width) / 10_000.0);
         y = (y - f64::from(top) / 10_000.0) / (f64::from(height) / 10_000.0);
     }
-    let units = |v: f64| (0.0..=1.0).contains(&v).then(|| (v * 10_000.0).round() as u16);
+    let units = |v: f64| {
+        (0.0..=1.0)
+            .contains(&v)
+            .then(|| (v * 10_000.0).round() as u16)
+    };
     Some((units(x)?, units(y)?))
 }
 
@@ -299,12 +352,21 @@ mod tests {
     /// A JPEG of 40 x 20 (stored sideways: orientation 6) with EXIF and XMP.
     fn write_photo(path: &Path) {
         let picture = RgbImage::from_fn(40, 20, |x, _| {
-            if x < 20 { Rgb([200, 40, 40]) } else { Rgb([40, 40, 200]) }
+            if x < 20 {
+                Rgb([200, 40, 40])
+            } else {
+                Rgb([40, 40, 200])
+            }
         });
         let mut encoded = Vec::new();
-        JpegEncoder::new_with_quality(&mut encoded, 95).encode_image(&picture).unwrap();
+        JpegEncoder::new_with_quality(&mut encoded, 95)
+            .encode_image(&picture)
+            .unwrap();
         let xmp = b"http://ns.adobe.com/xap/1.0/\0<x tiff:Orientation=\"6\"/>".to_vec();
-        let segments = [segment(0xE1, &exif_rotated()).unwrap(), segment(0xE1, &xmp).unwrap()];
+        let segments = [
+            segment(0xE1, &exif_rotated()).unwrap(),
+            segment(0xE1, &xmp).unwrap(),
+        ];
         fs::write(path, with_segments(&encoded, &segments).unwrap()).unwrap();
     }
 
@@ -316,7 +378,10 @@ mod tests {
         assert_eq!(crate::metadata::read(&path).orientation, Some(6));
 
         let edit = Edit {
-            enhance: Some(Enhance { vibrance: 20, ..Enhance::IDENTITY }),
+            enhance: Some(Enhance {
+                vibrance: 20,
+                ..Enhance::IDENTITY
+            }),
             ..Edit::default()
         };
         rewrite(&path, Some(6), &edit).unwrap();
@@ -343,14 +408,22 @@ mod tests {
         let path = dir.path().join("photo.png");
         RgbImage::new(4, 4).save(&path).unwrap();
         let before = fs::read(&path).unwrap();
-        assert!(matches!(rewrite(&path, None, &Edit::default()), Err(RewriteError::Unsupported)));
+        assert!(matches!(
+            rewrite(&path, None, &Edit::default()),
+            Err(RewriteError::Unsupported)
+        ));
         assert_eq!(fs::read(&path).unwrap(), before);
     }
 
     #[test]
     fn the_organization_moves_to_the_new_file() {
         let row = |kind: &str, key: &str, photo: &str, value: &str| {
-            (kind.to_string(), key.to_string(), photo.to_string(), value.to_string())
+            (
+                kind.to_string(),
+                key.to_string(),
+                photo.to_string(),
+                value.to_string(),
+            )
         };
         let organization = [
             row("fav", "old", "", "1"),
@@ -359,28 +432,55 @@ mod tests {
             row("face_name", "old", "2500,5000", "Ann"),
             row("face_name", "old", "9000,5000", "Bob"),
         ];
-        let edit = Edit { crop: Some([0, 0, 5_000, 10_000]), ..Edit::default() };
+        let edit = Edit {
+            crop: Some([0, 0, 5_000, 10_000]),
+            ..Edit::default()
+        };
         let ops = carried_over(&organization, "new", &edit);
         assert_eq!(
             ops,
             [
-                Op::Fav { photo: "new".into(), on: true },
-                Op::Rating { photo: "new".into(), stars: 4 },
-                Op::AlbumMember { album: "album1".into(), photo: "new".into(), on: true },
+                Op::Fav {
+                    photo: "new".into(),
+                    on: true
+                },
+                Op::Rating {
+                    photo: "new".into(),
+                    stars: 4
+                },
+                Op::AlbumMember {
+                    album: "album1".into(),
+                    photo: "new".into(),
+                    on: true
+                },
                 // Bob was cropped away.
-                Op::FaceName { photo: "new".into(), x: 5_000, y: 5_000, name: "Ann".into() },
+                Op::FaceName {
+                    photo: "new".into(),
+                    x: 5_000,
+                    y: 5_000,
+                    name: "Ann".into()
+                },
             ]
         );
     }
 
     #[test]
     fn points_follow_the_edit() {
-        let turned = Edit { rotate: 90, ..Edit::default() };
+        let turned = Edit {
+            rotate: 90,
+            ..Edit::default()
+        };
         // Top left goes to top right with a clockwise turn.
         assert_eq!(edited_point(&turned, 0, 0), Some((10_000, 0)));
-        let mirrored = Edit { flip: true, ..Edit::default() };
+        let mirrored = Edit {
+            flip: true,
+            ..Edit::default()
+        };
         assert_eq!(edited_point(&mirrored, 2_000, 3_000), Some((8_000, 3_000)));
-        let cropped = Edit { crop: Some([5_000, 0, 5_000, 10_000]), ..Edit::default() };
+        let cropped = Edit {
+            crop: Some([5_000, 0, 5_000, 10_000]),
+            ..Edit::default()
+        };
         assert_eq!(edited_point(&cropped, 7_500, 1_000), Some((5_000, 1_000)));
         assert_eq!(edited_point(&cropped, 2_000, 1_000), None);
     }

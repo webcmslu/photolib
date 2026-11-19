@@ -1,7 +1,7 @@
 mod apple;
-mod db;
 #[cfg(target_os = "macos")]
 mod camera_macos;
+mod db;
 mod duplicates;
 mod enhance;
 mod export;
@@ -1142,7 +1142,9 @@ fn apply_edit_to_original(
         .map_err(|e| e.to_string())?
         .ok_or("This library is not open.")?;
     if indexed != fingerprint {
-        return Err("The file has changed since it was read. Try again after the next scan.".into());
+        return Err(
+            "The file has changed since it was read. Try again after the next scan.".into(),
+        );
     }
     let organization = db::organization_of(&conn, &fingerprint).map_err(|e| e.to_string())?;
 
@@ -1155,8 +1157,14 @@ fn apply_edit_to_original(
     if ops.is_empty() {
         return Ok(());
     }
-    org::record(&mut conn, &state.org_paths(&path), &state.device, open.writable, ops)
-        .map_err(|e| e.to_string())
+    org::record(
+        &mut conn,
+        &state.org_paths(&path),
+        &state.device,
+        open.writable,
+        ops,
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Memory cards, cameras and other drives with photos (a `DCIM` folder)

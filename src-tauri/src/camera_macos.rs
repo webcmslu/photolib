@@ -35,7 +35,9 @@ fn take(text: *mut c_char) -> Option<String> {
     }
     // SAFETY: the bridge returns NUL-terminated strings from malloc, which
     // `pl_camera_free` releases.
-    let owned = unsafe { CStr::from_ptr(text) }.to_string_lossy().into_owned();
+    let owned = unsafe { CStr::from_ptr(text) }
+        .to_string_lossy()
+        .into_owned();
     unsafe { pl_camera_free(text) };
     Some(owned)
 }
@@ -81,7 +83,10 @@ pub enum CameraError {
 impl std::fmt::Display for CameraError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Restricted => write!(f, "Unlock the device and tap “Trust” on it, then try again."),
+            Self::Restricted => write!(
+                f,
+                "Unlock the device and tap “Trust” on it, then try again."
+            ),
             Self::Other(why) => write!(f, "{why}"),
         }
     }
@@ -119,7 +124,14 @@ pub fn read(device: &str, index: usize, offset: u64, length: usize) -> Result<Ve
     let mut error: *mut c_char = std::ptr::null_mut();
     // SAFETY: `buffer` holds `length` bytes, which is all the bridge writes.
     let got = unsafe {
-        pl_camera_read(id.as_ptr(), index as c_long, offset as i64, length as i64, buffer.as_mut_ptr(), &mut error)
+        pl_camera_read(
+            id.as_ptr(),
+            index as c_long,
+            offset as i64,
+            length as i64,
+            buffer.as_mut_ptr(),
+            &mut error,
+        )
     };
     let error = take(error);
     if got < 0 {
@@ -130,7 +142,13 @@ pub fn read(device: &str, index: usize, offset: u64, length: usize) -> Result<Ve
 }
 
 /// Downloads file `index` into `dir` as `name`.
-pub fn download(device: &str, index: usize, dir: &Path, name: &str, cancel: &AtomicBool) -> Result<(), String> {
+pub fn download(
+    device: &str,
+    index: usize,
+    dir: &Path,
+    name: &str,
+    cancel: &AtomicBool,
+) -> Result<(), String> {
     let id = c_string(device);
     let dir = c_string(&dir.to_string_lossy());
     let name = c_string(name);
@@ -148,10 +166,15 @@ pub fn download(device: &str, index: usize, dir: &Path, name: &str, cancel: &Ato
         });
         // SAFETY: valid strings, and `flag` outlives the call.
         let error = take(unsafe {
-            pl_camera_download(id.as_ptr(), index as c_long, dir.as_ptr(), name.as_ptr(), &flag)
+            pl_camera_download(
+                id.as_ptr(),
+                index as c_long,
+                dir.as_ptr(),
+                name.as_ptr(),
+                &flag,
+            )
         });
         finished.store(true, Ordering::Relaxed);
         error.map_or(Ok(()), Err)
     })
 }
-

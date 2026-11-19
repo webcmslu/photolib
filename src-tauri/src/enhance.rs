@@ -126,8 +126,17 @@ fn percentile(hist: &[u64; 256], count: u64, share: f64) -> f64 {
 
 /// The standard deviation of the brightness once levels and midtones are applied.
 fn spread_after(hist: &[u64; 256], count: u64, black: f64, white: f64, gamma: f64) -> f64 {
-    let mapped = |value: usize| ((value as f64 - black) / (white - black)).clamp(0.0, 1.0).powf(gamma);
-    let mean = hist.iter().enumerate().map(|(v, &n)| mapped(v) * n as f64).sum::<f64>() / count as f64;
+    let mapped = |value: usize| {
+        ((value as f64 - black) / (white - black))
+            .clamp(0.0, 1.0)
+            .powf(gamma)
+    };
+    let mean = hist
+        .iter()
+        .enumerate()
+        .map(|(v, &n)| mapped(v) * n as f64)
+        .sum::<f64>()
+        / count as f64;
     let variance = hist
         .iter()
         .enumerate()
@@ -144,7 +153,11 @@ pub fn curve(enhance: &Enhance, channel: usize, x: f64) -> f64 {
     let white = f64::from(enhance.white[channel]) / 1000.0;
     let y = ((x - black) / (white - black)).clamp(0.0, 1.0);
     let y = y.powf(f64::from(enhance.gamma) / 100.0);
-    let s = if y < 0.5 { 2.0 * y * y } else { 1.0 - 2.0 * (1.0 - y) * (1.0 - y) };
+    let s = if y < 0.5 {
+        2.0 * y * y
+    } else {
+        1.0 - 2.0 * (1.0 - y) * (1.0 - y)
+    };
     y + f64::from(enhance.contrast) / 100.0 * (s - y)
 }
 
@@ -219,7 +232,12 @@ mod tests {
             let p = image.get_pixel(100, 50).0;
             f64::from(p[2]) - f64::from(p[0])
         };
-        assert!(cast(&picture) < cast(&tinted) * 0.8, "{} -> {}", cast(&tinted), cast(&picture));
+        assert!(
+            cast(&picture) < cast(&tinted) * 0.8,
+            "{} -> {}",
+            cast(&tinted),
+            cast(&picture)
+        );
     }
 
     #[test]
@@ -259,7 +277,9 @@ fn enhance_stats() {
     let mut rows = Vec::new();
     let start = std::time::Instant::now();
     for file in &files {
-        let Ok(picture) = image::open(file.path()) else { continue };
+        let Ok(picture) = image::open(file.path()) else {
+            continue;
+        };
         let e = analyze(&picture.to_rgb8());
         // Average change of the green curve over the range, and the WB spread.
         let change = (1..20)
@@ -275,7 +295,12 @@ fn enhance_stats() {
     changes.sort_by(f64::total_cmp);
     let pct = |p: f64| changes[((n - 1.0) * p) as usize];
     println!("{n} previews, {ms:.1} ms each");
-    println!("mean curve change: median {:.3}, p90 {:.3}, max {:.3}", pct(0.5), pct(0.9), pct(1.0));
+    println!(
+        "mean curve change: median {:.3}, p90 {:.3}, max {:.3}",
+        pct(0.5),
+        pct(0.9),
+        pct(1.0)
+    );
     type Row = (f64, f64, u16, u8, u8);
     let mean = |f: &dyn Fn(&Row) -> f64| rows.iter().map(f).sum::<f64>() / n;
     println!(

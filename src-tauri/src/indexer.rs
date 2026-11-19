@@ -439,7 +439,11 @@ impl Walk<'_> {
 
 /// Reads one file of the library again, after the app changed it, and
 /// returns its new fingerprint. `None` if it could not be read.
-pub fn reindex_file(root: &Path, conn: &Connection, rel_path: &str) -> rusqlite::Result<Option<String>> {
+pub fn reindex_file(
+    root: &Path,
+    conn: &Connection,
+    rel_path: &str,
+) -> rusqlite::Result<Option<String>> {
     let abs_path = root.join(rel_path);
     let Ok(stat) = std::fs::metadata(&abs_path) else {
         return Ok(None);

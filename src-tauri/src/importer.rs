@@ -61,7 +61,12 @@ pub fn sources() -> Vec<Source> {
         roots.extend((b'A'..=b'Z').map(|letter| PathBuf::from(format!("{}:\\", letter as char))));
     } else {
         let user = std::env::var("USER").unwrap_or_default();
-        for base in [format!("/media/{user}"), format!("/run/media/{user}"), "/media".into(), "/mnt".into()] {
+        for base in [
+            format!("/media/{user}"),
+            format!("/run/media/{user}"),
+            "/media".into(),
+            "/mnt".into(),
+        ] {
             roots.extend(children(&base));
         }
     }
@@ -77,17 +82,26 @@ pub fn sources() -> Vec<Source> {
         })
         .collect();
     #[cfg(target_os = "macos")]
-    found.extend(crate::camera_macos::cameras().into_iter().map(|camera| Source {
-        path: format!("{CAMERA_PREFIX}{}", camera.id),
-        name: camera.name,
-        restricted: camera.restricted,
-    }));
+    found.extend(
+        crate::camera_macos::cameras()
+            .into_iter()
+            .map(|camera| Source {
+                path: format!("{CAMERA_PREFIX}{}", camera.id),
+                name: camera.name,
+                restricted: camera.restricted,
+            }),
+    );
     found
 }
 
 fn children(dir: &str) -> Vec<PathBuf> {
     fs::read_dir(dir)
-        .map(|entries| entries.filter_map(Result::ok).map(|entry| entry.path()).collect())
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -105,7 +119,10 @@ enum Origin {
     File(PathBuf),
     /// File `index` of a device connected by USB (see camera_macos.rs).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    Camera { device: String, index: usize },
+    Camera {
+        device: String,
+        index: usize,
+    },
 }
 
 /// A photo or video found on the source, before it is compared with the library.
@@ -192,9 +209,16 @@ const SURVEY_REUSE: Duration = Duration::from_secs(30 * 60);
 
 /// The photos and videos of a folder (its `DCIM` folder if it has one).
 fn folder_entries(source: &Path, unreadable: &mut Vec<(String, String)>) -> io::Result<Vec<Entry>> {
-    let top = if source.join("DCIM").is_dir() { source.join("DCIM") } else { source.to_path_buf() };
+    let top = if source.join("DCIM").is_dir() {
+        source.join("DCIM")
+    } else {
+        source.to_path_buf()
+    };
     if !top.is_dir() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, "the device is not connected"));
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "the device is not connected",
+        ));
     }
     let mut entries = Vec::new();
     for entry in WalkDir::new(&top)
@@ -205,8 +229,13 @@ fn folder_entries(source: &Path, unreadable: &mut Vec<(String, String)>) -> io::
         .filter(|entry| entry.file_type().is_file())
     {
         let path = entry.into_path();
-        let Some(kind) = metadata::kind_of(&path) else { continue };
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let Some(kind) = metadata::kind_of(&path) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let stat = match fs::metadata(&path) {
             Ok(stat) => stat,
             Err(e) => {
@@ -220,7 +249,10 @@ fn folder_entries(source: &Path, unreadable: &mut Vec<(String, String)>) -> io::
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|since| since.as_millis() as i64);
         entries.push(Entry {
-            folder: path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
+            folder: path
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             taken: metadata::read(&path).taken_at,
             is_video: kind == metadata::Kind::Video,
             size: stat.len(),
@@ -243,26 +275,41 @@ fn camera_entries(device: &str) -> io::Result<Vec<Entry>> {
         .map(|(index, file)| Entry {
             is_video: metadata::kind_of(Path::new(&file.name)) == Some(metadata::Kind::Video),
             // The device gives absolute times; the library keeps wall-clock times.
-            taken: file.exif.or(file.created).map(crate::indexer::wall_clock_ms),
+            taken: file
+                .exif
+                .or(file.created)
+                .map(crate::indexer::wall_clock_ms),
             modified: file.created,
             size: file.size,
             folder: file.folder,
             name: file.name,
-            origin: Origin::Camera { device: device.to_string(), index },
+            origin: Origin::Camera {
+                device: device.to_string(),
+                index,
+            },
         })
         .collect())
 }
 
 #[cfg(not(target_os = "macos"))]
 fn camera_entries(_device: &str) -> io::Result<Vec<Entry>> {
-    Err(io::Error::new(io::ErrorKind::NotFound, "the device is not connected"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "the device is not connected",
+    ))
 }
 
 /// Remembers a file of a device by name, size and date, so that connecting
 /// it again does not read every file to recognize what was imported.
 fn camera_key(entry: &Entry) -> Option<String> {
-    matches!(entry.origin, Origin::Camera { .. })
-        .then(|| format!("c:{}:{}:{}", entry.name, entry.size, entry.modified.unwrap_or(0)))
+    matches!(entry.origin, Origin::Camera { .. }).then(|| {
+        format!(
+            "c:{}:{}:{}",
+            entry.name,
+            entry.size,
+            entry.modified.unwrap_or(0)
+        )
+    })
 }
 
 /// The fingerprint of an entry, read from the source.
@@ -295,12 +342,20 @@ fn camera_fingerprint(device: &str, index: usize, size: u64) -> io::Result<Strin
 
 #[cfg(not(target_os = "macos"))]
 fn camera_fingerprint(_device: &str, _index: usize, _size: u64) -> io::Result<String> {
-    Err(io::Error::new(io::ErrorKind::NotFound, "the device is not connected"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "the device is not connected",
+    ))
 }
 
 /// Reads what `source` holds and sorts out what the library at `library`
 /// does not have yet. Reports `(done, total)` as it reads the files.
-fn survey(source: &str, library: &Path, conn: &Connection, on_read: &dyn Fn(usize, usize)) -> io::Result<Survey> {
+fn survey(
+    source: &str,
+    library: &Path,
+    conn: &Connection,
+    on_read: &dyn Fn(usize, usize),
+) -> io::Result<Survey> {
     let mut unreadable = Vec::new();
     let entries = match source.strip_prefix(CAMERA_PREFIX) {
         Some(device) => camera_entries(device)?,
@@ -311,11 +366,19 @@ fn survey(source: &str, library: &Path, conn: &Connection, on_read: &dyn Fn(usiz
     let mut groups: BTreeMap<(String, String), Vec<Entry>> = BTreeMap::new();
     for entry in entries {
         let stem = group_stem(Path::new(&entry.name));
-        groups.entry((entry.folder.clone(), stem)).or_default().push(entry);
+        groups
+            .entry((entry.folder.clone(), stem))
+            .or_default()
+            .push(entry);
     }
 
     let imported = imported_before(library);
-    let mut survey = Survey { new: Vec::new(), already: 0, unreadable, days: Vec::new() };
+    let mut survey = Survey {
+        new: Vec::new(),
+        already: 0,
+        unreadable,
+        days: Vec::new(),
+    };
     let mut in_library = conn
         .prepare("SELECT 1 FROM photos WHERE fingerprint = ?1 LIMIT 1")
         .map_err(io::Error::other)?;
@@ -325,14 +388,19 @@ fn survey(source: &str, library: &Path, conn: &Connection, on_read: &dyn Fn(usiz
     for (group, (_, mut files)) in groups.into_iter().enumerate() {
         files.sort_by(|a, b| a.name.cmp(&b.name));
         // The group's date: its photo's, else its video's, else the file's.
-        let mut dated: Vec<(bool, i64)> =
-            files.iter().filter_map(|entry| entry.taken.map(|ms| (entry.is_video, ms))).collect();
+        let mut dated: Vec<(bool, i64)> = files
+            .iter()
+            .filter_map(|entry| entry.taken.map(|ms| (entry.is_video, ms)))
+            .collect();
         dated.sort();
-        let taken = dated
-            .first()
-            .map(|&(_, ms)| ms)
-            .or_else(|| files.iter().find_map(|entry| entry.modified.map(crate::indexer::wall_clock_ms)));
-        let date = taken.and_then(DateTime::from_timestamp_millis).unwrap_or_default();
+        let taken = dated.first().map(|&(_, ms)| ms).or_else(|| {
+            files
+                .iter()
+                .find_map(|entry| entry.modified.map(crate::indexer::wall_clock_ms))
+        });
+        let date = taken
+            .and_then(DateTime::from_timestamp_millis)
+            .unwrap_or_default();
         let month = format!("{0}/{0}-{1:02}", date.year(), date.month());
         for entry in files {
             done += 1;
@@ -384,7 +452,10 @@ fn survey(source: &str, library: &Path, conn: &Connection, on_read: &dyn Fn(usiz
 /// The part of a file name that ties it to its companions: `IMG_1234` for
 /// `IMG_1234.HEIC`, `IMG_1234.MOV` and the edited `IMG_E1234.HEIC`.
 fn group_stem(path: &Path) -> String {
-    let stem = path.file_stem().map(|s| s.to_string_lossy().to_uppercase()).unwrap_or_default();
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_uppercase())
+        .unwrap_or_default();
     match stem.strip_prefix("IMG_E") {
         Some(number) if number.chars().all(|c| c.is_ascii_digit()) => format!("IMG_{number}"),
         _ => stem,
@@ -408,7 +479,12 @@ pub fn preview(
         first_day: survey.days.iter().min().copied(),
         last_day: survey.days.iter().max().copied(),
     };
-    *LAST_SURVEY.lock().unwrap() = Some((source.to_string(), library.to_path_buf(), Instant::now(), survey));
+    *LAST_SURVEY.lock().unwrap() = Some((
+        source.to_string(),
+        library.to_path_buf(),
+        Instant::now(),
+        survey,
+    ));
     Ok(preview)
 }
 
@@ -427,14 +503,23 @@ pub fn import(
 ) -> io::Result<Summary> {
     let folder = clean_folder_name(folder)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Not a valid folder name."))?;
-    let recent = LAST_SURVEY.lock().unwrap().take().filter(|(last_source, last_library, when, _)| {
-        last_source == source && last_library == library && when.elapsed() < SURVEY_REUSE
-    });
+    let recent =
+        LAST_SURVEY
+            .lock()
+            .unwrap()
+            .take()
+            .filter(|(last_source, last_library, when, _)| {
+                last_source == source && last_library == library && when.elapsed() < SURVEY_REUSE
+            });
     let survey = match recent {
         Some((_, _, _, survey)) => survey,
         None => survey(source, library, conn, &on_read)?,
     };
-    let mut summary = Summary { already: survey.already, failed: survey.unreadable, ..Summary::default() };
+    let mut summary = Summary {
+        already: survey.already,
+        failed: survey.unreadable,
+        ..Summary::default()
+    };
     let mut progress = Progress {
         done: 0,
         total: survey.new.len(),
@@ -458,7 +543,10 @@ pub fn import(
         }
         let (dir, suffix) = stems.entry(item.group).or_insert_with(|| {
             let dir = library.join(&folder).join(&item.month);
-            let names: Vec<&str> = by_group[&item.group].iter().map(|i| i.name.as_str()).collect();
+            let names: Vec<&str> = by_group[&item.group]
+                .iter()
+                .map(|i| i.name.as_str())
+                .collect();
             let suffix = free_suffix(&dir, &names);
             (dir, suffix)
         });
@@ -505,25 +593,46 @@ pub fn import(
 /// Downloads file `index` of a device to `target` through a hidden folder,
 /// then checks its size and fingerprint against what the survey read.
 #[cfg(target_os = "macos")]
-fn download_checked(device: &str, index: usize, item: &Item, target: &Path, cancel: &AtomicBool) -> io::Result<()> {
+fn download_checked(
+    device: &str,
+    index: usize,
+    item: &Item,
+    target: &Path,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
     let dir = target.parent().expect("a folder");
     let staging = dir.join(".photolib-import");
     fs::create_dir_all(&staging)?;
-    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let partial = staging.join(&name);
     let result = (|| -> io::Result<()> {
         crate::camera_macos::download(device, index, &staging, &name, cancel).map_err(|why| {
-            if why == "cancelled" { io::ErrorKind::Interrupted.into() } else { io::Error::other(why) }
+            if why == "cancelled" {
+                io::ErrorKind::Interrupted.into()
+            } else {
+                io::Error::other(why)
+            }
         })?;
-        if fs::metadata(&partial)?.len() != item.size || fingerprint::fingerprint(&partial)? != item.fingerprint {
+        if fs::metadata(&partial)?.len() != item.size
+            || fingerprint::fingerprint(&partial)? != item.fingerprint
+        {
             return Err(io::Error::other("the copy doesn't match the original"));
         }
         if let Some(ms) = item.modified {
             let when = UNIX_EPOCH + Duration::from_millis(ms.max(0) as u64);
-            OpenOptions::new().write(true).open(&partial)?.set_modified(when)?;
+            OpenOptions::new()
+                .write(true)
+                .open(&partial)?
+                .set_modified(when)?;
         }
         if target.exists() {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "a file with that name appeared"));
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a file with that name appeared",
+            ));
         }
         fs::rename(&partial, target)
     })();
@@ -536,14 +645,23 @@ fn download_checked(device: &str, index: usize, item: &Item, target: &Path, canc
 
 #[cfg(not(target_os = "macos"))]
 fn download_checked(_: &str, _: usize, _: &Item, _: &Path, _: &AtomicBool) -> io::Result<()> {
-    Err(io::Error::new(io::ErrorKind::NotFound, "the device is not connected"))
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        "the device is not connected",
+    ))
 }
 
 /// A folder name typed by the user, made safe: no slashes, no leading dot.
 pub fn clean_folder_name(name: &str) -> Option<String> {
     let cleaned: String = name
         .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '-' } else { c })
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() {
+                '-'
+            } else {
+                c
+            }
+        })
         .collect();
     let cleaned = cleaned.trim().trim_start_matches('.').trim().to_string();
     (!cleaned.is_empty() && cleaned.len() <= 100).then_some(cleaned)
@@ -551,16 +669,25 @@ pub fn clean_folder_name(name: &str) -> Option<String> {
 
 /// The first suffix (none, then 2, 3…) under which none of `names` is taken in `dir`.
 fn free_suffix(dir: &Path, names: &[&str]) -> Option<u32> {
-    let free = |suffix: Option<u32>| names.iter().all(|name| !dir.join(with_suffix(name, suffix)).exists());
+    let free = |suffix: Option<u32>| {
+        names
+            .iter()
+            .all(|name| !dir.join(with_suffix(name, suffix)).exists())
+    };
     if free(None) {
         return None;
     }
-    (2..).map(Some).find(|&suffix| free(suffix)).expect("some name is free")
+    (2..)
+        .map(Some)
+        .find(|&suffix| free(suffix))
+        .expect("some name is free")
 }
 
 /// `IMG_1234 (2).HEIC` for `IMG_1234.HEIC` and 2.
 fn with_suffix(name: &str, suffix: Option<u32>) -> String {
-    let Some(n) = suffix else { return name.to_string() };
+    let Some(n) = suffix else {
+        return name.to_string();
+    };
     match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => format!("{stem} ({n}).{ext}"),
         _ => format!("{name} ({n})"),
@@ -579,7 +706,10 @@ fn copy_checked(
 ) -> io::Result<()> {
     let dir = target.parent().expect("a folder");
     fs::create_dir_all(dir)?;
-    let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let partial = dir.join(format!(".{name}.photolib-new"));
     let result = (|| -> io::Result<()> {
         let mut input = File::open(source)?;
@@ -618,10 +748,15 @@ fn copy_checked(
             return Err(io::Error::other("the copy doesn't match the original"));
         }
         if fingerprint::fingerprint(&partial)? != expected_fingerprint {
-            return Err(io::Error::other("the file changed on the device during the import"));
+            return Err(io::Error::other(
+                "the file changed on the device during the import",
+            ));
         }
         if target.exists() {
-            return Err(io::Error::new(io::ErrorKind::AlreadyExists, "a file with that name appeared"));
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "a file with that name appeared",
+            ));
         }
         fs::rename(&partial, target)
     })();
@@ -635,7 +770,9 @@ fn copy_checked(
 /// this library before, by any computer.
 fn imported_before(library: &Path) -> HashSet<String> {
     let mut seen = HashSet::new();
-    let Ok(entries) = fs::read_dir(history_dir(library)) else { return seen };
+    let Ok(entries) = fs::read_dir(history_dir(library)) else {
+        return seen;
+    };
     for entry in entries.filter_map(Result::ok) {
         if let Ok(file) = File::open(entry.path()) {
             seen.extend(
@@ -663,7 +800,10 @@ impl History {
     fn open(library: &Path, device: &str) -> io::Result<Self> {
         let dir = history_dir(library);
         fs::create_dir_all(&dir)?;
-        let file = OpenOptions::new().create(true).append(true).open(dir.join(format!("{device}.log")))?;
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join(format!("{device}.log")))?;
         Ok(Self { file })
     }
 
@@ -707,7 +847,10 @@ mod tests {
         assert_eq!((first.new, first.already), (3, 0));
 
         // A file of the same name, different content, is already there.
-        let modified = fs::metadata(Path::new(&card).join("DCIM/100APPLE/IMG_0001.JPG")).unwrap().modified().unwrap();
+        let modified = fs::metadata(Path::new(&card).join("DCIM/100APPLE/IMG_0001.JPG"))
+            .unwrap()
+            .modified()
+            .unwrap();
         let file_date = DateTime::<chrono::Local>::from(modified);
         let month = format!("{0}/{0}-{1:02}", file_date.year(), file_date.month());
         let dest = library.join("Card").join(&month);
@@ -715,14 +858,38 @@ mod tests {
         fs::write(dest.join("IMG_0001.MOV"), b"something else").unwrap();
 
         let cancel = AtomicBool::new(false);
-        let summary = import(&card, &library, &conn, "Card", "dev1", &cancel, |_, _| {}, |_| {}).unwrap();
-        assert_eq!((summary.imported, summary.failed.len()), (3, 0), "{summary:?}");
+        let summary = import(
+            &card,
+            &library,
+            &conn,
+            "Card",
+            "dev1",
+            &cancel,
+            |_, _| {},
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(
+            (summary.imported, summary.failed.len()),
+            (3, 0),
+            "{summary:?}"
+        );
         // The Live Photo moved to a free stem together.
-        assert_eq!(fs::read(dest.join("IMG_0001 (2).JPG")).unwrap(), b"photo one");
-        assert_eq!(fs::read(dest.join("IMG_0001 (2).MOV")).unwrap(), b"video of photo one");
+        assert_eq!(
+            fs::read(dest.join("IMG_0001 (2).JPG")).unwrap(),
+            b"photo one"
+        );
+        assert_eq!(
+            fs::read(dest.join("IMG_0001 (2).MOV")).unwrap(),
+            b"video of photo one"
+        );
         assert_eq!(fs::read(dest.join("IMG_0002.JPG")).unwrap(), b"photo two");
         // No temporary files left.
-        assert!(fs::read_dir(&dest).unwrap().all(|e| !e.unwrap().file_name().to_string_lossy().starts_with('.')));
+        assert!(fs::read_dir(&dest).unwrap().all(|e| !e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with('.')));
 
         // Connected again: nothing new.
         let again = preview(&card, &library, &conn, |_, _| {}).unwrap();
@@ -731,7 +898,10 @@ mod tests {
 
     #[test]
     fn folder_names_are_made_safe() {
-        assert_eq!(clean_folder_name("Olivier's iPhone").as_deref(), Some("Olivier's iPhone"));
+        assert_eq!(
+            clean_folder_name("Olivier's iPhone").as_deref(),
+            Some("Olivier's iPhone")
+        );
         assert_eq!(clean_folder_name("../x/y").as_deref(), Some("-x-y"));
         assert_eq!(clean_folder_name("  .. "), None);
         assert_eq!(group_stem(Path::new("IMG_E0042.HEIC")), "IMG_0042");
