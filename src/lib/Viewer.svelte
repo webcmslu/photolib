@@ -9,6 +9,7 @@
   has loaded, so moving through photos stays fast on a slow network.
 -->
 <script lang="ts">
+  import { t, tn } from "./i18n";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     photoDetails,
@@ -127,9 +128,9 @@
   // --- Editing ---------------------------------------------------------------
 
   const ASPECTS = [
-    ["free", "Free", null],
-    ["original", "Original", 0],
-    ["1:1", "Square", 1],
+    ["free", t("Free"), null],
+    ["original", t("Original"), 0],
+    ["1:1", t("Square"), 1],
     ["4:3", "4:3", 4 / 3],
     ["3:2", "3:2", 3 / 2],
     ["16:9", "16:9", 16 / 9],
@@ -493,61 +494,61 @@
 
 <svelte:window {onkeydown} />
 
-<div class="viewer" role="dialog" aria-modal="true" aria-label="Photo viewer">
+<div class="viewer" role="dialog" aria-modal="true" aria-label={t("Photo viewer")}>
   <div class="main">
     <div class="bar">
-      <button onclick={close} title="Close (Esc)">‹ Back</button>
+      <button onclick={close} title={t("Close (Esc)")}>‹ {t("Back")}</button>
       <div class="caption">
         <strong>{fileName}</strong>
         {#if photo}<span>{formatDateTime(photo.sortDate)}</span>{/if}
       </div>
-      <span class="position">{formatNumber(index + 1)} of {formatNumber(total)}</span>
+      <span class="position">{t("{index} of {count}", { index: index + 1, count: total })}</span>
       <button
         onclick={toggleFavorite}
         disabled={!canEdit || !photo}
         aria-pressed={photo?.favorite ?? false}
-        title={photo?.favorite ? "Remove from favorites (.)" : "Add to favorites (.)"}
+        title={photo?.favorite ? t("Remove from favorites (.)") : t("Add to favorites (.)")}
       >
         {photo?.favorite ? "♥" : "♡"}
       </button>
       {#if albums.length > 0}
-        <select onchange={addToAlbum} disabled={!canEdit || !photo} title="Add to album">
-          <option value="">Add to album…</option>
+        <select onchange={addToAlbum} disabled={!canEdit || !photo} title={t("Add to album")}>
+          <option value="">{t("Add to album…")}</option>
           {#each albums as album (album.id)}
             <option value={album.id}>{album.name}</option>
           {/each}
         </select>
       {/if}
       {#if currentAlbum}
-        <button onclick={removeFromAlbum} disabled={!canEdit || !photo}>Remove from album</button>
+        <button onclick={removeFromAlbum} disabled={!canEdit || !photo}>{t("Remove from album")}</button>
       {/if}
-      <button onclick={toggleHidden} disabled={!canEdit || !photo} title="{showingHidden ? 'Unhide' : 'Hide'} (H)">
-        {showingHidden ? "Unhide" : "Hide"}
+      <button onclick={toggleHidden} disabled={!canEdit || !photo} title="{showingHidden ? t('Unhide') : t('Hide')} (H)">
+        {showingHidden ? t("Unhide") : t("Hide")}
       </button>
       <button
         onclick={() => (editing ? (editing = false) : startEditing())}
         disabled={!canEdit || !photo || photo.video}
         aria-pressed={editing}
-        title="Edit (E)"
+        title="{t('Edit')} (E)"
       >
-        Edit
+        {t("Edit")}
       </button>
       {#if photo?.liveVideo}
-        <button onclick={togglePlay} aria-pressed={livePlaying} title="Play the Live Photo (L)">
+        <button onclick={togglePlay} aria-pressed={livePlaying} title={t("Play the Live Photo (L)")}>
           LIVE
         </button>
       {/if}
-      <button onclick={() => zoomTo(scale / 1.5)} disabled={scale <= 1} title="Zoom out (-)">−</button>
+      <button onclick={() => zoomTo(scale / 1.5)} disabled={scale <= 1} title={t("Zoom out (-)")}>−</button>
       <button
         onclick={() => zoomTo(scale * 1.5)}
         disabled={scale >= MAX_SCALE || photo?.video}
-        title="Zoom in (+)">+</button
+        title={t("Zoom in (+)")}>+</button
       >
-      <button onclick={toggleFullscreen} title="Full screen (F)">⛶</button>
-      <button onclick={() => (showStrip = !showStrip)} aria-pressed={showStrip} title="Filmstrip (T)">
+      <button onclick={toggleFullscreen} title={t("Full screen (F)")}>⛶</button>
+      <button onclick={() => (showStrip = !showStrip)} aria-pressed={showStrip} title={t("Filmstrip (T)")}>
         ▭▭▭
       </button>
-      <button onclick={() => (showInfo = !showInfo)} aria-pressed={showInfo} title="Info (I)">ⓘ</button>
+      <button onclick={() => (showInfo = !showInfo)} aria-pressed={showInfo} title={t("Info (I)")}>ⓘ</button>
     </div>
 
     <div
@@ -579,7 +580,7 @@
           ></video>
         {/key}
         {#if unplayable === photo.fingerprint}
-          <p class="notice">This video can't be played here.</p>
+          <p class="notice">{t("This video can't be played here.")}</p>
         {/if}
       {:else if src && shownEdit}
         <div class="edited" style:transform="translate({x}px, {y}px) scale({scale})">
@@ -626,10 +627,10 @@
       {/if}
 
       {#if index > 0 && !editing}
-        <button class="nav previous" onclick={() => go(-1)} aria-label="Previous photo">‹</button>
+        <button class="nav previous" onclick={() => go(-1)} aria-label={t("Previous photo")}>‹</button>
       {/if}
       {#if index < total - 1}
-        <button class="nav next" onclick={() => go(1)} aria-label="Next photo">›</button>
+        <button class="nav next" onclick={() => go(1)} aria-label={t("Next photo")}>›</button>
       {/if}
     </div>
 
@@ -641,7 +642,7 @@
             class="thumb"
             class:current={stripIndex === index}
             onclick={() => (index = stripIndex)}
-            aria-label="Photo {stripIndex + 1}"
+            aria-label={t("Photo {n}", { n: stripIndex + 1 })}
             aria-current={stripIndex === index}
           >
             {#if item}
@@ -655,13 +656,13 @@
 
   {#if editing}
     <aside class="edit">
-      <h2>Edit</h2>
-      <p class="note">The original file is not changed.</p>
+      <h2>{t("Edit")}</h2>
+      <p class="note">{t("The original file is not changed.")}</p>
 
-      <h3>Turn</h3>
+      <h3>{t("Turn")}</h3>
       <div class="buttons">
-        <button onclick={() => turn(-90)} title="Turn left">⟲ Left</button>
-        <button onclick={() => turn(90)} title="Turn right">⟳ Right</button>
+        <button onclick={() => turn(-90)} title={t("Turn left")}>⟲ {t("Left")}</button>
+        <button onclick={() => turn(90)} title={t("Turn right")}>⟳ {t("Right")}</button>
         <button
           onclick={() => {
             draft.flip = !draft.flip;
@@ -669,20 +670,20 @@
           }}
           aria-pressed={draft.flip}
         >
-          Mirror
+          {t("Mirror")}
         </button>
       </div>
 
-      <h3>Crop</h3>
-      <p class="note">Drag the box or its corners on the photo.</p>
+      <h3>{t("Crop")}</h3>
+      <p class="note">{t("Drag the box or its corners on the photo.")}</p>
       <div class="buttons">
         {#each ASPECTS as [id, label] (id)}
           <button onclick={() => chooseAspect(id)} aria-pressed={aspect === id}>{label}</button>
         {/each}
       </div>
 
-      <h3>Adjust</h3>
-      {#each [["brightness", "Brightness"], ["contrast", "Contrast"], ["saturation", "Color"]] as const as [key, label] (key)}
+      <h3>{t("Adjust")}</h3>
+      {#each [["brightness", t("Brightness")], ["contrast", t("Contrast")], ["saturation", t("Color")]] as const as [key, label] (key)}
         <label>
           <span>{label}</span>
           <input type="range" min="-100" max="100" step="5" bind:value={draft[key]} />
@@ -698,39 +699,39 @@
           }}
           disabled={isNeutral(draft)}
         >
-          Reset all
+          {t("Reset all")}
         </button>
         <span class="spacer"></span>
-        <button onclick={() => (editing = false)}>Cancel</button>
-        <button class="primary" onclick={saveEdit}>Done</button>
+        <button onclick={() => (editing = false)}>{t("Cancel")}</button>
+        <button class="primary" onclick={saveEdit}>{t("Done")}</button>
       </div>
     </aside>
   {:else if showInfo}
     <aside>
-      <h2>Info</h2>
+      <h2>{t("Info")}</h2>
       <dl>
-        <dt>Name</dt>
+        <dt>{t("Name")}</dt>
         <dd>{fileName}</dd>
         {#if folder}
-          <dt>Folder</dt>
+          <dt>{t("Folder")}</dt>
           <dd>{folder}</dd>
         {/if}
         {#if photo}
-          <dt>Rating</dt>
+          <dt>{t("Rating")}</dt>
           <dd class="stars">
             {#each [1, 2, 3, 4, 5] as stars (stars)}
               <button
                 class:on={photo.rating >= stars}
                 disabled={!canEdit}
                 onclick={() => rate(stars)}
-                title="{stars} {stars === 1 ? 'star' : 'stars'} ({stars})"
-                aria-label="{stars} {stars === 1 ? 'star' : 'stars'}"
+                title="{tn(stars, '{n} star', '{n} stars')} ({stars})"
+                aria-label={tn(stars, "{n} star", "{n} stars")}
               >
                 ★
               </button>
             {/each}
           </dd>
-          <dt>Label</dt>
+          <dt>{t("Label")}</dt>
           <dd class="labels">
             {#each LABELS as label (label.color)}
               <button
@@ -754,43 +755,43 @@
           </dd>
         {/if}
         {#if details && details.relPath === photo?.relPath}
-          <dt>Date</dt>
+          <dt>{t("Date")}</dt>
           <dd>
             {formatDateTime(details.sortDate)}
             {#if !details.dateFromExif}
-              <small>File date. The photo has no date taken.</small>
+              <small>{t("File date. The photo has no date taken.")}</small>
             {/if}
           </dd>
           {#if details.width && details.height}
-            <dt>Dimensions</dt>
+            <dt>{t("Dimensions")}</dt>
             <dd>
               {formatNumber(details.width)} × {formatNumber(details.height)}
-              <small>{((details.width * details.height) / 1e6).toFixed(1)} megapixels</small>
+              <small>{t("{n} megapixels", { n: Number(((details.width * details.height) / 1e6).toFixed(1)) })}</small>
             </dd>
           {/if}
-          <dt>Size</dt>
+          <dt>{t("Size")}</dt>
           <dd>{formatBytes(details.size)}</dd>
           {#if details.durationMs !== null}
-            <dt>Length</dt>
+            <dt>{t("Length")}</dt>
             <dd>{formatDuration(details.durationMs)}</dd>
           {/if}
           {#if details.liveVideo}
-            <dt>Kind</dt>
+            <dt>{t("Kind")}</dt>
             <dd>Live Photo</dd>
           {/if}
           {#if details.rawPath}
-            <dt>Kind</dt>
+            <dt>{t("Kind")}</dt>
             <dd>
               {rawPairLabel(details.relPath)}
               <small>{details.rawPath.slice(details.rawPath.lastIndexOf("/") + 1)}</small>
             </dd>
           {/if}
           {#if details.cameraMake || details.cameraModel}
-            <dt>Camera</dt>
+            <dt>{t("Camera")}</dt>
             <dd>{[details.cameraMake, details.cameraModel].filter(Boolean).join(" ")}</dd>
           {/if}
           {#if details.latitude !== null && details.longitude !== null}
-            <dt>Location</dt>
+            <dt>{t("Location")}</dt>
             <dd>
               {#if details.place}{details.place}<br />{/if}
               <small>{details.latitude.toFixed(5)}, {details.longitude.toFixed(5)}</small>

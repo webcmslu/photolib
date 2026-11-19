@@ -11,6 +11,7 @@
   month's title, opens the photo grid there.
 -->
 <script lang="ts">
+  import { t } from "./i18n";
   import { flushSync } from "svelte";
   import { thumbUrl, type DaySummary, type MonthSummary } from "./api";
   import { formatMonth, photoCount } from "./format";
@@ -128,8 +129,8 @@
             <button
               class="play"
               onclick={() => onslideshow(lastDay(entry))}
-              title="Slideshow of {monthTitle(entry)}"
-              aria-label="Slideshow of {monthTitle(entry)}"
+              title={t("Slideshow of {month}", { month: monthTitle(entry) })}
+              aria-label={t("Slideshow of {month}", { month: monthTitle(entry) })}
             >
               <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M4 2.5v11L13.5 8z" /></svg>
             </button>

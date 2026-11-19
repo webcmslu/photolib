@@ -15,6 +15,9 @@
 //! | `favorite`, `favorites`      | favorites                            |
 //! | `red`, `blue`… (label names) | photos with that colour label        |
 //! | `rated`, `★★★`               | photos with a rating (at least ★★★)  |
+//!
+//! The French and German words work too, whatever the app's language:
+//! `juillet`, `juli`, `vidéo`, `favoris`, `rouge`, `gelb`, `bewertet`…
 
 use chrono::NaiveDate;
 
@@ -33,6 +36,53 @@ const MONTHS: [&str; 12] = [
     "october",
     "november",
     "december",
+];
+
+/// Month names in French and German (and without accents, as people type
+/// them), matched in full only: their short forms clash ("jui" is June and
+/// July in French).
+const OTHER_MONTHS: &[(&str, u32)] = &[
+    ("janvier", 1),
+    ("février", 2),
+    ("fevrier", 2),
+    ("mars", 3),
+    ("avril", 4),
+    ("mai", 5),
+    ("juin", 6),
+    ("juillet", 7),
+    ("août", 8),
+    ("aout", 8),
+    ("septembre", 9),
+    ("octobre", 10),
+    ("novembre", 11),
+    ("décembre", 12),
+    ("decembre", 12),
+    ("januar", 1),
+    ("jänner", 1),
+    ("februar", 2),
+    ("märz", 3),
+    ("maerz", 3),
+    ("marz", 3),
+    ("juni", 6),
+    ("juli", 7),
+    ("oktober", 10),
+    ("dezember", 12),
+];
+
+/// Colour label names in French and German, for the label they mean.
+const OTHER_LABELS: &[(&str, &str)] = &[
+    ("rouge", "red"),
+    ("jaune", "yellow"),
+    ("vert", "green"),
+    ("bleu", "blue"),
+    ("violet", "purple"),
+    ("rot", "red"),
+    ("gelb", "yellow"),
+    ("grün", "green"),
+    ("gruen", "green"),
+    ("blau", "blue"),
+    ("lila", "purple"),
+    ("violett", "purple"),
 ];
 
 /// The SQL condition for a search, to put after `WHERE`. An empty search
@@ -103,14 +153,24 @@ fn meaning(word: &str) -> Option<String> {
             }
         }
     }
+    if let Some(&(_, month)) = OTHER_MONTHS.iter().find(|(name, _)| *name == word) {
+        return Some(format!(
+            "CAST(strftime('%m', sort_date / 1000, 'unixepoch') AS INTEGER) = {month}"
+        ));
+    }
+    let word = OTHER_LABELS
+        .iter()
+        .find(|(name, _)| *name == word)
+        .map_or(word, |(_, label)| *label);
     match word {
-        "video" | "videos" => Some("kind = 1".to_owned()),
+        "video" | "videos" | "vidéo" | "vidéos" => Some("kind = 1".to_owned()),
         "live" => Some("live_video IS NOT NULL".to_owned()),
-        "favorite" | "favorites" | "favourite" | "favourites" => Some(
+        "favorite" | "favorites" | "favourite" | "favourites" | "favori" | "favoris"
+        | "favorit" | "favoriten" => Some(
             "fingerprint IN (SELECT key FROM org_state WHERE kind = 'fav' AND value = '1')"
                 .to_owned(),
         ),
-        "rated" => Some(
+        "rated" | "noté" | "notée" | "notées" | "notés" | "bewertet" => Some(
             "fingerprint IN (SELECT key FROM org_state WHERE kind = 'rating' AND value != '0')"
                 .to_owned(),
         ),
@@ -224,6 +284,12 @@ mod tests {
         assert!(meaning("★★★").unwrap().contains(">= 3"));
         assert!(meaning("rated").is_some());
         assert_eq!(meaning("redd"), None);
+        assert!(meaning("juillet").unwrap().ends_with("= 7"));
+        assert!(meaning("märz").unwrap().ends_with("= 3"));
+        assert_eq!(meaning("jui"), None);
+        assert_eq!(meaning("vidéo").as_deref(), Some("kind = 1"));
+        assert!(meaning("gelb").unwrap().contains("value = 'yellow'"));
+        assert!(meaning("favoris").is_some());
         assert_eq!(meaning("canon"), None);
     }
 

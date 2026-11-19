@@ -10,6 +10,7 @@
   several cells wide and two rows high, with the others flowing around it.
 -->
 <script lang="ts">
+  import { t, tn } from "./i18n";
   import { thumbUrl, type DayGroup } from "./api";
   import { formatDay, formatDuration, formatMonth, formatNumber, monthKey, rawPairLabel } from "./format";
   import EditedImage from "./EditedImage.svelte";
@@ -490,8 +491,8 @@
                 <button
                   class="play"
                   onclick={() => section.day !== null && onmonthslideshow(section.day)}
-                  title="Slideshow of {section.monthTitle}"
-                  aria-label="Slideshow of {section.monthTitle}"
+                  title={t("Slideshow of {month}", { month: section.monthTitle })}
+                  aria-label={t("Slideshow of {month}", { month: section.monthTitle })}
                 >
                   <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M4 2.5v11L13.5 8z" /></svg>
                 </button>
@@ -520,7 +521,7 @@
           class="open"
           onclick={(event) => onclick(event, cell.index)}
           oncontextmenu={(event) => oncontext?.(cell.index, event)}
-          aria-label={photo?.relPath ?? "Photo"}
+          aria-label={photo?.relPath ?? t("Photo")}
         >
           {#if photo?.edit}
             <EditedImage
@@ -552,16 +553,16 @@
         {/if}
         {#if photo && (photo.favorite || photo.rating > 0 || photo.label)}
           <span class="marks">
-            {#if photo.label}<span class="label" style:background={labelCss(photo.label)} aria-label="{photo.label} label"></span>{/if}
-            {#if photo.favorite}<span aria-label="Favorite">♥</span>{/if}
-            {#if photo.rating > 0 && cell.width >= 110}<span class="stars" aria-label="{photo.rating} stars">{"★".repeat(photo.rating)}</span>{/if}
+            {#if photo.label}<span class="label" style:background={labelCss(photo.label)} aria-label={t("Label")}></span>{/if}
+            {#if photo.favorite}<span aria-label={t("Favorite")}>♥</span>{/if}
+            {#if photo.rating > 0 && cell.width >= 110}<span class="stars" aria-label={tn(photo.rating, "{n} star", "{n} stars")}>{"★".repeat(photo.rating)}</span>{/if}
           </span>
         {/if}
         <button
           class="check"
           role="checkbox"
           aria-checked={isSelected}
-          aria-label="Select"
+          aria-label={t("Select")}
           onclick={(event) => ontoggle(cell.index, event.shiftKey)}
         >
           {isSelected ? "✓" : ""}
@@ -575,7 +576,7 @@
       class="rail"
       role="slider"
       tabindex="0"
-      aria-label="Years"
+      aria-label={t("Years")}
       aria-orientation="vertical"
       aria-valuemin={yearStarts[yearStarts.length - 1]?.year}
       aria-valuemax={yearStarts[0]?.year}

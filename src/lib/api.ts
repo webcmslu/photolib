@@ -1,4 +1,5 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
+import { t } from "./i18n";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Edit } from "./edit";
 import type { LabelColor } from "./labels";
@@ -30,14 +31,14 @@ export async function pickLibraryFolder(): Promise<string | null> {
   const picked = await open({
     directory: true,
     multiple: false,
-    title: "Open library folder",
+    title: t("Open library folder"),
   });
   return typeof picked === "string" ? picked : null;
 }
 
 /** Lets the user choose the folder to export photos into. */
 export async function pickExportFolder(): Promise<string | null> {
-  const picked = await open({ directory: true, multiple: false, title: "Export to" });
+  const picked = await open({ directory: true, multiple: false, title: t("Export to") });
   return typeof picked === "string" ? picked : null;
 }
 
@@ -131,8 +132,8 @@ export async function pickPhotosLibrary(): Promise<string | null> {
   const picked = await open({
     directory: !onMac,
     multiple: false,
-    title: "Choose an Apple Photos library",
-    filters: onMac ? [{ name: "Photos Library", extensions: ["photoslibrary"] }] : undefined,
+    title: t("Choose an Apple Photos library"),
+    filters: onMac ? [{ name: t("Photos Library"), extensions: ["photoslibrary"] }] : undefined,
   });
   return typeof picked === "string" ? picked : null;
 }

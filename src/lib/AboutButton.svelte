@@ -4,6 +4,7 @@
   shows a green dot). Same design as Marka's, in Photolib's colors.
 -->
 <script lang="ts">
+  import { t } from "./i18n";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
   import { about, checkForUpdate, installUpdate } from "./about.svelte";
@@ -26,8 +27,10 @@
 <button
   class="info-button"
   onclick={() => (open = true)}
-  title={about.update ? `About ${about.name}: version ${about.update.version} is available` : `About ${about.name}`}
-  aria-label="About {about.name}"
+  title={about.update
+    ? t("About {name}: version {version} is available", { name: about.name, version: about.update.version })
+    : t("About {name}", { name: about.name })}
+  aria-label={t("About {name}", { name: about.name })}
 >
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
     <circle cx="8" cy="8" r="6.5" />
@@ -40,7 +43,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="backdrop" onclick={() => (open = false)}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="box" role="dialog" aria-modal="true" aria-label="About {about.name}" tabindex="-1" onclick={(event) => event.stopPropagation()}>
+    <div class="box" role="dialog" aria-modal="true" aria-label={t("About {name}", { name: about.name })} tabindex="-1" onclick={(event) => event.stopPropagation()}>
       <div class="top">
         <span class="logo">{about.name.charAt(0)}</span>
         <span class="name">{about.name}</span>
@@ -48,30 +51,30 @@
       </div>
       {#if about.update}
         <div class="update">
-          <span>v{about.update.version} is available</span>
+          <span>{t("v{version} is available", { version: about.update.version })}</span>
           {#if about.installing}
             <span class="installing">
               {about.installing.total
-                ? `Downloading… ${Math.round((100 * about.installing.received) / about.installing.total)}%`
-                : "Downloading…"}
+                ? t("Downloading… {percent}%", { percent: Math.round((100 * about.installing.received) / about.installing.total) })
+                : t("Downloading…")}
             </span>
           {:else if about.installable}
-            <button class="install" onclick={installUpdate}>Install and restart</button>
+            <button class="install" onclick={installUpdate}>{t("Install and restart")}</button>
           {:else}
-            <a href={about.update.url} onclick={(event) => visit(event, about.update?.url ?? "")}>Download ↗</a>
+            <a href={about.update.url} onclick={(event) => visit(event, about.update?.url ?? "")}>{t("Download")} ↗</a>
           {/if}
         </div>
         {#if about.installError}
-          <p class="install-error" role="alert">Couldn't install it: {about.installError}</p>
+          <p class="install-error" role="alert">{t("Couldn't install it: {error}", { error: about.installError })}</p>
         {/if}
       {/if}
       <div class="body">
-        <p class="label">Developed by</p>
+        <p class="label">{t("Developed by")}</p>
         <p class="developer">WebCMS Sàrl</p>
         <a href={WEBSITE} onclick={(event) => visit(event, WEBSITE)}>webcms.lu</a>
       </div>
       <div class="footer">© 2026 WebCMS Sàrl · GPL v3</div>
-      <button class="close" onclick={() => (open = false)} aria-label="Close">✕</button>
+      <button class="close" onclick={() => (open = false)} aria-label={t("Close")}>✕</button>
     </div>
   </div>
 {/if}

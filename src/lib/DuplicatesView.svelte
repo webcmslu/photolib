@@ -8,6 +8,7 @@
   copies back.
 -->
 <script lang="ts">
+  import { errorText, t, tn } from "./i18n";
   import { sep } from "@tauri-apps/api/path";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { onMount } from "svelte";
@@ -24,7 +25,7 @@
     type DuplicateGroup,
     type MoveSummary,
   } from "./api";
-  import { formatBytes, formatDateTime, formatNumber, photoCount } from "./format";
+  import { formatBytes, formatDateTime, photoCount } from "./format";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
 
   interface Props {
@@ -61,7 +62,7 @@
       groups = found;
       parked = waiting;
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -96,7 +97,7 @@
       result = { verb: "moved", summary: await parkDuplicates(libraryPath, choices) };
       kept.clear();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     } finally {
       progress = null;
     }
@@ -110,7 +111,7 @@
     try {
       result = { verb: "put back", summary: await putBackDuplicates(libraryPath) };
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
     await load();
     onchanged();
@@ -119,12 +120,12 @@
   function showParkedFolder() {
     const separator = sep();
     const root = libraryPath.endsWith(separator) ? libraryPath : libraryPath + separator;
-    revealItemInDir(root + PARKED_FOLDER).catch((e) => (error = String(e)));
+    revealItemInDir(root + PARKED_FOLDER).catch((e) => (error = errorText(e)));
   }
 
   function folderOf(relPath: string): string {
     const slash = relPath.lastIndexOf("/");
-    return slash < 0 ? "Top level" : relPath.slice(0, slash);
+    return slash < 0 ? t("Top level") : relPath.slice(0, slash);
   }
 
   function nameOf(relPath: string): string {
@@ -135,33 +136,33 @@
 <div class="duplicates">
   <header>
     {#if groups === null}
-      <p class="dim">Looking for duplicates…</p>
+      <p class="dim">{t("Looking for duplicates…")}</p>
     {:else}
       <div class="summary">
-        <h2>Duplicates</h2>
+        <h2>{t("Duplicates")}</h2>
         <p class="dim">
           {#if groups.length === 0}
-            Every photo is stored once.
+            {t("Every photo is stored once.")}
           {:else}
-            {photoCount(groups.length)} stored more than once: {formatNumber(extraCount)} extra
-            {extraCount === 1 ? "copy" : "copies"}.
+            {t("{photos} stored more than once:", { photos: photoCount(groups.length) })}
+            {tn(extraCount, "{n} extra copy.", "{n} extra copies.")}
           {/if}
         </p>
       </div>
       {#if progress}
         <div class="progress">
-          <span>Checking and moving {formatNumber(progress[0])} of {formatNumber(progress[1])}…</span>
+          <span>{t("Checking and moving {done} of {total}…", { done: progress[0], total: progress[1] })}</span>
           <progress value={progress[0]} max={progress[1]}></progress>
-          <button class="secondary" onclick={cancelJob}>Stop</button>
+          <button class="secondary" onclick={cancelJob}>{t("Stop")}</button>
         </div>
       {:else if extraCount > 0}
         <button
           class="primary"
           disabled={!canEdit}
-          title={canEdit ? "" : "The library is offline or read-only"}
+          title={canEdit ? "" : t("The library is offline or read-only")}
           onclick={() => (confirming = true)}
         >
-          Move {formatNumber(extraCount)} extra {extraCount === 1 ? "copy" : "copies"}…
+          {tn(extraCount, "Move {n} extra copy…", "Move {n} extra copies…")}
         </button>
       {/if}
     {/if}
@@ -170,16 +171,14 @@
   {#if confirming}
     <div class="notice">
       <p>
-        For each photo, the copy marked <strong>Keep</strong> stays where it is. The other copies go into the folder
-        <strong>{PARKED_FOLDER}</strong> at the top of the library, in the same folders as now.
+        {t("For each photo, the copy marked Keep stays where it is. The other copies go into the folder “{folder}” at the top of the library, in the same folders as now.", { folder: PARKED_FOLDER })}
       </p>
       <p>
-        Each copy is first compared byte for byte with the one kept, and left alone if it differs. Nothing is
-        deleted: look through that folder, then delete it in your file manager. “Put back” returns the copies.
+        {t("Each copy is first compared byte for byte with the one kept, and left alone if it differs. Nothing is deleted: look through that folder, then delete it in your file manager. “Put them back” returns the copies.")}
       </p>
       <div class="actions">
-        <button class="secondary" onclick={() => (confirming = false)}>Cancel</button>
-        <button class="primary" onclick={moveExtras}>Move {formatNumber(extraCount)}</button>
+        <button class="secondary" onclick={() => (confirming = false)}>{t("Cancel")}</button>
+        <button class="primary" onclick={moveExtras}>{t("Move {n}", { n: extraCount })}</button>
       </div>
     </div>
   {/if}
@@ -187,12 +186,12 @@
   {#if result}
     <div class="notice">
       <p>
-        {#if result.summary.cancelled}Stopped. {/if}{formatNumber(result.summary.moved)}
-        {result.summary.moved === 1 ? "copy" : "copies"}
-        {result.verb}.
+        {result.summary.cancelled ? t("Stopped.") + " " : ""}{result.verb === "moved"
+          ? tn(result.summary.moved, "{n} copy moved.", "{n} copies moved.")
+          : tn(result.summary.moved, "{n} copy put back.", "{n} copies put back.")}
       </p>
       {#if result.summary.skipped.length > 0}
-        <p class="error">{formatNumber(result.summary.skipped.length)} left where {result.summary.skipped.length === 1 ? "it was" : "they were"}:</p>
+        <p class="error">{tn(result.summary.skipped.length, "{n} left where it was:", "{n} left where they were:")}</p>
         <ul class="skipped">
           {#each result.summary.skipped.slice(0, 50) as [path, why] (path)}
             <li><span class="path">{path}</span>: {why}</li>
@@ -205,12 +204,12 @@
   {#if parked > 0 && !progress}
     <div class="notice parked">
       <p>
-        {formatNumber(parked)} {parked === 1 ? "copy waits" : "copies wait"} in <strong>{PARKED_FOLDER}</strong>.
-        Delete that folder once you have checked it.
+        {tn(parked, "{n} copy waits in “{folder}”.", "{n} copies wait in “{folder}”.", { folder: PARKED_FOLDER })}
+        {t("Delete that folder once you have checked it.")}
       </p>
       <div class="actions">
-        <button class="secondary" onclick={showParkedFolder}>Show the folder</button>
-        <button class="secondary" disabled={!canEdit} onclick={putBack}>Put them back</button>
+        <button class="secondary" onclick={showParkedFolder}>{t("Show the folder")}</button>
+        <button class="secondary" disabled={!canEdit} onclick={putBack}>{t("Put them back")}</button>
       </div>
     </div>
   {/if}
@@ -239,15 +238,15 @@
                   class:keep
                   disabled={progress !== null}
                   onclick={() => kept.set(group.fingerprint, index)}
-                  title={keep ? "This copy stays where it is" : "Keep this copy instead"}
+                  title={keep ? t("This copy stays where it is") : t("Keep this copy instead")}
                 >
-                  {keep ? "Keep" : "Move"}
+                  {keep ? t("Keep") : t("Move")}
                 </button>
                 <span class="file" title={copy.relPath}>
                   <span class="name">{nameOf(copy.relPath)}</span>
                   <span class="folder dim">{folderOf(copy.relPath)}</span>
                 </span>
-                <span class="modified dim" title="File date">{formatDateTime(copy.mtimeMs)}</span>
+                <span class="modified dim" title={t("File date")}>{formatDateTime(copy.mtimeMs)}</span>
                 <button class="reveal" onclick={() => revealPhoto(libraryPath, copy.relPath).catch(() => {})}>
                   {REVEAL_LABEL}
                 </button>
@@ -259,7 +258,7 @@
     </ul>
     {#if shown < groups.length}
       <button class="secondary more" onclick={() => (shown += PAGE)}>
-        Show more ({formatNumber(groups.length - shown)} left)
+        {t("Show more ({n} left)", { n: groups.length - shown })}
       </button>
     {/if}
   {/if}

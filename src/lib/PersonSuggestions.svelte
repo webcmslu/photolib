@@ -5,6 +5,7 @@
   is someone else, and it is not suggested again.
 -->
 <script lang="ts">
+  import { errorText, t } from "./i18n";
   import { namePerson, personSuggestions, rejectSuggestion, thumbUrl, type Person } from "./api";
   import { NO_EDIT } from "./edit";
   import EditedImage from "./EditedImage.svelte";
@@ -28,7 +29,7 @@
     const [path, who, groups] = [libraryPath, name, clusters];
     personSuggestions(path, groups, who)
       .then((found) => (suggestions = found))
-      .catch((e) => (error = String(e)));
+      .catch((e) => (error = errorText(e)));
   });
 
   async function confirm(suggestion: Person) {
@@ -39,7 +40,7 @@
       suggestions = suggestions.filter((s) => s !== suggestion);
       onadded([...clusters, ...suggestion.clusters]);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     } finally {
       busy = false;
     }
@@ -51,14 +52,14 @@
       await rejectSuggestion(libraryPath, suggestion.clusters[0], name);
       suggestions = suggestions.filter((s) => s !== suggestion);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 </script>
 
 {#if suggestions.length > 0}
-  <section aria-label="Suggestions">
-    <h3>Is this also {name}?</h3>
+  <section aria-label={t("Suggestions")}>
+    <h3>{t("Is this also {name}?", { name })}</h3>
     <ul>
       {#each suggestions as suggestion (suggestion.clusters[0])}
         <li>
@@ -77,16 +78,16 @@
               class="yes"
               disabled={!canEdit || busy}
               onclick={() => confirm(suggestion)}
-              title="Yes, this is {name}"
-              aria-label="Yes, this is {name}"
+              title={t("Yes, this is {name}", { name })}
+              aria-label={t("Yes, this is {name}", { name })}
             >
               ✓
             </button>
             <button
               class="no"
               onclick={() => reject(suggestion)}
-              title="No, this is someone else"
-              aria-label="No, this is someone else"
+              title={t("No, this is someone else")}
+              aria-label={t("No, this is someone else")}
             >
               ✕
             </button>

@@ -14,7 +14,8 @@
     type ExportSize,
     type ExportSummary,
   } from "./api";
-  import { formatNumber, photoCount } from "./format";
+  import { photoCount } from "./format";
+  import { errorText, t } from "./i18n";
 
   interface Props {
     libraryPath: string;
@@ -25,10 +26,10 @@
   let { libraryPath, photos, onclose }: Props = $props();
 
   const CHOICES = [
-    { id: "original", label: "Original files", note: "Exact copies, as shot. Edits are not applied.", size: { kind: "original" } },
-    { id: "full", label: "Full size JPEG", note: "With your edits.", size: { kind: "jpeg", longSide: null } },
-    { id: "large", label: "Large JPEG", note: "2048 pixels, with your edits.", size: { kind: "jpeg", longSide: 2048 } },
-    { id: "small", label: "Small JPEG", note: "1280 pixels, for email and messages.", size: { kind: "jpeg", longSide: 1280 } },
+    { id: "original", label: t("Original files"), note: t("Exact copies, as shot. Edits are not applied."), size: { kind: "original" } },
+    { id: "full", label: t("Full size JPEG"), note: t("With your edits."), size: { kind: "jpeg", longSide: null } },
+    { id: "large", label: t("Large JPEG"), note: t("{n} pixels, with your edits.", { n: "2048" }), size: { kind: "jpeg", longSide: 2048 } },
+    { id: "small", label: t("Small JPEG"), note: t("{n} pixels, for email and messages.", { n: "1280" }), size: { kind: "jpeg", longSide: 1280 } },
   ] as const satisfies readonly { id: string; label: string; note: string; size: ExportSize }[];
   type Choice = (typeof CHOICES)[number]["id"];
 
@@ -71,7 +72,7 @@
     try {
       result = { summary: await exportPhotos(libraryPath, photos, dest, size), dest };
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
       progress = null;
     }
   }
@@ -87,21 +88,21 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={() => !running && onclose()}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="box" role="dialog" aria-modal="true" aria-label="Export" tabindex="-1" onclick={(event) => event.stopPropagation()}>
+  <div class="box" role="dialog" aria-modal="true" aria-label={t("Export")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
     <header>
-      <h2>Export {photoCount(photos.length)}</h2>
+      <h2>{t("Export {photos}", { photos: photoCount(photos.length) })}</h2>
       {#if !running}
-        <button class="close" onclick={onclose} aria-label="Close">✕</button>
+        <button class="close" onclick={onclose} aria-label={t("Close")}>✕</button>
       {/if}
     </header>
 
     {#if result}
       <section>
         <p>
-          {#if result.summary.cancelled}Stopped: {/if}{formatNumber(result.summary.exported)} exported.
+          {result.summary.cancelled ? t("Stopped:") + " " : ""}{t("{n} exported.", { n: result.summary.exported })}
         </p>
         {#if result.summary.failed.length > 0}
-          <p class="error">{formatNumber(result.summary.failed.length)} could not be exported:</p>
+          <p class="error">{t("{n} could not be exported:", { n: result.summary.failed.length })}</p>
           <ul class="failed">
             {#each result.summary.failed.slice(0, 20) as [path, why] (path)}
               <li><span class="path">{path}</span> {why}</li>
@@ -111,17 +112,17 @@
       </section>
       <footer>
         <button class="secondary" onclick={() => result && revealItemInDir(result.dest).catch(() => {})}>
-          Show the folder
+          {t("Show the folder")}
         </button>
-        <button class="primary" onclick={onclose}>Done</button>
+        <button class="primary" onclick={onclose}>{t("Done")}</button>
       </footer>
     {:else if progress}
       <section>
-        <p>Exporting {formatNumber(progress[0])} of {formatNumber(progress[1])}…</p>
+        <p>{t("Exporting {done} of {total}…", { done: progress[0], total: progress[1] })}</p>
         <progress value={progress[0]} max={progress[1]}></progress>
       </section>
       <footer>
-        <button class="secondary" onclick={cancelJob}>Stop</button>
+        <button class="secondary" onclick={cancelJob}>{t("Stop")}</button>
       </footer>
     {:else}
       <section>
@@ -134,14 +135,14 @@
             </span>
           </label>
         {/each}
-        <p class="note">Videos are copied as they are. The library is not changed.</p>
+        <p class="note">{t("Videos are copied as they are. The library is not changed.")}</p>
         {#if error}
           <p class="error" role="alert">{error}</p>
         {/if}
       </section>
       <footer>
-        <button class="secondary" onclick={onclose}>Cancel</button>
-        <button class="primary" onclick={start}>Choose a folder…</button>
+        <button class="secondary" onclick={onclose}>{t("Cancel")}</button>
+        <button class="primary" onclick={start}>{t("Choose a folder…")}</button>
       </footer>
     {/if}
   </div>

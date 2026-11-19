@@ -3,13 +3,14 @@
 // about the library, so they don't go into the shared folder.
 
 import type { Order } from "./api";
+import { t } from "./i18n";
 
 export const TRANSITIONS = {
-  fade: "Cross-fade",
-  slide: "Slide",
-  zoom: "Zoom",
-  kenburns: "Pan and zoom",
-  none: "None",
+  fade: t("Cross-fade"),
+  slide: t("Slide"),
+  zoom: t("Zoom"),
+  kenburns: t("Pan and zoom"),
+  none: t("None"),
 } as const;
 export type Transition = keyof typeof TRANSITIONS;
 
@@ -18,10 +19,10 @@ export const SLIDE_SECONDS = [2, 3, 4, 5, 7, 10, 15, 20, 30];
 
 /** The orders of the photo grid, as the Settings window names them. */
 export const ORDERS: Record<Order, string> = {
-  dateDesc: "Newest first",
-  dateAsc: "Oldest first",
-  nameAsc: "By name, A to Z",
-  nameDesc: "By name, Z to A",
+  dateDesc: t("Newest first"),
+  dateAsc: t("Oldest first"),
+  nameAsc: t("By name, A to Z"),
+  nameDesc: t("By name, Z to A"),
 };
 
 const KEY = "photolib.settings";

@@ -1,27 +1,29 @@
 // Formatting helpers. Photo dates are wall-clock times encoded as UTC (see
 // api.ts), hence `timeZone: "UTC"` everywhere.
 
+import { locale, t, tn } from "./i18n";
+
 const DAY_MS = 86_400_000;
 
-const numberFormat = new Intl.NumberFormat();
-const dayFormat = new Intl.DateTimeFormat(undefined, {
+const numberFormat = new Intl.NumberFormat(locale);
+const dayFormat = new Intl.DateTimeFormat(locale, {
   weekday: "long",
   day: "numeric",
   month: "long",
   timeZone: "UTC",
 });
-const monthFormat = new Intl.DateTimeFormat(undefined, {
+const monthFormat = new Intl.DateTimeFormat(locale, {
   month: "long",
   year: "numeric",
   timeZone: "UTC",
 });
-const dateTimeFormat = new Intl.DateTimeFormat(undefined, {
+const dateTimeFormat = new Intl.DateTimeFormat(locale, {
   dateStyle: "full",
   timeStyle: "medium",
   timeZone: "UTC",
 });
 
-const shortDateFormat = new Intl.DateTimeFormat(undefined, {
+const shortDateFormat = new Intl.DateTimeFormat(locale, {
   dateStyle: "medium",
   timeZone: "UTC",
 });
@@ -60,19 +62,19 @@ export function monthKey(day: number): number {
 export const formatDateTime = (sortDate: number) => dateTimeFormat.format(sortDate);
 
 export function formatBytes(bytes: number): string {
-  const units = ["bytes", "KB", "MB", "GB"];
+  const units = [t("bytes"), "KB", "MB", "GB"];
   let value = bytes;
   let unit = 0;
   while (value >= 1000 && unit < units.length - 1) {
     value /= 1000;
     unit++;
   }
-  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
+  return `${unit === 0 ? value : numberFormat.format(Number(value.toFixed(1)))} ${units[unit]}`;
 }
 
 /** "photo" or "photos", with the count: "1 photo", "1,234 photos". */
 export function photoCount(count: number): string {
-  return `${formatNumber(count)} ${count === 1 ? "photo" : "photos"}`;
+  return tn(count, "{n} photo", "{n} photos");
 }
 
 /** "JPEG + RAW", "HEIC + RAW"…: names a pair after the file that is shown. */

@@ -3,6 +3,8 @@
   while open, so Escape closes it and not the viewer below.
 -->
 <script lang="ts">
+  import { t } from "./i18n";
+
   interface Props {
     onclose: () => void;
   }
@@ -12,46 +14,46 @@
 
   const GROUPS: { title: string; keys: [string, string][] }[] = [
     {
-      title: "Photos",
+      title: t("Photos"),
       keys: [
-        ["Click", "Open a photo"],
-        [`${MOD}-click  Shift-click`, "Select, select a range"],
-        [`${MOD} A`, "Select all"],
-        ["Esc", "Clear the selection"],
-        ["Enter", "Open the selected photo"],
-        [".", "Favorite or not"],
-        ["H", "Hide or show"],
-        ["1 – 5", "Rate with stars (again to clear)"],
-        ["6 – 9", "Label red, yellow, green, blue"],
-        [`${MOD} E`, "Export the selection"],
-        [`${MOD} F  or  /`, "Search"],
-        [`${MOD} +  ${MOD} −`, "Larger or smaller thumbnails"],
-        ["F5", "Slideshow"],
+        [t("Click"), t("Open a photo")],
+        [t("{mod}-click  Shift-click", { mod: MOD }), t("Select, select a range")],
+        [`${MOD} A`, t("Select all")],
+        ["Esc", t("Clear the selection")],
+        ["Enter", t("Open the selected photo")],
+        [".", t("Favorite or not")],
+        ["H", t("Hide or show")],
+        ["1 – 5", t("Rate with stars (again to clear)")],
+        ["6 – 9", t("Label red, yellow, green, blue")],
+        [`${MOD} E`, t("Export the selection")],
+        [t("{mod} F  or  /", { mod: MOD }), t("Search")],
+        [`${MOD} +  ${MOD} −`, t("Larger or smaller thumbnails")],
+        ["F5", t("Slideshow")],
       ],
     },
     {
-      title: "Viewer",
+      title: t("Viewer"),
       keys: [
-        ["← →", "Previous, next"],
-        ["Home  End", "First, last"],
-        ["+  −  0", "Zoom in, out, fit"],
-        [".", "Favorite or not"],
-        ["H", "Hide or show"],
-        ["1 – 5   6 – 9", "Rate, label"],
-        ["I", "Info panel"],
-        ["T", "Filmstrip"],
-        ["F", "Full screen"],
-        ["E", "Edit (Enter saves, Esc cancels)"],
-        ["Space  or  L", "Play the video or Live Photo"],
-        ["Esc", "Back to the grid"],
+        ["← →", t("Previous, next")],
+        [t("Home  End"), t("First, last")],
+        ["+  −  0", t("Zoom in, out, fit")],
+        [".", t("Favorite or not")],
+        ["H", t("Hide or show")],
+        ["1 – 5   6 – 9", t("Rate, label")],
+        ["I", t("Info panel")],
+        ["T", t("Filmstrip")],
+        ["F", t("Full screen")],
+        ["E", t("Edit (Enter saves, Esc cancels)")],
+        [t("Space  or  L"), t("Play the video or Live Photo")],
+        ["Esc", t("Back to the grid")],
       ],
     },
     {
-      title: "Slideshow and similar shots",
+      title: t("Slideshow and similar shots"),
       keys: [
-        ["Space", "Pause, or keep / drop a similar shot"],
-        ["← →", "Previous, next"],
-        ["Esc", "Stop"],
+        [t("Space"), t("Pause, or keep / drop a similar shot")],
+        ["← →", t("Previous, next")],
+        ["Esc", t("Stop")],
       ],
     },
   ];
@@ -71,10 +73,10 @@
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 <div class="backdrop" onclick={onclose}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="box" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1" onclick={(event) => event.stopPropagation()}>
+  <div class="box" role="dialog" aria-modal="true" aria-label={t("Keyboard shortcuts")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
     <header>
-      <h2>Keyboard shortcuts</h2>
-      <button class="close" onclick={onclose} aria-label="Close">✕</button>
+      <h2>{t("Keyboard shortcuts")}</h2>
+      <button class="close" onclick={onclose} aria-label={t("Close")}>✕</button>
     </header>
     <div class="groups">
       {#each GROUPS as group (group.title)}

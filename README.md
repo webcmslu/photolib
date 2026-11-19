@@ -88,6 +88,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 - Similar shots: bursts and near-identical photos taken within a minute are
   grouped by a visual fingerprint of their thumbnails, with a suggested
   shot to keep; the others can be hidden (not moved or deleted).
+- English, French and German: Settings › Language (the system's language
+  by default). The English text in the code is the key; `src/lib/locales/`
+  holds the translations and `npm run check` lists any that are missing.
+  Search understands French and German month, kind and colour words too.
 - Right-click menus (the system's own) on photos, albums, folders and
   people, and "Show in Finder / Explorer / Files" for a photo.
 

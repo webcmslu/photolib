@@ -4,6 +4,7 @@
   scan status, and the viewer on top.
 -->
 <script lang="ts">
+  import { errorText, t, tn } from "./i18n";
   import { onMount, untrack } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
@@ -116,7 +117,7 @@
         // The scan may have finished before we were listening.
         if (!stats.scanning && !progress) scanning = false;
       })
-      .catch((e) => (error = String(e)));
+      .catch((e) => (error = errorText(e)));
     loadSidebar();
 
     return () => {
@@ -180,7 +181,7 @@
       case "failed":
         scanning = false;
         progress = null;
-        error = event.message;
+        error = errorText(event.message);
         break;
     }
   }
@@ -196,29 +197,32 @@
       await rescanLibrary(library.path, everything);
     } catch (e) {
       scanning = false;
-      error = String(e);
+      error = errorText(e);
     }
   }
 
   const status = $derived.by(() => {
     if (scanning) {
       if (progress?.phase === "indexing" && progress.total > 0) {
-        return `Indexing ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+        return t("Indexing {done} of {total}", { done: progress.done, total: progress.total });
       }
       if (progress?.phase === "faces") {
-        return `Finding faces: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+        return t("Finding faces: {done} of {total}", { done: progress.done, total: progress.total });
       }
       if (progress?.phase === "comparing") {
-        return `Comparing photos: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+        return t("Comparing photos: {done} of {total}", { done: progress.done, total: progress.total });
       }
       if (progress?.phase === "thumbnails") {
-        return `Making thumbnails: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+        return t("Making thumbnails: {done} of {total}", { done: progress.done, total: progress.total });
       }
       if (progress?.phase === "scanning" && progress.known > 0) {
         // A library seen before: only new and changed files are read.
-        return `Checking for new photos: ${formatNumber(Math.min(progress.discovered, progress.known))} of ${formatNumber(progress.known)}`;
+        return t("Checking for new photos: {done} of {total}", {
+          done: Math.min(progress.discovered, progress.known),
+          total: progress.known,
+        });
       }
-      return progress ? `Scanning… ${formatNumber(progress.discovered)} found` : "Scanning…";
+      return progress ? t("Scanning… {n} found", { n: progress.discovered }) : t("Scanning…");
     }
     return photoTotal === null ? "" : photoCount(photoTotal);
   });
@@ -246,7 +250,7 @@
         (listing.kind === "folder" && !folderTree.paths.has((listing as { folder: string }).folder));
       if (gone) listing = { kind: "library" };
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -305,7 +309,7 @@
       hasChildren: boolean;
     }[] = [];
     if (own.has("")) {
-      rows.push({ path: "", name: "Top level", depth: 0, count: own.get("") ?? 0, hasChildren: false });
+      rows.push({ path: "", name: t("Top level"), depth: 0, count: own.get("") ?? 0, hasChildren: false });
     }
     for (const path of all) {
       const parts = path.split("/");
@@ -334,23 +338,23 @@
   const title = $derived.by(() => {
     switch (listing.kind) {
       case "library":
-        return "Library";
+        return t("Library");
       case "favorites":
-        return "Favorites";
+        return t("Favorites");
       case "hidden":
-        return "Hidden";
+        return t("Hidden");
       case "duplicates":
-        return "Duplicates";
+        return t("Duplicates");
       case "album":
-        return currentAlbum?.name ?? "Album";
+        return currentAlbum?.name ?? t("Album");
       case "folder":
-        return listing.folder || "Top level";
+        return listing.folder || t("Top level");
       case "area":
-        return "Photos from the map";
+        return t("Photos from the map");
       case "person":
-        return personName ?? "Unnamed person";
+        return personName ?? t("Unnamed person");
       case "search":
-        return `Search: ${listing.query}`;
+        return t("Search: {query}", { query: listing.query });
     }
   });
 
@@ -376,7 +380,7 @@
         busy: false,
       };
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -387,7 +391,7 @@
       imported = await appleImport(library.path, importing.library);
       refreshAll();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
     importing = null;
   }
@@ -426,20 +430,20 @@
   });
 
   const emptyText = $derived.by(() => {
-    if (only) return "Nothing here matches the filter.";
+    if (only) return t("Nothing here matches the filter.");
     switch (listing.kind) {
       case "favorites":
-        return "No favorites yet. Open a photo and press the heart, or select photos in the grid.";
+        return t("No favorites yet. Open a photo and press the heart, or select photos in the grid.");
       case "hidden":
-        return "No hidden photos.";
+        return t("No hidden photos.");
       case "duplicates":
-        return "No duplicates: every photo is stored once.";
+        return t("No duplicates: every photo is stored once.");
       case "album":
-        return "This album is empty. Select photos in the grid and choose “Add to album”.";
+        return t("This album is empty. Select photos in the grid and choose “Add to album”.");
       case "search":
-        return "Nothing matches. Try a place, a camera, a folder or file name, a year (2024), a month (july) or “video”.";
+        return t("Nothing matches. Try a place, a camera, a folder or file name, a year (2024), a month (july) or “video”.");
       default:
-        return scanning ? "Looking for photos…" : "No photos found in this folder.";
+        return scanning ? t("Looking for photos…") : t("No photos found in this folder.");
     }
   });
 
@@ -453,13 +457,22 @@
   const only = $derived(filter?.listing === listing ? filter.only : null);
   let filterMenuOpen = $state(false);
   const FILTERS: [Only | null, string][] = [
-    [null, "All Items"],
-    ["favorites", "Favorites"],
-    ["edited", "Edited"],
-    ["photos", "Photos"],
-    ["videos", "Videos"],
-    ["notInAlbum", "Not in an Album"],
+    [null, t("All Items")],
+    ["favorites", t("Favorites")],
+    ["edited", t("Edited")],
+    ["photos", t("Photos")],
+    ["videos", t("Videos")],
+    ["notInAlbum", t("Not in an Album")],
   ];
+  /** The filter's name, also for the stars and colours, which are not in FILTERS. */
+  function filterName(value: Only): string {
+    const listed = FILTERS.find(([choice]) => choice === value)?.[1];
+    if (listed) return listed;
+    const stars = /^stars([1-5])$/.exec(value);
+    if (stars) return "★".repeat(Number(stars[1])) + (stars[1] === "5" ? "" : " " + t("or more"));
+    return LABELS.find((label) => label.color === value)?.name ?? value;
+  }
+
   function chooseFilter(choice: Only | null) {
     filter = choice === null ? null : { listing, only: choice };
     filterMenuOpen = false;
@@ -523,7 +536,7 @@
       const loaded = await shapes(target.libraryPath, target.listing, target.order);
       if (target === pages) gridShapes = loaded;
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
   $effect(() => {
@@ -565,7 +578,7 @@
       const loaded = await listMonths(target.libraryPath, target.listing);
       if (target === pages) months = loaded;
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -759,7 +772,7 @@
       groups = loaded;
       groupsLoaded = true;
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -790,7 +803,7 @@
     try {
       await applyOps(library.path, ops);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
     refreshAll();
   }
@@ -826,7 +839,7 @@
       selected.clear();
       refreshAll();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -852,7 +865,7 @@
       }
       refreshAll();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -868,7 +881,7 @@
   async function revealSelected() {
     const [index] = selected;
     const photo = index === undefined ? null : await pages.load(index);
-    if (photo) revealPhoto(library.path, photo.relPath).catch((e) => (error = String(e)));
+    if (photo) revealPhoto(library.path, photo.relPath).catch((e) => (error = errorText(e)));
   }
 
   async function togglePersonHidden() {
@@ -877,7 +890,7 @@
       await setPersonHidden(library.path, listing.clusters, !personHidden);
       personHidden = !personHidden;
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -914,7 +927,7 @@
       await loadSidebar();
       listing = { kind: "album", album };
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -957,10 +970,10 @@
   }
 
   const ratingMenu = (): MenuEntry => ({
-    label: "Rating",
+    label: t("Rating"),
     enabled: online,
     items: [
-      { label: "No Rating", action: () => applyToSelection((photo) => ({ op: "rating", photo, stars: 0 })) },
+      { label: t("No Rating"), action: () => applyToSelection((photo) => ({ op: "rating", photo, stars: 0 })) },
       ...[1, 2, 3, 4, 5].map((stars) => ({
         label: `${"★".repeat(stars)}    ${stars}`,
         action: () => applyToSelection((photo) => ({ op: "rating", photo, stars })),
@@ -969,10 +982,10 @@
   });
 
   const labelMenu = (): MenuEntry => ({
-    label: "Label",
+    label: t("Label"),
     enabled: online,
     items: [
-      { label: "No Label", action: () => applyToSelection((photo) => ({ op: "label", photo, color: "" })) },
+      { label: t("No Label"), action: () => applyToSelection((photo) => ({ op: "label", photo, color: "" })) },
       ...LABELS.map((label) => ({
         label: label.key ? `${label.name}    ${label.key}` : label.name,
         action: () => applyToSelection((photo) => ({ op: "label", photo, color: label.color })),
@@ -991,20 +1004,20 @@
     const one = selected.size === 1;
     const fav = (on: boolean) => () => applyToSelection((photo) => ({ op: "fav", photo, on }));
     const entries: MenuEntry[] = [
-      { label: "Open", enabled: one, action: () => (viewerIndex = index) },
-      { label: one ? "Slideshow from here" : "Slideshow of these", action: () => {
+      { label: t("Open"), enabled: one, action: () => (viewerIndex = index) },
+      { label: one ? t("Slideshow from here") : t("Slideshow of these"), action: () => {
           if (one) {
             const total = listedTotal;
             slideshow = { count: total - index, indexAt: (position) => index + position };
           } else startSlideshow();
         } },
       "-",
-      { label: "Add to Favorites", enabled: online, action: fav(true) },
-      { label: "Remove from Favorites", enabled: online, action: fav(false) },
+      { label: t("Add to Favorites"), enabled: online, action: fav(true) },
+      { label: t("Remove from Favorites"), enabled: online, action: fav(false) },
       ratingMenu(),
       labelMenu(),
       {
-        label: "Add to Album",
+        label: t("Add to Album"),
         enabled: online && albums.length > 0,
         items: albums.map((album) => ({
           label: album.name,
@@ -1015,27 +1028,27 @@
     if (listing.kind === "album") {
       const album = listing.album;
       entries.push({
-        label: "Remove from Album",
+        label: t("Remove from Album"),
         enabled: online,
         action: () => applyToSelection((photo) => ({ op: "album_member", album, photo, on: false })),
       });
     }
     entries.push({
-      label: listing.kind === "hidden" ? "Unhide" : "Hide",
+      label: listing.kind === "hidden" ? t("Unhide") : t("Hide"),
       enabled: online,
       action: () => applyToSelection((photo) => ({ op: "hide", photo, on: listing.kind !== "hidden" })),
     });
     if (listing.kind === "person") {
       entries.push(
         "-",
-        { label: `Not ${personName ?? "this person"}`, enabled: online || personName === null, action: removeSelectionFromPerson },
-        { label: "Someone else", enabled: online || personName === null, action: splitSelectionFromPerson },
+        { label: personName ? t("Not {name}", { name: personName }) : t("Not this person"), enabled: online || personName === null, action: removeSelectionFromPerson },
+        { label: t("Someone else"), enabled: online || personName === null, action: splitSelectionFromPerson },
       );
     }
     entries.push(
       "-",
       { label: REVEAL_LABEL, enabled: online && one, action: revealSelected },
-      { label: "Export…", enabled: online, action: exportSelection },
+      { label: t("Export…"), enabled: online, action: exportSelection },
     );
     showMenu(event, entries);
   }
@@ -1043,10 +1056,10 @@
   function albumMenu(event: MouseEvent, album: { id: string; name: string }) {
     const open = () => (listing = { kind: "album", album: album.id }, (section = "photos"));
     showMenu(event, [
-      { label: "Open", action: open },
+      { label: t("Open"), action: open },
       "-",
-      { label: "Rename…", enabled: online, action: () => (open(), (renaming = album.name)) },
-      { label: "Delete Album…", enabled: online, action: () => (open(), (confirmingDelete = true)) },
+      { label: t("Rename…"), enabled: online, action: () => (open(), (renaming = album.name)) },
+      { label: t("Delete Album…"), enabled: online, action: () => (open(), (confirmingDelete = true)) },
     ]);
   }
 
@@ -1054,12 +1067,12 @@
     const separator = sep();
     const root = library.path.endsWith(separator) ? library.path : library.path + separator;
     showMenu(event, [
-      { label: "Open", action: () => ((listing = folderListing(folder)), (section = "photos")) },
+      { label: t("Open"), action: () => ((listing = folderListing(folder)), (section = "photos")) },
       "-",
       {
         label: REVEAL_LABEL,
         enabled: online,
-        action: () => revealItemInDir(root + folder.split("/").join(separator)).catch((e) => (error = String(e))),
+        action: () => revealItemInDir(root + folder.split("/").join(separator)).catch((e) => (error = errorText(e))),
       },
     ]);
   }
@@ -1091,8 +1104,8 @@
         bind:value={searchText}
         oninput={onSearchInput}
         onkeydown={(event) => event.key === "Escape" && clearSearch()}
-        placeholder="Search: place, camera, name, 2024, july, video…"
-        aria-label="Search photos"
+        placeholder={t("Search: place, camera, name, 2024, july, video…")}
+        aria-label={t("Search photos")}
       />
     </div>
     <div class="status" role="status">
@@ -1108,16 +1121,16 @@
         class="secondary"
         onclick={() => rescan()}
         disabled={scanning}
-        title="Look for photos added or changed since the last check"
+        title={t("Look for photos added or changed since the last check")}
       >
-        Check for new
+        {t("Check for new")}
       </button>
       <button
         class="secondary more"
         aria-haspopup="menu"
         aria-expanded={scanMenuOpen}
-        aria-label="More scan options"
-        title="More scan options"
+        aria-label={t("More scan options")}
+        title={t("More scan options")}
         onclick={(event) => {
           event.stopPropagation();
           filterMenuOpen = false;
@@ -1133,11 +1146,11 @@
         <div class="menu scan-menu" role="menu">
           <button role="menuitem" disabled={scanning} onclick={() => rescan()}>
             <span class="mark"></span>
-            <span>Check for new photos<small>Reads only files added or changed</small></span>
+            <span>{t("Check for new photos")}<small>{t("Reads only files added or changed")}</small></span>
           </button>
           <button role="menuitem" onclick={() => rescan(true)}>
             <span class="mark"></span>
-            <span>Rescan everything<small>Reads every file again; slow on a large library</small></span>
+            <span>{t("Rescan everything")}<small>{t("Reads every file again; slow on a large library")}</small></span>
           </button>
           {#if IS_MAC}
             <hr />
@@ -1150,59 +1163,63 @@
               }}
             >
               <span class="mark"></span>
-              <span>Import from Apple Photos…<small>Favorites, hidden photos and albums</small></span>
+              <span>{t("Import from Apple Photos…")}<small>{t("Favorites, hidden photos and albums")}</small></span>
             </button>
           {/if}
         </div>
       {/if}
     </span>
-    <button class="keys-button" onclick={() => (showShortcuts = true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    <button class="keys-button" onclick={() => (showShortcuts = true)} title={t("Keyboard shortcuts (?)")} aria-label={t("Keyboard shortcuts")}>?</button>
     <SettingsButton onfaceschange={() => facesRevision++} />
     <AboutButton />
   </header>
 
   {#if !online}
     <p class="banner">
-      This library can't be reached right now. You are browsing what this computer has cached;
-      full-size photos and changes are unavailable until it is back.
+      {t("This library can't be reached right now. You are browsing what this computer has cached; full-size photos and changes are unavailable until it is back.")}
     </p>
   {:else if !writable}
     <p class="banner">
-      This folder is read-only. Favorites, albums and hidden photos are kept on this computer
-      only.
+      {t("This folder is read-only. Favorites, albums and hidden photos are kept on this computer only.")}
     </p>
   {/if}
   {#if imported}
     <p class="banner">
-      Imported from Apple Photos: {formatNumber(imported.favorites)} favorites,
-      {formatNumber(imported.hidden + imported.deleted)} hidden,
-      {formatNumber(imported.albums.filter((album) => album.matched > 0).length)} album(s).
-      <button class="dismiss" onclick={() => (imported = null)} aria-label="Dismiss">×</button>
+      {t("Imported from Apple Photos: {favorites} favorites, {hidden} hidden, {albums} album(s).", {
+        favorites: imported.favorites,
+        hidden: imported.hidden + imported.deleted,
+        albums: imported.albums.filter((album) => album.matched > 0).length,
+      })}
+      <button class="dismiss" onclick={() => (imported = null)} aria-label={t("Dismiss")}>×</button>
     </p>
   {/if}
   {#if error}
     <p class="banner error" role="alert">
       {error}
-      <button class="dismiss" onclick={() => (error = null)} aria-label="Dismiss">×</button>
+      <button class="dismiss" onclick={() => (error = null)} aria-label={t("Dismiss")}>×</button>
     </p>
   {/if}
   {#if lastScan && lastScan.unreadableDirs > 0}
     <p class="banner">
-      {formatNumber(lastScan.unreadableDirs)}
-      {lastScan.unreadableDirs === 1 ? "folder" : "folders"} could not be read, so photos that
-      may have been deleted were kept in the index.
+      {tn(
+        lastScan.unreadableDirs,
+        "{n} folder could not be read, so photos that may have been deleted were kept in the index.",
+        "{n} folders could not be read, so photos that may have been deleted were kept in the index.",
+      )}
     </p>
   {/if}
   {#if !scanning && unreadable > 0}
     <p class="banner">
-      {formatNumber(unreadable)}
-      {unreadable === 1 ? "file" : "files"} could not be read. They will be tried again on the
-      next scan.
+      {tn(
+        unreadable,
+        "{n} file could not be read. It will be tried again on the next scan.",
+        "{n} files could not be read. They will be tried again on the next scan.",
+      )}
     </p>
   {/if}
 
   <div class="body">
-    <nav aria-label="Library sections" style:width="{sidebarWidth}px">
+    <nav aria-label={t("Library sections")} style:width="{sidebarWidth}px">
       {#snippet row(target: Listing, label: string, count: number | null, depth = 0, enabled = true)}
         <button
           class="row"
@@ -1220,38 +1237,38 @@
         </button>
       {/snippet}
 
-      {@render row({ kind: "library" }, "Library", null)}
-      {@render row({ kind: "favorites" }, "Favorites", null)}
-      {@render row({ kind: "hidden" }, "Hidden", null)}
+      {@render row({ kind: "library" }, t("Library"), null)}
+      {@render row({ kind: "favorites" }, t("Favorites"), null)}
+      {@render row({ kind: "hidden" }, t("Hidden"), null)}
       <button
         class="row"
         class:selected={section === "map" || (section === "photos" && listing.kind === "area")}
         onclick={() => (section = "map")}
       >
-        <span class="row-name">Map</span>
+        <span class="row-name">{t("Map")}</span>
       </button>
       <button
         class="row"
         class:selected={section === "people" || (section === "photos" && listing.kind === "person")}
         onclick={() => (section = "people")}
       >
-        <span class="row-name">People</span>
+        <span class="row-name">{t("People")}</span>
       </button>
       <button class="row" class:selected={section === "duplicates"} onclick={() => (section = "duplicates")}>
-        <span class="row-name">Duplicates</span>
+        <span class="row-name">{t("Duplicates")}</span>
       </button>
       <button class="row" class:selected={section === "similar"} onclick={() => (section = "similar")}>
-        <span class="row-name">Similar shots</span>
+        <span class="row-name">{t("Similar shots")}</span>
       </button>
 
       <h2>
-        Albums
+        {t("Albums")}
         <button
           class="add"
           onclick={() => (newAlbumName = "")}
           disabled={!online}
-          aria-label="New album"
-          title="New album"
+          aria-label={t("New album")}
+          title={t("New album")}
         >
           +
         </button>
@@ -1261,7 +1278,7 @@
           <input
             bind:value={newAlbumName}
             use:focus
-            placeholder="Album name"
+            placeholder={t("Album name")}
             maxlength="200"
             onblur={() => (newAlbumName = null)}
             onkeydown={(event) => event.key === "Escape" && (newAlbumName = null)}
@@ -1273,10 +1290,10 @@
           {@render row({ kind: "album", album: album.id }, album.name, album.count)}
         </div>
       {:else}
-        {#if newAlbumName === null}<p class="hint">No albums yet</p>{/if}
+        {#if newAlbumName === null}<p class="hint">{t("No albums yet")}</p>{/if}
       {/each}
 
-      <h2>Folders</h2>
+      <h2>{t("Folders")}</h2>
       {#each folderTree.rows as folder (folder.path)}
         <div class="tree-row" oncontextmenu={(event) => folderMenu(event, folder.path)} role="presentation">
           {#if folder.hasChildren}
@@ -1285,7 +1302,9 @@
               class:open={openFolders.has(folder.path)}
               style:left="{folder.depth * 14}px"
               aria-expanded={openFolders.has(folder.path)}
-              aria-label="{openFolders.has(folder.path) ? 'Hide' : 'Show'} the folders in {folder.name}"
+              aria-label={openFolders.has(folder.path)
+                ? t("Hide the folders in {name}", { name: folder.name })
+                : t("Show the folders in {name}", { name: folder.name })}
               onclick={() => toggleFolder(folder.path)}
             >
               <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
@@ -1302,7 +1321,7 @@
       class="resizer"
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize the sidebar"
+      aria-label={t("Resize the sidebar")}
       aria-valuenow={sidebarWidth}
       aria-valuemin={SIDEBAR_MIN}
       aria-valuemax={SIDEBAR_MAX}
@@ -1360,14 +1379,14 @@
       {:else}
       <div class="toolbar">
         {#if selected.size > 0}
-          <strong>{formatNumber(selected.size)} selected</strong>
+          <strong>{t("{n} selected", { n: selected.size })}</strong>
           <span class="spacer"></span>
           <button
             class="secondary"
             disabled={!online}
             onclick={() => applyToSelection((photo) => ({ op: "fav", photo, on: true }))}
           >
-            ♥ Favorite
+            ♥ {t("Favorite")}
           </button>
           {#if listing.kind === "favorites"}
             <button
@@ -1375,12 +1394,12 @@
               disabled={!online}
               onclick={() => applyToSelection((photo) => ({ op: "fav", photo, on: false }))}
             >
-              Remove from favorites
+              {t("Remove from favorites")}
             </button>
           {/if}
           {#if albums.length > 0}
             <select onchange={addSelectionToAlbum} disabled={!online}>
-              <option value="">Add to album…</option>
+              <option value="">{t("Add to album…")}</option>
               {#each albums as album (album.id)}
                 <option value={album.id}>{album.name}</option>
               {/each}
@@ -1394,7 +1413,7 @@
               onclick={() =>
                 applyToSelection((photo) => ({ op: "album_member", album, photo, on: false }))}
             >
-              Remove from album
+              {t("Remove from album")}
             </button>
           {/if}
           {#if listing.kind === "person"}
@@ -1402,17 +1421,17 @@
               class="secondary"
               disabled={!online && personName !== null}
               onclick={removeSelectionFromPerson}
-              title="Their face in these photos is someone else's: take the photos out"
+              title={t("Their face in these photos is someone else's: take the photos out")}
             >
-              Not {personName ?? "this person"}
+              {personName ? t("Not {name}", { name: personName }) : t("Not this person")}
             </button>
             <button
               class="secondary"
               disabled={!online && personName !== null}
               onclick={splitSelectionFromPerson}
-              title="These photos show one other person: make them a person of their own"
+              title={t("These photos show one other person: make them a person of their own")}
             >
-              Someone else
+              {t("Someone else")}
             </button>
           {/if}
           <button
@@ -1421,7 +1440,7 @@
             onclick={() =>
               applyToSelection((photo) => ({ op: "hide", photo, on: listing.kind !== "hidden" }))}
           >
-            {listing.kind === "hidden" ? "Unhide" : "Hide"}
+            {listing.kind === "hidden" ? t("Unhide") : t("Hide")}
           </button>
           {#if selected.size === 1}
             <button class="secondary" disabled={!online} onclick={revealSelected}>{REVEAL_LABEL}</button>
@@ -1430,11 +1449,11 @@
             class="secondary"
             disabled={!online}
             onclick={exportSelection}
-            title="Copy the selected photos into a folder, optionally smaller"
+            title={t("Copy the selected photos into a folder, optionally smaller")}
           >
-            Export…
+            {t("Export…")}
           </button>
-          <button class="secondary" onclick={() => selected.clear()}>Clear</button>
+          <button class="secondary" onclick={() => selected.clear()}>{t("Clear")}</button>
         {:else if renaming !== null}
           <form onsubmit={submitRename}>
             <input
@@ -1447,10 +1466,10 @@
           </form>
         {:else}
           {#if listing.kind === "person"}
-            <button class="secondary" onclick={() => (section = "people")}>‹ People</button>
+            <button class="secondary" onclick={() => (section = "people")}>‹ {t("People")}</button>
           {/if}
           {#if listing.kind === "area"}
-            <button class="secondary" onclick={() => (section = "map")}>‹ Map</button>
+            <button class="secondary" onclick={() => (section = "map")}>‹ {t("Map")}</button>
           {/if}
           <span class="heading">
             <span class="heading-line">
@@ -1468,15 +1487,15 @@
               class="secondary"
               onclick={togglePersonHidden}
               title={personHidden
-                ? "List this person on the People screen again"
-                : "Leave this person out of the People screen (e.g. a stranger)"}
+                ? t("List this person on the People screen again")
+                : t("Leave this person out of the People screen (e.g. a stranger)")}
             >
-              {personHidden ? "Show in People" : "Hide from People"}
+              {personHidden ? t("Show in People") : t("Hide from People")}
             </button>
           {/if}
           <span class="spacer"></span>
-          <div class="segmented" role="group" aria-label="View">
-            {#each [["years", "Years"], ["months", "Months"], ["all", "All Photos"]] as const as [mode, label] (mode)}
+          <div class="segmented" role="group" aria-label={t("View")}>
+            {#each [["years", t("Years")], ["months", t("Months")], ["all", t("All Photos")]] as const as [mode, label] (mode)}
               <button aria-pressed={viewMode === mode} onclick={() => setViewMode(mode)}>
                 {label}
               </button>
@@ -1494,15 +1513,15 @@
             max={CELL_MAX}
             step="10"
             bind:value={cellSize}
-            aria-label="Thumbnail size"
-            title="Thumbnail size (Ctrl/Cmd + and -)"
+            aria-label={t("Thumbnail size")}
+            title={t("Thumbnail size (Ctrl/Cmd + and -)")}
           />
           <button
             class="secondary icon"
             onclick={startSlideshow}
             disabled={listedTotal === 0}
-            title={selected.size > 0 ? "Slideshow of the selected photos (F5)" : "Slideshow (F5)"}
-            aria-label="Start a slideshow"
+            title={selected.size > 0 ? t("Slideshow of the selected photos (F5)") : t("Slideshow (F5)")}
+            aria-label={t("Start a slideshow")}
           >
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
               <rect x="1.5" y="3" width="13" height="10" rx="2" />
@@ -1522,8 +1541,8 @@
                 scanMenuOpen = false;
                 sortMenuOpen = !sortMenuOpen;
               }}
-              title="Sort"
-              aria-label="Sort"
+              title={t("Sort")}
+              aria-label={t("Sort")}
             >
               <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                 <path d="M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5" />
@@ -1532,17 +1551,17 @@
             {#if sortMenuOpen}
               <div class="menu" role="menu">
                 <button role="menuitemradio" aria-checked={!byName} onclick={() => chooseSort("date", null)}>
-                  <span class="mark">{!byName ? "✓" : ""}</span>Date taken
+                  <span class="mark">{!byName ? "✓" : ""}</span>{t("Date taken")}
                 </button>
                 <button role="menuitemradio" aria-checked={byName} onclick={() => chooseSort("name", null)}>
-                  <span class="mark">{byName ? "✓" : ""}</span>Name
+                  <span class="mark">{byName ? "✓" : ""}</span>{t("Name")}
                 </button>
                 <hr />
                 <button role="menuitemradio" aria-checked={ascending} onclick={() => chooseSort(null, true)}>
-                  <span class="mark">{ascending ? "✓" : ""}</span>{byName ? "A to Z" : "Oldest first"}
+                  <span class="mark">{ascending ? "✓" : ""}</span>{byName ? t("A to Z") : t("Oldest first")}
                 </button>
                 <button role="menuitemradio" aria-checked={!ascending} onclick={() => chooseSort(null, false)}>
-                  <span class="mark">{!ascending ? "✓" : ""}</span>{byName ? "Z to A" : "Newest first"}
+                  <span class="mark">{!ascending ? "✓" : ""}</span>{byName ? t("Z to A") : t("Newest first")}
                 </button>
               </div>
             {/if}
@@ -1559,8 +1578,8 @@
                 scanMenuOpen = false;
                 filterMenuOpen = !filterMenuOpen;
               }}
-              title={only ? `Showing: ${FILTERS.find(([value]) => value === only)?.[1]}` : "Filter"}
-              aria-label="Filter"
+              title={only ? t("Showing: {filter}", { filter: filterName(only) }) : t("Filter")}
+              aria-label={t("Filter")}
             >
               <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
                 <path d="M2 4h12M4 8h8M6 12h4" />
@@ -1581,7 +1600,7 @@
                 {#each [1, 2, 3, 4, 5] as stars (stars)}
                   {@const value = `stars${stars}` as Only}
                   <button role="menuitemradio" aria-checked={only === value} onclick={() => chooseFilter(value)}>
-                    <span class="mark">{only === value ? "✓" : ""}</span>{"★".repeat(stars)}{stars < 5 ? " or more" : ""}
+                    <span class="mark">{only === value ? "✓" : ""}</span>{"★".repeat(stars)}{stars < 5 ? " " + t("or more") : ""}
                   </button>
                 {/each}
                 <hr />
@@ -1602,8 +1621,8 @@
             disabled={viewMode !== "all"}
             aria-pressed={gridFit === "river"}
             onclick={() => (gridFit = gridFit === "square" ? "river" : "square")}
-            title={gridFit === "square" ? "Show photos in rows at their own shape" : "Show square thumbnails"}
-            aria-label="Square thumbnails or rows of whole photos"
+            title={gridFit === "square" ? t("Show photos in rows at their own shape") : t("Show square thumbnails")}
+            aria-label={t("Square thumbnails or rows of whole photos")}
           >
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
               {#if gridFit === "square"}
@@ -1621,19 +1640,19 @@
           </button>
           {#if currentAlbum}
             {#if confirmingDelete}
-              <span class="dim">Delete this album? The photos stay in the library.</span>
-              <button class="secondary danger" onclick={deleteAlbum}>Delete</button>
-              <button class="secondary" onclick={() => (confirmingDelete = false)}>Cancel</button>
+              <span class="dim">{t("Delete this album? The photos stay in the library.")}</span>
+              <button class="secondary danger" onclick={deleteAlbum}>{t("Delete")}</button>
+              <button class="secondary" onclick={() => (confirmingDelete = false)}>{t("Cancel")}</button>
             {:else}
               <button
                 class="secondary"
                 disabled={!online}
                 onclick={() => (renaming = currentAlbum?.name ?? "")}
               >
-                Rename
+                {t("Rename")}
               </button>
               <button class="secondary" disabled={!online} onclick={() => (confirmingDelete = true)}>
-                Delete album
+                {t("Delete album")}
               </button>
             {/if}
           {/if}
@@ -1708,24 +1727,32 @@
 {#if importing}
   {@const summary = importing.summary}
   <div class="backdrop">
-    <div class="dialog" role="dialog" aria-modal="true" aria-label="Import from Apple Photos">
-      <h2>Import from Apple Photos</h2>
+    <div class="dialog" role="dialog" aria-modal="true" aria-label={t("Import from Apple Photos")}>
+      <h2>{t("Import from Apple Photos")}</h2>
       <p>
-        {formatNumber(summary.matched)} of the {formatNumber(summary.assets)} photos in that
-        library were found in this one. Importing will:
+        {t("{matched} of the {total} photos in that library were found in this one. Importing will:", {
+          matched: summary.matched,
+          total: summary.assets,
+        })}
       </p>
       <ul>
-        <li>mark {formatNumber(summary.favorites)} as favorites;</li>
-        <li>hide {formatNumber(summary.hidden)};</li>
+        <li>{t("mark {n} as favorites;", { n: summary.favorites })}</li>
+        <li>{t("hide {n};", { n: summary.hidden })}</li>
         {#if summary.deleted > 0}
           <li>
-            hide {formatNumber(summary.deleted)} more that
-            {summary.deleted === 1 ? "is" : "are"} in “Recently Deleted” in Photos;
+            {tn(
+              summary.deleted,
+              "hide {n} more that is in “Recently Deleted” in Photos;",
+              "hide {n} more that are in “Recently Deleted” in Photos;",
+            )}
           </li>
         {/if}
         <li>
-          create or fill {formatNumber(summary.albums.filter((album) => album.matched > 0).length)}
-          {summary.albums.filter((album) => album.matched > 0).length === 1 ? "album" : "albums"}:
+          {tn(
+            summary.albums.filter((album) => album.matched > 0).length,
+            "create or fill {n} album:",
+            "create or fill {n} albums:",
+          )}
         </li>
       </ul>
       {#if summary.albums.length > 0}
@@ -1733,25 +1760,24 @@
           {#each summary.albums as album (album.name)}
             <div class:dim={album.matched === 0}>
               <span>{album.name}</span>
-              <span>{formatNumber(album.matched)} of {formatNumber(album.photos)}</span>
+              <span>{t("{index} of {count}", { index: album.matched, count: album.photos })}</span>
             </div>
           {/each}
         </div>
       {/if}
       <p class="dim small">
-        Nothing is removed, and the Apple Photos library is only read. Photos that are not in
-        this folder are skipped.
+        {t("Nothing is removed, and the Apple Photos library is only read. Photos that are not in this folder are skipped.")}
       </p>
       <div class="actions">
         <button class="secondary" onclick={() => (importing = null)} disabled={importing.busy}>
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           class="secondary default"
           onclick={confirmImport}
           disabled={importing.busy || summary.matched === 0}
         >
-          {importing.busy ? "Importing…" : "Import"}
+          {importing.busy ? t("Importing…") : t("Import")}
         </button>
       </div>
     </div>

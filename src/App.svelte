@@ -13,6 +13,7 @@
   import AboutButton from "./lib/AboutButton.svelte";
   import SettingsButton from "./lib/SettingsButton.svelte";
   import { suppressDefaultMenu } from "./lib/contextMenu";
+  import { errorText, locale, t } from "./lib/i18n";
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
@@ -38,7 +39,7 @@
         dropping = false;
         const [path] = event.payload.paths;
         if (event.payload.paths.length > 1) {
-          error = "Drop one folder at a time.";
+          error = t("Drop one folder at a time.");
         } else if (path) {
           open(path);
         }
@@ -53,7 +54,7 @@
     try {
       recents = await listRecentLibraries();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -63,7 +64,7 @@
     try {
       library = await openLibrary(path);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     } finally {
       busy = false;
     }
@@ -76,7 +77,7 @@
       const path = await pickLibraryFolder();
       if (path) await open(path);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -84,7 +85,7 @@
     try {
       recents = await removeRecentLibrary(path);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -93,7 +94,7 @@
     refreshRecents();
   }
 
-  const dateFormat = new Intl.DateTimeFormat(undefined, {
+  const dateFormat = new Intl.DateTimeFormat(locale, {
     dateStyle: "medium",
     timeStyle: "short",
   });
@@ -109,13 +110,13 @@
   <div class="corner"><SettingsButton /><AboutButton /></div>
   <div class="welcome">
     <h1>Photolib</h1>
-    <p class="dim">Browse any folder of photos: a NAS, an external drive or a local disk.</p>
+    <p class="dim">{t("Browse any folder of photos: a NAS, an external drive or a local disk.")}</p>
 
     <div class="drop" class:dropping>
       <button class="primary" onclick={pickAndOpen} disabled={busy}>
-        {busy ? "Opening…" : "Open library folder…"}
+        {busy ? t("Opening…") : t("Open library folder…")}
       </button>
-      <p class="hint">{dropping ? "Drop to open this folder" : "or drop a folder here"}</p>
+      <p class="hint">{dropping ? t("Drop to open this folder") : t("or drop a folder here")}</p>
     </div>
 
     {#if error}
@@ -124,7 +125,7 @@
 
     {#if recents.length > 0}
       <section>
-        <h2>Recent libraries</h2>
+        <h2>{t("Recent libraries")}</h2>
         <ul>
           {#each recents as recent (recent.path)}
             <li class:offline={!recent.available}>
@@ -138,17 +139,17 @@
                 <span class="path">{recent.path}</span>
                 <span class="meta">
                   {#if recent.available}
-                    Opened {dateFormat.format(recent.lastOpened)}
+                    {t("Opened {date}", { date: dateFormat.format(recent.lastOpened) })}
                   {:else}
-                    Not reachable right now
+                    {t("Not reachable right now")}
                   {/if}
                 </span>
               </button>
               <button
                 class="forget"
                 onclick={() => forget(recent.path)}
-                aria-label="Remove {recent.name} from recent libraries"
-                title="Remove from list"
+                aria-label={t("Remove {name} from recent libraries", { name: recent.name })}
+                title={t("Remove from list")}
               >
                 ×
               </button>

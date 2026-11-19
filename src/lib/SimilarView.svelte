@@ -6,9 +6,10 @@
   shared like any hidden photo and undone from Hidden. No file is touched.
 -->
 <script lang="ts">
+  import { errorText, t, tn } from "./i18n";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import { applyOps, similarGroups, thumbUrl, type Op, type SimilarGroup } from "./api";
-  import { formatDateTime, formatNumber, photoCount } from "./format";
+  import { formatDateTime, photoCount } from "./format";
   import { starText } from "./labels";
 
   interface Props {
@@ -41,7 +42,7 @@
     try {
       groups = await similarGroups(libraryPath);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -74,7 +75,7 @@
       for (const group of list) kept.delete(groupKey(group));
       hiddenNow = ops.length;
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     } finally {
       busy = false;
     }
@@ -106,16 +107,16 @@
 <div class="similar">
   <header>
     {#if groups === null}
-      <p class="dim">Looking for similar shots…</p>
+      <p class="dim">{t("Looking for similar shots…")}</p>
     {:else}
       <div class="summary">
-        <h2>Similar shots</h2>
+        <h2>{t("Similar shots")}</h2>
         <p class="dim">
           {#if groups.length === 0}
-            No similar shots found. Photos are compared once their thumbnails are made.
+            {t("No similar shots found. Photos are compared once their thumbnails are made.")}
           {:else}
-            {formatNumber(groups.length)} {groups.length === 1 ? "group" : "groups"} of shots taken moments apart.
-            Click a shot to keep it too, or to drop it.
+            {tn(groups.length, "{n} group of shots taken moments apart.", "{n} groups of shots taken moments apart.")}
+            {t("Click a shot to keep it too, or to drop it.")}
           {/if}
         </p>
       </div>
@@ -123,10 +124,10 @@
         <button
           class="primary"
           disabled={!canEdit || busy}
-          title={canEdit ? "Hide every shot that is not kept, in every group" : "The library is offline or read-only"}
+          title={canEdit ? t("Hide every shot that is not kept, in every group") : t("The library is offline or read-only")}
           onclick={() => groups && hide(groups)}
         >
-          Hide {photoCount(otherCount)} not kept
+          {t("Hide {photos} not kept", { photos: photoCount(otherCount) })}
         </button>
       {/if}
     {/if}
@@ -134,8 +135,7 @@
 
   {#if hiddenNow !== null}
     <div class="notice">
-      {photoCount(hiddenNow)} hidden. They are still in the library folder: find them under <strong>Hidden</strong>
-      to show them again.
+      {t("{photos} hidden. They are still in the library folder; show them again from Hidden.", { photos: photoCount(hiddenNow) })}
     </div>
   {/if}
 
@@ -152,7 +152,7 @@
           <div class="head">
             <span class="dim">{formatDateTime(group.shots[0].sortDate)} · {photoCount(group.shots.length)}</span>
             <button class="secondary" disabled={!canEdit || busy || others === 0} onclick={() => hide([group])}>
-              Hide the {others === 1 ? "other" : `${others} others`}
+              {tn(others, "Hide the other", "Hide the {n} others")}
             </button>
           </div>
           <div class="shots">
@@ -163,10 +163,10 @@
                   class="pick"
                   onclick={() => toggle(group, index)}
                   ondblclick={() => (preview = { group, index })}
-                  title={keeps ? "Kept. Click to drop, double-click to open" : "Click to keep, double-click to open"}
+                  title={keeps ? t("Kept. Click to drop, double-click to open") : t("Click to keep, double-click to open")}
                 >
                   <img src={thumbUrl(shot.fingerprint)} alt="" loading="lazy" draggable="false" />
-                  <span class="badge">{keeps ? "Keep" : "Hide"}</span>
+                  <span class="badge">{keeps ? t("Keep") : t("Hide")}</span>
                   {#if shot.favorite || shot.rating > 0}
                     <span class="marks">{shot.favorite ? "♥ " : ""}{starText(shot.rating)}</span>
                   {/if}
@@ -180,7 +180,7 @@
     </ul>
     {#if shown < groups.length}
       <button class="secondary more" onclick={() => (shown += PAGE)}>
-        Show more ({formatNumber(groups.length - shown)} left)
+        {t("Show more ({n} left)", { n: groups.length - shown })}
       </button>
     {/if}
   {/if}
@@ -194,11 +194,11 @@
     <img src={thumbUrl(shot.fingerprint, "preview")} alt="" draggable="false" />
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="bar" onclick={(event) => event.stopPropagation()}>
-      <span>{preview.index + 1} of {preview.group.shots.length} · {formatDateTime(shot.sortDate)}</span>
+      <span>{t("{index} of {count}", { index: preview.index + 1, count: preview.group.shots.length })} · {formatDateTime(shot.sortDate)}</span>
       <button class="choice" class:keeps onclick={() => preview && toggle(preview.group, preview.index)}>
-        {keeps ? "Keep" : "Hide"}
+        {keeps ? t("Keep") : t("Hide")}
       </button>
-      <span class="hint">← → to move, Space to keep or drop, Esc to close</span>
+      <span class="hint">{t("← → to move, Space to keep or drop, Esc to close")}</span>
     </div>
   </div>
 {/if}

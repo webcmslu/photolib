@@ -1,6 +1,8 @@
 // Star ratings and colour labels, shared through the library like
 // favorites. Mirrors `LABELS` in src-tauri/src/org.rs.
 
+import { t } from "./i18n";
+
 export type LabelColor =
   "red" | "orange" | "yellow" | "green" | "blue" | "purple";
 
@@ -10,12 +12,12 @@ export const LABELS: {
   css: string;
   key?: string;
 }[] = [
-  { color: "red", name: "Red", css: "#ef4444", key: "6" },
-  { color: "orange", name: "Orange", css: "#f97316" },
-  { color: "yellow", name: "Yellow", css: "#eab308", key: "7" },
-  { color: "green", name: "Green", css: "#22c55e", key: "8" },
-  { color: "blue", name: "Blue", css: "#3b82f6", key: "9" },
-  { color: "purple", name: "Purple", css: "#a855f7" },
+  { color: "red", name: t("Red"), css: "#ef4444", key: "6" },
+  { color: "orange", name: t("Orange"), css: "#f97316" },
+  { color: "yellow", name: t("Yellow"), css: "#eab308", key: "7" },
+  { color: "green", name: t("Green"), css: "#22c55e", key: "8" },
+  { color: "blue", name: t("Blue"), css: "#3b82f6", key: "9" },
+  { color: "purple", name: t("Purple"), css: "#a855f7" },
 ];
 
 export const labelCss = (color: string | null) =>

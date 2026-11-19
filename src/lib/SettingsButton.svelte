@@ -6,6 +6,7 @@
   import { onMount } from "svelte";
   import { disableFaces, enableFaces, facesStatus, onFacesDownload, type FacesStatus } from "./api";
   import { formatBytes } from "./format";
+  import { chooseLanguage, errorText, languageChoice, LANGUAGES, t, type LanguageChoice } from "./i18n";
   import type { Order } from "./api";
   import { ORDERS, saveSettings, settings, SLIDE_SECONDS, TRANSITIONS, type Transition } from "./settings.svelte";
 
@@ -36,7 +37,7 @@
     try {
       faces = await facesStatus();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -52,7 +53,7 @@
       faces = await facesStatus();
       onfaceschange?.();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
       faces = await facesStatus().catch(() => faces);
     } finally {
       received = null;
@@ -77,7 +78,7 @@
 
 <svelte:window onkeydown={(event) => open && event.key === "Escape" && (open = false)} />
 
-<button class="settings-button" onclick={show} title="Settings" aria-label="Settings">
+<button class="settings-button" onclick={show} title={t("Settings")} aria-label={t("Settings")}>
   <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
     <circle cx="8" cy="8" r="2.2" />
     <path
@@ -91,37 +92,53 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div class="backdrop" onclick={() => (open = false)}>
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-    <div class="box" role="dialog" aria-modal="true" aria-label="Settings" tabindex="-1" onclick={(event) => event.stopPropagation()}>
+    <div class="box" role="dialog" aria-modal="true" aria-label={t("Settings")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
       <header>
-        <h2>Settings</h2>
-        <button class="close" onclick={() => (open = false)} aria-label="Close">✕</button>
+        <h2>{t("Settings")}</h2>
+        <button class="close" onclick={() => (open = false)} aria-label={t("Close")}>✕</button>
       </header>
 
       <section>
-        <h3>Photos</h3>
+        <h3>{t("Language")}</h3>
         <label class="row">
-          <span>Show photos</span>
+          <span>{t("Language")}</span>
+          <select
+            value={languageChoice()}
+            onchange={(event) => chooseLanguage(event.currentTarget.value as LanguageChoice)}
+          >
+            {#each Object.entries(LANGUAGES) as [value, label] (value)}
+              <option {value}>{value === "system" ? t(label) : label}</option>
+            {/each}
+          </select>
+        </label>
+        <p class="note">{t("The app reloads in the language chosen.")}</p>
+      </section>
+
+      <section>
+        <h3>{t("Photos")}</h3>
+        <label class="row">
+          <span>{t("Show photos")}</span>
           <select value={settings.order} onchange={(event) => setOrder(event.currentTarget.value)}>
             {#each Object.entries(ORDERS) as [value, label] (value)}
               <option {value}>{label}</option>
             {/each}
           </select>
         </label>
-        <p class="note">The Sort button above the photos changes it too.</p>
+        <p class="note">{t("The Sort button above the photos changes it too.")}</p>
       </section>
 
       <section>
-        <h3>Slideshow</h3>
+        <h3>{t("Slideshow")}</h3>
         <label class="row">
-          <span>Each photo stays</span>
+          <span>{t("Each photo stays")}</span>
           <select value={String(settings.slideSeconds)} onchange={(event) => setSeconds(event.currentTarget.value)}>
             {#each SLIDE_SECONDS as seconds (seconds)}
-              <option value={String(seconds)}>{seconds} seconds</option>
+              <option value={String(seconds)}>{t("{n} seconds", { n: seconds })}</option>
             {/each}
           </select>
         </label>
         <label class="row">
-          <span>Transition</span>
+          <span>{t("Transition")}</span>
           <select value={settings.transition} onchange={(event) => setTransition(event.currentTarget.value)}>
             {#each Object.entries(TRANSITIONS) as [value, label] (value)}
               <option {value}>{label}</option>
@@ -131,9 +148,9 @@
       </section>
 
       <section>
-        <h3>People</h3>
+        <h3>{t("People")}</h3>
         <label class="row">
-          <span>Find faces and group photos by person</span>
+          <span>{t("Find faces and group photos by person")}</span>
           <input
             type="checkbox"
             role="switch"
@@ -147,11 +164,11 @@
           <progress value={received} max={faces.downloadBytes}></progress>
         {/if}
         <p class="note">
-          Everything happens on this computer: no photo and no face leaves it.
+          {t("Everything happens on this computer: no photo and no face leaves it.")}
           {#if faces && !faces.downloaded}
-            Switching it on downloads two model files ({formatBytes(faces.downloadBytes)}) once.
+            {t("Switching it on downloads two model files ({size}) once.", { size: formatBytes(faces.downloadBytes) })}
           {:else if faces && !faces.enabled}
-            The people already found stay; no new faces are searched while it is off.
+            {t("The people already found stay; no new faces are searched while it is off.")}
           {/if}
         </p>
       </section>

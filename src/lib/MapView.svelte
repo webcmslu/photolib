@@ -19,6 +19,7 @@
 </script>
 
 <script lang="ts">
+  import { t } from "./i18n";
   import L from "leaflet";
   import "leaflet/dist/leaflet.css";
   import { onMount } from "svelte";
@@ -154,7 +155,7 @@
 
 <div class="map" bind:this={container}></div>
 {#if shown === 0}
-  <p class="empty">No photos with a location in this part of the map.</p>
+  <p class="empty">{t("No photos with a location in this part of the map.")}</p>
 {/if}
 
 <style>

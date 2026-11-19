@@ -7,6 +7,7 @@
   Keys: Space pauses, ← and → step back and forward, Esc ends it.
 -->
 <script lang="ts">
+  import { t } from "./i18n";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import { photoUrl, thumbUrl, type PhotoItem } from "./api";
@@ -161,7 +162,7 @@
   class:idle={!controlsVisible}
   class:paused
   style:--slide-ms="{slideMs}ms"
-  onmousemove={wake} role="dialog" aria-label="Slideshow" aria-modal="true" tabindex="-1">
+  onmousemove={wake} role="dialog" aria-label={t("Slideshow")} aria-modal="true" tabindex="-1">
   {#each [previous, shown] as layer, which (layer?.key ?? `empty-${which}`)}
     {#if layer}
       <div class="layer" class:current={which === 1} class:back={layer.direction === -1}
@@ -184,16 +185,16 @@
   {/each}
 
   {#if finished}
-    <p class="end">End of the slideshow</p>
+    <p class="end">{t("End of the slideshow")}</p>
   {/if}
 
   <div class="controls" class:visible={controlsVisible || paused || finished}>
-    <button onclick={() => step(-1)} title="Previous (←)" aria-label="Previous">‹</button>
-    <button onclick={togglePause} title={paused ? "Play (Space)" : "Pause (Space)"} aria-label={paused ? "Play" : "Pause"}>
+    <button onclick={() => step(-1)} title={t("Previous (←)")} aria-label={t("Previous")}>‹</button>
+    <button onclick={togglePause} title={paused ? t("Play (Space)") : t("Pause (Space)")} aria-label={paused ? t("Play") : t("Pause")}>
       {paused || finished ? "▶" : "❚❚"}
     </button>
-    <button onclick={() => step(1)} title="Next (→)" aria-label="Next">›</button>
-    <button onclick={onclose} title="End (Esc)" aria-label="End the slideshow">✕</button>
+    <button onclick={() => step(1)} title={t("Next (→)")} aria-label={t("Next")}>›</button>
+    <button onclick={onclose} title={t("End (Esc)")} aria-label={t("End the slideshow")}>✕</button>
   </div>
 </div>
 

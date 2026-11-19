@@ -5,6 +5,7 @@
 // Where the app can update itself (a signed update for this system is
 // published with the release), the dialog offers to install it in place;
 // otherwise it links to the installer.
+import { errorText } from "./i18n";
 import { getName, getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -87,7 +88,7 @@ export async function installUpdate(): Promise<void> {
     // Windows closes the app itself to run the installer.
     await relaunch();
   } catch (e) {
-    about.installError = String(e);
+    about.installError = errorText(e);
     about.installable = false;
   } finally {
     about.installing = null;

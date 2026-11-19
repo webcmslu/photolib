@@ -7,6 +7,7 @@
   this screen explains that and offers the download.
 -->
 <script lang="ts">
+  import { errorText, t } from "./i18n";
   import { onMount } from "svelte";
   import {
     enableFaces,
@@ -54,14 +55,14 @@
       await setPersonHidden(libraryPath, person.clusters, hidden);
       people = await listPeople(libraryPath);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
   onMount(() => {
     facesStatus()
       .then((loaded) => (status = loaded))
-      .catch((e) => (error = String(e)));
+      .catch((e) => (error = errorText(e)));
     const unlisten = onFacesDownload((bytes) => {
       if (received !== null) received = bytes;
     });
@@ -73,7 +74,7 @@
     if (!status?.enabled) return;
     listPeople(libraryPath)
       .then((loaded) => (people = loaded))
-      .catch((e) => (error = String(e)));
+      .catch((e) => (error = errorText(e)));
   });
 
   async function download() {
@@ -83,7 +84,7 @@
       await enableFaces();
       status = await facesStatus();
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     } finally {
       received = null;
     }
@@ -103,7 +104,7 @@
       await namePerson(libraryPath, person.clusters, name);
       people = await listPeople(libraryPath);
     } catch (e) {
-      error = String(e);
+      error = errorText(e);
     }
   }
 
@@ -120,24 +121,22 @@
 
   {#if status && !status.enabled}
     <div class="intro">
-      <h2>People</h2>
+      <h2>{t("People")}</h2>
       {#if status.downloaded}
-        <p>Finding faces is switched off in Settings. The people found so far are kept.</p>
+        <p>{t("Finding faces is switched off in Settings. The people found so far are kept.")}</p>
       {:else}
       <p>
-        Photolib can find the faces in your photos and group the photos by person. It all
-        happens on this computer: no photo and no face leaves it.
+        {t("Photolib can find the faces in your photos and group the photos by person. It all happens on this computer: no photo and no face leaves it.")}
       </p>
       <p>
-        This needs two model files ({formatBytes(status.downloadBytes)}), downloaded once from
-        huggingface.co. Searching a large library then takes a while, in the background.
+        {t("This needs two model files ({size}), downloaded once from huggingface.co. Searching a large library then takes a while, in the background.", { size: formatBytes(status.downloadBytes) })}
       </p>
       {/if}
       {#if received !== null}
         <progress value={received} max={status.downloadBytes}></progress>
       {:else}
         <button class="primary" onclick={download}>
-          {status.downloaded ? "Switch on and find people" : "Download and find people"}
+          {status.downloaded ? t("Switch on and find people") : t("Download and find people")}
         </button>
       {/if}
     </div>
@@ -145,8 +144,8 @@
     {#if people.length === 0}
       <p class="empty">
         {searching
-          ? "Looking for faces… People appear here as they are found."
-          : "No people found yet. A person shows up once they are in three photos."}
+          ? t("Looking for faces… People appear here as they are found.")
+          : t("No people found yet. A person shows up once they are in three photos.")}
       </p>
     {:else}
       <ul>
@@ -155,25 +154,25 @@
             <button
               class="hide"
               onclick={() => setHidden(person, !person.hidden)}
-              title={person.hidden ? "Show this person again" : "Hide this person (e.g. a stranger)"}
-              aria-label={person.hidden ? "Show this person again" : "Hide this person"}
+              title={person.hidden ? t("Show this person again") : t("Hide this person (e.g. a stranger)")}
+              aria-label={person.hidden ? t("Show this person again") : t("Hide this person")}
             >
-              {person.hidden ? "Show" : "Hide"}
+              {person.hidden ? t("Show") : t("Hide")}
             </button>
             <button
               class="face"
               onclick={() => onopen(person)}
               oncontextmenu={(event) =>
                 showMenu(event, [
-                  { label: "Open", action: () => onopen(person) },
+                  { label: t("Open"), action: () => onopen(person) },
                   "-",
-                  { label: person.name ? "Rename…" : "Name…", enabled: canEdit, action: () => startNaming(person) },
+                  { label: person.name ? t("Rename…") : t("Name…"), enabled: canEdit, action: () => startNaming(person) },
                   {
-                    label: person.hidden ? "Show in People" : "Hide from People",
+                    label: person.hidden ? t("Show in People") : t("Hide from People"),
                     action: () => setHidden(person, !person.hidden),
                   },
                 ])}
-              aria-label={person.name ?? "Unnamed person"}
+              aria-label={person.name ?? t("Unnamed person")}
             >
               <EditedImage
                 src={thumbUrl(person.cover, "preview")}
@@ -194,7 +193,7 @@
                   bind:value={nameText}
                   use:focus
                   maxlength="200"
-                  placeholder="Name"
+                  placeholder={t("Name")}
                   onblur={() => saveName(person)}
                   onkeydown={(event) => event.key === "Escape" && (naming = null)}
                 />
@@ -205,9 +204,9 @@
                 class:unnamed={!person.name}
                 disabled={!canEdit}
                 onclick={() => startNaming(person)}
-                title="Click to name. The same name for two people merges them."
+                title={t("Click to name. The same name for two people merges them.")}
               >
-                {person.name ?? "Add name"}
+                {person.name ?? t("Add name")}
               </button>
             {/if}
             <span class="count">{formatNumber(person.photos)}</span>
@@ -217,7 +216,7 @@
       {#if hiddenCount > 0}
         <p class="hidden-toggle">
           <button class="link" onclick={() => (showHidden = !showHidden)}>
-            {showHidden ? "Leave out hidden people" : `Show hidden people (${formatNumber(hiddenCount)})`}
+            {showHidden ? t("Leave out hidden people") : t("Show hidden people ({n})", { n: hiddenCount })}
           </button>
         </p>
       {/if}
