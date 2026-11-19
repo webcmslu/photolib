@@ -12,6 +12,8 @@
     appleImportPreview,
     applyOps,
     closeLibrary,
+    importSources,
+    type ImportSource,
     createAlbum,
     libraryStats,
     listAlbums,
@@ -52,6 +54,7 @@
   import AboutButton from "./AboutButton.svelte";
   import SettingsButton from "./SettingsButton.svelte";
   import ExportDialog from "./ExportDialog.svelte";
+  import ImportDialog from "./ImportDialog.svelte";
   import DuplicatesView from "./DuplicatesView.svelte";
   import SimilarView from "./SimilarView.svelte";
   import ShortcutsPanel from "./ShortcutsPanel.svelte";
@@ -94,6 +97,35 @@
   /** `progress.done` at the last live refresh, so a scan with nothing new does not reload. */
   let liveRefreshDone = 0;
   let lastScanStart = Date.now();
+
+  // --- Import from a memory card, camera or folder -------------------------------
+
+  /** The import window, with the drive it imports from if one was chosen. */
+  let deviceImport = $state<{ source: ImportSource | null } | null>(null);
+  /** Drives with photos connected right now, offered in a banner. */
+  let connected = $state<ImportSource[]>([]);
+  /** Drives whose banner was closed; offered again once reconnected. */
+  const dismissedSources = new SvelteSet<string>();
+  const offeredSource = $derived(connected.find((source) => !dismissedSources.has(source.path)) ?? null);
+
+  async function lookForDevices() {
+    if (!online || !writable) return;
+    try {
+      const found = await importSources();
+      for (const path of dismissedSources) {
+        if (!found.some((source) => source.path === path)) dismissedSources.delete(path);
+      }
+      connected = found;
+    } catch {
+      // Tried again in a moment.
+    }
+  }
+
+  onMount(() => {
+    lookForDevices();
+    const deviceTimer = setInterval(lookForDevices, 5000);
+    return () => clearInterval(deviceTimer);
+  });
 
   onMount(() => {
     const unlisten = onIndexEvent(handleIndexEvent);
@@ -1170,6 +1202,18 @@
               <span>{t("Import from Apple Photos…")}<small>{t("Favorites, hidden photos and albums")}</small></span>
             </button>
           {/if}
+          <hr />
+          <button
+            role="menuitem"
+            disabled={!online || !writable}
+            onclick={() => {
+              scanMenuOpen = false;
+              deviceImport = { source: null };
+            }}
+          >
+            <span class="mark"></span>
+            <span>{t("Import photos…")}<small>{t("From a memory card, a camera or a folder")}</small></span>
+          </button>
         </div>
       {/if}
     </span>
@@ -1185,6 +1229,13 @@
   {:else if !writable}
     <p class="banner">
       {t("This folder is read-only. Favorites, albums and hidden photos are kept on this computer only.")}
+    </p>
+  {/if}
+  {#if offeredSource && !deviceImport}
+    <p class="banner device">
+      <span>{t("“{name}” is connected.", { name: offeredSource.name })}</span>
+      <button class="link" onclick={() => (deviceImport = { source: offeredSource })}>{t("Import photos…")}</button>
+      <button class="dismiss" onclick={() => offeredSource && dismissedSources.add(offeredSource.path)} aria-label={t("Dismiss")}>×</button>
     </p>
   {/if}
   {#if imported}
@@ -1718,6 +1769,17 @@
 {#if exporting}
   <ExportDialog libraryPath={library.path} photos={exporting} onclose={() => (exporting = null)} />
 {/if}
+{#if deviceImport}
+  <ImportDialog
+    libraryPath={library.path}
+    source={deviceImport.source}
+    onclose={() => {
+      if (deviceImport?.source) dismissedSources.add(deviceImport.source.path);
+      deviceImport = null;
+    }}
+    onimported={() => rescan()}
+  />
+{/if}
 
 {#if slideshow}
   <Slideshow
@@ -1912,6 +1974,29 @@
     color: var(--danger);
     user-select: text;
     -webkit-user-select: text;
+  }
+
+  .banner.device {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    background: var(--surface);
+    color: var(--text);
+  }
+
+  .banner.device .dismiss {
+    margin-left: auto;
+    color: var(--text-dim);
+  }
+
+  .banner .link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
   }
 
   .dismiss {

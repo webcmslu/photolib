@@ -88,6 +88,15 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 - Similar shots: bursts and near-identical photos taken within a minute are
   grouped by a visual fingerprint of their thumbnails, with a suggested
   shot to keep; the others can be hidden (not moved or deleted).
+- Magic wand (✨ in the viewer): levels, white balance, midtones, contrast
+  and vibrance worked out from the preview (`enhance.rs`), stored as part of
+  the edit. "Apply to original…" in the editing panel writes an edit into a
+  JPEG file after a warning, keeping its metadata (`original.rs`).
+- Import (`importer.rs`): copies the new photos and videos of a memory card,
+  camera or folder into `<folder>/<year>/<year>-<month>/` in the library,
+  checking each copy. A connected drive with a `DCIM` folder is offered in a
+  banner. Imports are remembered in `.photolib/imports/<device>.log`, so a
+  photo is imported only once.
 - English, French and German: Settings › Language (the system's language
   by default). The English text in the code is the key; `src/lib/locales/`
   holds the translations and `npm run check` lists any that are missing.

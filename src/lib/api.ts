@@ -42,6 +42,60 @@ export async function pickExportFolder(): Promise<string | null> {
   return typeof picked === "string" ? picked : null;
 }
 
+// --- Import from a memory card, camera or folder (see importer.rs) -------------
+
+/** A connected drive with a DCIM folder. */
+export interface ImportSource {
+  path: string;
+  name: string;
+}
+
+export interface ImportPreview {
+  new: number;
+  newBytes: number;
+  already: number;
+  unreadable: number;
+  /** Day numbers of the oldest and newest new file. */
+  firstDay: number | null;
+  lastDay: number | null;
+}
+
+export interface ImportSummary {
+  imported: number;
+  bytes: number;
+  already: number;
+  failed: [string, string][];
+  cancelled: boolean;
+}
+
+export interface ImportProgress {
+  done: number;
+  total: number;
+  bytes: number;
+  totalBytes: number;
+}
+
+export function importSources(): Promise<ImportSource[]> {
+  return invoke("import_sources");
+}
+
+export function importPreview(path: string, source: string): Promise<ImportPreview> {
+  return invoke("import_preview", { path, source });
+}
+
+export function importFiles(path: string, source: string, folder: string): Promise<ImportSummary> {
+  return invoke("import_files", { path, source, folder });
+}
+
+export function onImportProgress(handler: (progress: ImportProgress) => void): Promise<UnlistenFn> {
+  return listen<ImportProgress>("import-progress", (event) => handler(event.payload));
+}
+
+export async function pickImportFolder(): Promise<string | null> {
+  const picked = await open({ directory: true, multiple: false, title: t("Import from") });
+  return typeof picked === "string" ? picked : null;
+}
+
 /** The original files, or JPEGs with the edits applied, optionally smaller. */
 export type ExportSize = { kind: "original" } | { kind: "jpeg"; longSide: number | null };
 

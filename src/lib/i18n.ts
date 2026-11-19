@@ -108,6 +108,8 @@ const RUST_MESSAGES = [
   "The file has changed since it was read. Try again after the next scan.",
   "Only JPEG photos can be changed.",
   "Not a valid edit.",
+  "The library folder is read-only, so nothing can be imported into it.",
+  "Not a valid folder name.",
 ];
 
 /** An error to show: a message from the Rust side is translated when it is a known one. */

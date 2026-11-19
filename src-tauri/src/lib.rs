@@ -9,6 +9,7 @@ mod frames;
 mod geo;
 #[cfg(target_os = "macos")]
 mod heic_macos;
+mod importer;
 mod indexer;
 mod media_server;
 mod metadata;
@@ -1156,6 +1157,54 @@ fn apply_edit_to_original(
         .map_err(|e| e.to_string())
 }
 
+/// Memory cards, cameras and other drives with photos (a `DCIM` folder)
+/// connected right now.
+#[tauri::command(async)]
+fn import_sources() -> Vec<importer::Source> {
+    importer::sources()
+}
+
+/// What importing from `source` (a drive or any folder) would copy.
+#[tauri::command(async)]
+fn import_preview(
+    path: String,
+    source: String,
+    state: State<'_, AppState>,
+) -> Result<importer::Preview, String> {
+    let conn = open_index(&state, &path)?;
+    importer::preview(Path::new(&source), Path::new(&path), &conn).map_err(|e| e.to_string())
+}
+
+/// Copies the new photos and videos of `source` into `<library>/<folder>/<year>/<year>-<month>`.
+/// Reports `import-progress`. The caller then checks the library for new files.
+#[tauri::command(async)]
+fn import_files(
+    app: AppHandle,
+    path: String,
+    source: String,
+    folder: String,
+    state: State<'_, AppState>,
+) -> Result<importer::Summary, String> {
+    let open = editable_library(&state, &path)?;
+    if !open.writable {
+        return Err("The library folder is read-only, so nothing can be imported into it.".into());
+    }
+    let conn = open_index(&state, &path)?;
+    state.job_cancel.store(false, Ordering::Relaxed);
+    importer::import(
+        Path::new(&source),
+        Path::new(&path),
+        &conn,
+        &folder,
+        &state.device,
+        &state.job_cancel,
+        |progress| {
+            let _ = app.emit("import-progress", progress);
+        },
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Groups of similar shots (bursts, near-identical photos), newest first.
 #[tauri::command(async)]
 fn similar_groups(path: String, state: State<'_, AppState>) -> Result<Vec<similar::Group>, String> {
@@ -1399,6 +1448,9 @@ pub fn run() {
             similar_groups,
             auto_enhance,
             apply_edit_to_original,
+            import_sources,
+            import_preview,
+            import_files,
             park_duplicates,
             parked_duplicates,
             put_back_duplicates,
