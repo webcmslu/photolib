@@ -1,6 +1,7 @@
 mod apple;
 mod db;
 mod duplicates;
+mod enhance;
 mod export;
 mod faces;
 mod fingerprint;
@@ -1099,6 +1100,21 @@ fn cancel_job(state: State<'_, AppState>) {
     state.job_cancel.store(true, Ordering::Relaxed);
 }
 
+/// The magic wand's corrections for a photo, worked out from its preview.
+#[tauri::command(async)]
+fn auto_enhance(fingerprint: String, state: State<'_, AppState>) -> Result<org::Enhance, String> {
+    if !thumbs::is_fingerprint(&fingerprint) {
+        return Err("Not a photo.".into());
+    }
+    let file = state.thumbs.path(ThumbSize::Preview, &fingerprint);
+    if !file.exists() {
+        make_thumb_on_demand(&state, &fingerprint)
+            .map_err(|()| "The photo can't be read.".to_string())?;
+    }
+    let preview = image::open(file).map_err(|e| e.to_string())?.to_rgb8();
+    Ok(enhance::analyze(&preview))
+}
+
 /// Groups of similar shots (bursts, near-identical photos), newest first.
 #[tauri::command(async)]
 fn similar_groups(path: String, state: State<'_, AppState>) -> Result<Vec<similar::Group>, String> {
@@ -1340,6 +1356,7 @@ pub fn run() {
             cancel_job,
             duplicate_groups,
             similar_groups,
+            auto_enhance,
             park_duplicates,
             parked_duplicates,
             put_back_duplicates,

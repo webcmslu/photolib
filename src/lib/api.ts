@@ -1,7 +1,7 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
 import { t } from "./i18n";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
-import type { Edit } from "./edit";
+import type { Edit, Enhance } from "./edit";
 import type { LabelColor } from "./labels";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -628,6 +628,11 @@ export interface SimilarGroup {
 }
 
 /** Groups of similar shots among the photos that are not hidden, newest first. */
+/** The magic wand's corrections for a photo (see enhance.rs). */
+export function autoEnhance(fingerprint: string): Promise<Enhance> {
+  return invoke("auto_enhance", { fingerprint });
+}
+
 export function similarGroups(path: string): Promise<SimilarGroup[]> {
   return invoke("similar_groups", { path });
 }

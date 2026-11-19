@@ -243,7 +243,6 @@ const fr: Record<string, string> = {
   "Rename": "Renommer",
   "Rename…": "Renommer…",
   "Rescan everything": "Tout réanalyser",
-  "Reset all": "Tout réinitialiser",
   "Resize the sidebar": "Redimensionner la barre latérale",
   "Right": "Droite",
   "Scanning…": "Analyse…",
@@ -378,6 +377,14 @@ const fr: Record<string, string> = {
   "{photos} hidden. They are still in the library folder; show them again from Hidden.": "{photos} masquées. Elles sont toujours dans le dossier de la photothèque ; affichez-les à nouveau depuis Masquées.",
   "{photos} stored more than once:": "{photos} enregistrées plusieurs fois :",
   "← → to move, Space to keep or drop, Esc to close": "← → pour naviguer, Espace pour garder ou écarter, Échap pour fermer",
+  "Couldn't enhance the photo: {detail}": "Impossible d’améliorer la photo : {detail}",
+  "Remove the enhancement": "Retirer l’amélioration",
+  "Enhance": "Améliorer",
+  "Auto": "Auto",
+  "Hold to see the original": "Maintenir pour voir l’original",
+  "Show original": "Voir l’original",
+  "Revert to original": "Revenir à l’original",
+  "The photo can't be read.": "La photo ne peut pas être lue.",
 };
 
 export default fr;

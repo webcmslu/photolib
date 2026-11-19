@@ -123,6 +123,48 @@ pub struct Edit {
     pub contrast: i8,
     #[serde(default)]
     pub saturation: i8,
+    /// The magic wand's corrections, applied before the sliders above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enhance: Option<Enhance>,
+}
+
+/// The corrections the magic wand picked (see enhance.rs). Each colour
+/// channel goes through a curve: its black and white points, then the
+/// midtone exponent, then an S-curve; then the colours are saturated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Enhance {
+    /// Red, green and blue black points, in thousandths of full scale.
+    pub black: [u16; 3],
+    /// Red, green and blue white points, in thousandths (above 1000: that
+    /// channel is darkened).
+    pub white: [u16; 3],
+    /// Midtone exponent in hundredths: below 100 brightens.
+    pub gamma: u16,
+    /// Strength of the S-curve, in percent.
+    pub contrast: u8,
+    /// Extra saturation, in percent.
+    pub vibrance: u8,
+}
+
+impl Enhance {
+    /// Corrections that change nothing.
+    pub const IDENTITY: Enhance = Enhance {
+        black: [0; 3],
+        white: [1000; 3],
+        gamma: 100,
+        contrast: 0,
+        vibrance: 0,
+    };
+
+    fn is_valid(&self) -> bool {
+        (0..3).all(|c| {
+            self.black[c] <= 500
+                && (500..=2000).contains(&self.white[c])
+                && self.white[c] >= self.black[c] + 200
+        }) && (30..=300).contains(&self.gamma)
+            && self.contrast <= 100
+            && self.vibrance <= 100
+    }
 }
 
 impl Edit {
@@ -139,6 +181,7 @@ impl Edit {
             && in_range(self.brightness)
             && in_range(self.contrast)
             && in_range(self.saturation)
+            && self.enhance.is_none_or(|enhance| enhance.is_valid())
     }
 }
 

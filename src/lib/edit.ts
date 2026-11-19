@@ -16,6 +16,20 @@ export interface Edit {
   brightness: number;
   contrast: number;
   saturation: number;
+  /** The magic wand's corrections, applied before the sliders. */
+  enhance?: Enhance | null;
+}
+
+/** See `Enhance` in src-tauri/src/org.rs and enhance.rs. */
+export interface Enhance {
+  /** Red, green and blue black and white points, in thousandths. */
+  black: [number, number, number];
+  white: [number, number, number];
+  /** Midtone exponent in hundredths. */
+  gamma: number;
+  /** S-curve strength and extra saturation, in percent. */
+  contrast: number;
+  vibrance: number;
 }
 
 export const NO_EDIT: Edit = {
@@ -25,6 +39,7 @@ export const NO_EDIT: Edit = {
   brightness: 0,
   contrast: 0,
   saturation: 0,
+  enhance: null,
 };
 
 /** True if the edit changes nothing, so it need not be stored. */
@@ -35,8 +50,31 @@ export function isNeutral(edit: Edit): boolean {
     edit.crop === null &&
     edit.brightness === 0 &&
     edit.contrast === 0 &&
-    edit.saturation === 0
+    edit.saturation === 0 &&
+    !edit.enhance
   );
+}
+
+/**
+ * The curve of one channel (0 red, 1 green, 2 blue) at `x` from 0 to 1.
+ * Must match `curve` in src-tauri/src/enhance.rs.
+ */
+export function enhanceCurve(enhance: Enhance, channel: number, x: number): number {
+  const black = enhance.black[channel] / 1000;
+  const white = enhance.white[channel] / 1000;
+  let y = Math.min(1, Math.max(0, (x - black) / (white - black)));
+  y = Math.pow(y, enhance.gamma / 100);
+  const s = y < 0.5 ? 2 * y * y : 1 - 2 * (1 - y) * (1 - y);
+  return y + (enhance.contrast / 100) * (s - y);
+}
+
+/** The curves sampled for an SVG `feFuncR/G/B type="table"`, one string per channel. */
+export function enhanceTables(enhance: Enhance, samples = 65): [string, string, string] {
+  const table = (channel: number) =>
+    Array.from({ length: samples }, (_, i) =>
+      enhanceCurve(enhance, channel, i / (samples - 1)).toFixed(4),
+    ).join(" ");
+  return [table(0), table(1), table(2)];
 }
 
 /** The CSS `filter` for the light and color adjustments. */

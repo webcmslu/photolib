@@ -103,6 +103,7 @@ const RUST_MESSAGES = [
   "Couldn't write to {detail}",
   "Couldn't read the Photos library: {detail}",
   "Index database error: {detail}",
+  "The photo can't be read.",
 ];
 
 /** An error to show: a message from the Rust side is translated when it is a known one. */

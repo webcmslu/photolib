@@ -4,14 +4,16 @@
   favorite, 1 to 5 to rate, 6 to 9 for a colour label, "h" to hide, Esc to close. Videos play in place (space to pause);
   a Live Photo plays its short video with the LIVE button or "l". "e" opens
   the editing panel: rotate, mirror, crop and adjust, without changing the file.
+  The magic wand (✨) enhances the photo in one click, also without changing it.
 
   It shows the cached preview at once and swaps in the full-size photo when it
   has loaded, so moving through photos stays fast on a slow network.
 -->
 <script lang="ts">
-  import { t, tn } from "./i18n";
+  import { errorText, t, tn } from "./i18n";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
+    autoEnhance,
     photoDetails,
     photoUrl,
     thumbUrl,
@@ -165,9 +167,24 @@
     return probed?.fingerprint === photo.fingerprint ? probed : null;
   });
 
+  /** True while "Show original" is held down in the editing panel. */
+  let comparing = $state(false);
+  /** True while the magic wand is working the photo out. */
+  let enhancing = $state(false);
+  /** A problem to show over the photo, such as the wand failing. */
+  let notice = $state<string | null>(null);
+  $effect(() => {
+    void index;
+    notice = null;
+  });
+
   /** What is drawn: while editing, the draft without its crop (the crop box shows that). */
   const shownEdit = $derived<Edit | null>(
-    editing ? { ...draft, crop: null } : (photo?.edit ?? null),
+    comparing
+      ? { ...NO_EDIT }
+      : editing
+        ? { ...draft, crop: null }
+        : (photo?.edit ?? null),
   );
 
   /** Where the whole (rotated) picture is on the stage while editing. */
@@ -231,6 +248,45 @@
     draft.rotate = (draft.rotate + degrees + 360) % 360;
     draft.crop = null;
     aspect = "free";
+  }
+
+  /** The wand's corrections for the photo on screen, or null if it failed. */
+  async function enhanceFor(fingerprint: string): Promise<Edit["enhance"]> {
+    enhancing = true;
+    try {
+      return await autoEnhance(fingerprint);
+    } catch (e) {
+      notice = t("Couldn't enhance the photo: {detail}", { detail: errorText(e) });
+      return null;
+    } finally {
+      enhancing = false;
+    }
+  }
+
+  /** The magic wand outside the editing panel: enhances, or takes it away. */
+  async function toggleEnhance() {
+    const current = photo;
+    if (!current || current.video || !canEdit || enhancing) return;
+    const edit: Edit = { ...NO_EDIT, ...(current.edit ?? {}) };
+    if (edit.enhance) {
+      edit.enhance = null;
+    } else {
+      edit.enhance = await enhanceFor(current.fingerprint);
+      if (!edit.enhance) return;
+    }
+    await apply([{ op: "edit", photo: current.fingerprint, edit: isNeutral(edit) ? null : edit }]);
+  }
+
+  /** The magic wand in the editing panel: changes the draft only. */
+  async function toggleDraftEnhance() {
+    if (!photo || enhancing) return;
+    if (draft.enhance) {
+      draft.enhance = null;
+      return;
+    }
+    const fingerprint = photo.fingerprint;
+    const enhance = await enhanceFor(fingerprint);
+    if (enhance && editing && photo?.fingerprint === fingerprint) draft.enhance = enhance;
   }
 
   async function saveEdit() {
@@ -526,6 +582,14 @@
         {showingHidden ? t("Unhide") : t("Hide")}
       </button>
       <button
+        onclick={toggleEnhance}
+        disabled={!canEdit || !photo || photo.video || editing || enhancing}
+        aria-pressed={!!photo?.edit?.enhance}
+        title={photo?.edit?.enhance ? t("Remove the enhancement") : t("Enhance")}
+      >
+        ✨
+      </button>
+      <button
         onclick={() => (editing ? (editing = false) : startEditing())}
         disabled={!canEdit || !photo || photo.video}
         aria-pressed={editing}
@@ -625,6 +689,9 @@
           ></video>
         {/if}
       {/if}
+      {#if notice}
+        <p class="notice">{notice}</p>
+      {/if}
 
       {#if index > 0 && !editing}
         <button class="nav previous" onclick={() => go(-1)} aria-label={t("Previous photo")}>‹</button>
@@ -682,6 +749,22 @@
         {/each}
       </div>
 
+      <h3>{t("Enhance")}</h3>
+      <div class="buttons">
+        <button onclick={toggleDraftEnhance} aria-pressed={!!draft.enhance} disabled={enhancing}>
+          ✨ {t("Auto")}
+        </button>
+        <button
+          onpointerdown={() => (comparing = true)}
+          onpointerup={() => (comparing = false)}
+          onpointerleave={() => (comparing = false)}
+          onpointercancel={() => (comparing = false)}
+          title={t("Hold to see the original")}
+        >
+          {t("Show original")}
+        </button>
+      </div>
+
       <h3>{t("Adjust")}</h3>
       {#each [["brightness", t("Brightness")], ["contrast", t("Contrast")], ["saturation", t("Color")]] as const as [key, label] (key)}
         <label>
@@ -699,7 +782,7 @@
           }}
           disabled={isNeutral(draft)}
         >
-          {t("Reset all")}
+          {t("Revert to original")}
         </button>
         <span class="spacer"></span>
         <button onclick={() => (editing = false)}>{t("Cancel")}</button>

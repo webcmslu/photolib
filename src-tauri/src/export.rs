@@ -159,7 +159,8 @@ fn write_jpeg(target: &Path, picture: &RgbImage) -> Result<(), ThumbError> {
 }
 
 /// Draws the edit the way the app shows it (see src/lib/edit.ts): mirror,
-/// then the clockwise turn, then the crop, then light and color.
+/// then the clockwise turn, then the crop, then the magic wand's
+/// corrections, then light and color.
 pub fn apply_edit(mut picture: RgbImage, edit: &Edit) -> RgbImage {
     if edit.flip {
         imageops::flip_horizontal_in_place(&mut picture);
@@ -178,6 +179,9 @@ pub fn apply_edit(mut picture: RgbImage, edit: &Edit) -> RgbImage {
         let cw = scale(width, w).clamp(1, w - x);
         let ch = scale(height, h).clamp(1, h - y);
         picture = imageops::crop_imm(&picture, x, y, cw, ch).to_image();
+    }
+    if let Some(enhance) = &edit.enhance {
+        crate::enhance::apply(&mut picture, enhance);
     }
     adjust(&mut picture, edit);
     picture
@@ -199,12 +203,7 @@ fn adjust(picture: &mut RgbImage, edit: &Edit) {
             ((v - 0.5) * contrast + 0.5).clamp(0.0, 1.0)
         })
         .collect();
-    // The saturate() matrix of the Filter Effects spec.
-    let m = [
-        [0.213 + 0.787 * s, 0.715 - 0.715 * s, 0.072 - 0.072 * s],
-        [0.213 - 0.213 * s, 0.715 + 0.285 * s, 0.072 - 0.072 * s],
-        [0.213 - 0.213 * s, 0.715 - 0.715 * s, 0.072 + 0.928 * s],
-    ];
+    let m = crate::enhance::saturate_matrix(s);
     let saturate = edit.saturation != 0;
     for pixel in picture.pixels_mut() {
         let [r, g, b] = pixel.0.map(|v| table[usize::from(v)]);
@@ -230,6 +229,7 @@ mod tests {
             brightness: 0,
             contrast: 0,
             saturation: 0,
+            enhance: None,
         }
     }
 

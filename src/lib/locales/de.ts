@@ -243,7 +243,6 @@ const de: Record<string, string> = {
   "Rename": "Umbenennen",
   "Rename…": "Umbenennen …",
   "Rescan everything": "Alles neu scannen",
-  "Reset all": "Alles zurücksetzen",
   "Resize the sidebar": "Seitenleiste anpassen",
   "Right": "Rechts",
   "Scanning…": "Wird gescannt …",
@@ -378,6 +377,14 @@ const de: Record<string, string> = {
   "{photos} hidden. They are still in the library folder; show them again from Hidden.": "{photos} ausgeblendet. Sie sind weiterhin im Mediatheksordner; unter „Ausgeblendet“ kannst du sie wieder einblenden.",
   "{photos} stored more than once:": "{photos} mehrfach gespeichert:",
   "← → to move, Space to keep or drop, Esc to close": "← → zum Wechseln, Leertaste zum Behalten oder Verwerfen, Esc zum Schließen",
+  "Couldn't enhance the photo: {detail}": "Das Foto konnte nicht verbessert werden: {detail}",
+  "Remove the enhancement": "Verbesserung entfernen",
+  "Enhance": "Verbessern",
+  "Auto": "Auto",
+  "Hold to see the original": "Gedrückt halten, um das Original zu sehen",
+  "Show original": "Original zeigen",
+  "Revert to original": "Zum Original zurück",
+  "The photo can't be read.": "Das Foto kann nicht gelesen werden.",
 };
 
 export default de;
