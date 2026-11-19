@@ -11,30 +11,36 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 
-const CHUNK: u64 = 64 * 1024;
+/// How much of each end of a file the fingerprint reads.
+pub const CHUNK: u64 = 64 * 1024;
 
 /// Returns the fingerprint as 64 lowercase hex characters.
 pub fn fingerprint(path: &Path) -> io::Result<String> {
     let mut file = File::open(path)?;
     let size = file.metadata()?.len();
-
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(&size.to_le_bytes());
-
     if size <= 2 * CHUNK {
         let mut all = Vec::with_capacity(size as usize);
         file.read_to_end(&mut all)?;
-        hasher.update(&all);
+        Ok(from_parts(size, &all, &[]))
     } else {
-        let mut buf = vec![0u8; CHUNK as usize];
-        file.read_exact(&mut buf)?;
-        hasher.update(&buf);
+        let mut head = vec![0u8; CHUNK as usize];
+        file.read_exact(&mut head)?;
+        let mut tail = vec![0u8; CHUNK as usize];
         file.seek(SeekFrom::End(-(CHUNK as i64)))?;
-        file.read_exact(&mut buf)?;
-        hasher.update(&buf);
+        file.read_exact(&mut tail)?;
+        Ok(from_parts(size, &head, &tail))
     }
+}
 
-    Ok(hasher.finalize().to_hex().to_string())
+/// The fingerprint of a file of `size` bytes from what it reads: the whole
+/// file in `head` if it is 128 KB or less (and `tail` empty), else its first
+/// and last 64 KB. For files that are not on a disk, such as on a phone.
+pub fn from_parts(size: u64, head: &[u8], tail: &[u8]) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&size.to_le_bytes());
+    hasher.update(head);
+    hasher.update(tail);
+    hasher.finalize().to_hex().to_string()
 }
 
 #[cfg(test)]

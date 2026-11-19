@@ -12,6 +12,7 @@
     importPreview,
     importSources,
     onImportProgress,
+    onImportSurvey,
     pickImportFolder,
     type ImportPreview,
     type ImportProgress,
@@ -38,6 +39,10 @@
   let progress = $state<ImportProgress | null>(null);
   let summary = $state<ImportSummary | null>(null);
   let error = $state<string | null>(null);
+  /** Files of the source read so far, while looking for new ones. */
+  let surveyed = $state<[number, number] | null>(null);
+  /** The phone is locked or doesn't trust this computer yet. */
+  let needsTrust = $state(false);
   const running = $derived(progress !== null && summary === null);
 
   /** The folder each source was last imported into, by name. */
@@ -59,8 +64,10 @@
     const unlisten = onImportProgress((next) => {
       if (progress) progress = next;
     });
+    const unlistenSurvey = onImportSurvey((done, total) => (surveyed = [done, total]));
     return () => {
       unlisten.then((stop) => stop());
+      unlistenSurvey.then((stop) => stop());
     };
   });
 
@@ -69,18 +76,31 @@
     folder = rememberedFolder(chosen.name);
     preview = null;
     error = null;
+    surveyed = null;
+    needsTrust = chosen.restricted;
+    if (needsTrust) {
+      error = t("Unlock the device and tap “Trust” on it, then try again.");
+      return;
+    }
     try {
       preview = await importPreview(libraryPath, chosen.path);
     } catch (e) {
       error = errorText(e);
+      needsTrust = error === t("Unlock the device and tap “Trust” on it, then try again.");
     }
+  }
+
+  /** Asks again for the state of a phone (unlocked and trusted since?). */
+  async function retry(current: ImportSource) {
+    const found = await importSources().catch(() => [] as ImportSource[]);
+    await choose(found.find((s) => s.path === current.path) ?? { ...current, restricted: false });
   }
 
   async function chooseFolder() {
     const path = await pickImportFolder().catch(() => null);
     if (!path) return;
     const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-    await choose({ path, name });
+    await choose({ path, name, restricted: false });
   }
 
   async function start() {
@@ -185,11 +205,24 @@
             </label>
           {/if}
         {:else if !error}
-          <p>{t("Looking for new photos…")}</p>
-          <progress></progress>
+          <p>
+            {t("Looking for new photos…")}
+            {#if surveyed && surveyed[1] > 0}
+              <span class="note">{t("{done} of {total}", { done: surveyed[0], total: surveyed[1] })}</span>
+            {/if}
+          </p>
+          {#if surveyed && surveyed[1] > 0}
+            <progress value={surveyed[0]} max={surveyed[1]}></progress>
+          {:else}
+            <progress></progress>
+          {/if}
+          <p class="note">{t("A phone with many photos can take a few minutes the first time.")}</p>
         {/if}
         {#if error}
           <p class="error" role="alert">{error}</p>
+          {#if needsTrust}
+            <button class="source" onclick={() => source && retry(source)}>{t("Try again")}</button>
+          {/if}
         {/if}
       </section>
       <footer>
@@ -203,10 +236,13 @@
         {#if sources.length > 0}
           <p>{t("Connected:")}</p>
           {#each sources as found (found.path)}
-            <button class="source" onclick={() => choose(found)}>{found.name}</button>
+            <button class="source" onclick={() => choose(found)}>
+              {found.name}
+              {#if found.restricted}<span class="note">— {t("unlock it and tap “Trust”")}</span>{/if}
+            </button>
           {/each}
         {:else}
-          <p class="note">{t("No memory card or camera is connected. You can also import from any folder.")}</p>
+          <p class="note">{t("No phone, memory card or camera is connected. You can also import from any folder.")}</p>
         {/if}
       </section>
       <footer>

@@ -1,5 +1,7 @@
 mod apple;
 mod db;
+#[cfg(target_os = "macos")]
+mod camera_macos;
 mod duplicates;
 mod enhance;
 mod export;
@@ -1167,12 +1169,16 @@ fn import_sources() -> Vec<importer::Source> {
 /// What importing from `source` (a drive or any folder) would copy.
 #[tauri::command(async)]
 fn import_preview(
+    app: AppHandle,
     path: String,
     source: String,
     state: State<'_, AppState>,
 ) -> Result<importer::Preview, String> {
     let conn = open_index(&state, &path)?;
-    importer::preview(Path::new(&source), Path::new(&path), &conn).map_err(|e| e.to_string())
+    importer::preview(&source, Path::new(&path), &conn, |done, total| {
+        let _ = app.emit("import-survey", [done, total]);
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// Copies the new photos and videos of `source` into `<library>/<folder>/<year>/<year>-<month>`.
@@ -1192,12 +1198,15 @@ fn import_files(
     let conn = open_index(&state, &path)?;
     state.job_cancel.store(false, Ordering::Relaxed);
     importer::import(
-        Path::new(&source),
+        &source,
         Path::new(&path),
         &conn,
         &folder,
         &state.device,
         &state.job_cancel,
+        |done, total| {
+            let _ = app.emit("import-survey", [done, total]);
+        },
         |progress| {
             let _ = app.emit("import-progress", progress);
         },

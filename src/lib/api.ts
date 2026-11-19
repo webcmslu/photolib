@@ -44,10 +44,12 @@ export async function pickExportFolder(): Promise<string | null> {
 
 // --- Import from a memory card, camera or folder (see importer.rs) -------------
 
-/** A connected drive with a DCIM folder. */
+/** A connected drive with a DCIM folder, or (Mac) a phone or camera on USB. */
 export interface ImportSource {
   path: string;
   name: string;
+  /** A phone that is locked, or does not trust this computer yet. */
+  restricted: boolean;
 }
 
 export interface ImportPreview {
@@ -89,6 +91,11 @@ export function importFiles(path: string, source: string, folder: string): Promi
 
 export function onImportProgress(handler: (progress: ImportProgress) => void): Promise<UnlistenFn> {
   return listen<ImportProgress>("import-progress", (event) => handler(event.payload));
+}
+
+/** `[done, total]` while the files of a source are read before an import. */
+export function onImportSurvey(handler: (done: number, total: number) => void): Promise<UnlistenFn> {
+  return listen<[number, number]>("import-survey", (event) => handler(...event.payload));
 }
 
 export async function pickImportFolder(): Promise<string | null> {

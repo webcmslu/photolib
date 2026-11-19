@@ -1212,7 +1212,7 @@
             }}
           >
             <span class="mark"></span>
-            <span>{t("Import photos…")}<small>{t("From a memory card, a camera or a folder")}</small></span>
+            <span>{t("Import photos…")}<small>{t("From a phone, a memory card, a camera or a folder")}</small></span>
           </button>
         </div>
       {/if}
@@ -1234,7 +1234,11 @@
   {#if offeredSource && !deviceImport}
     <p class="banner device">
       <span>{t("“{name}” is connected.", { name: offeredSource.name })}</span>
-      <button class="link" onclick={() => (deviceImport = { source: offeredSource })}>{t("Import photos…")}</button>
+      {#if offeredSource.restricted}
+        <span>{t("Unlock it and tap “Trust” on it to import its photos.")}</span>
+      {:else}
+        <button class="link" onclick={() => (deviceImport = { source: offeredSource })}>{t("Import photos…")}</button>
+      {/if}
       <button class="dismiss" onclick={() => offeredSource && dismissedSources.add(offeredSource.path)} aria-label={t("Dismiss")}>×</button>
     </p>
   {/if}

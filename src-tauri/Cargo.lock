@@ -3146,6 +3146,7 @@ name = "photolib"
 version = "0.1.9"
 dependencies = [
  "blake3",
+ "cc",
  "chrono",
  "fast_image_resize",
  "getrandom 0.3.4",

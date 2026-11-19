@@ -14,6 +14,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Compiles the Objective-C bridge to ImageCaptureCore (iPhone import, macOS).
+cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
