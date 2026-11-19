@@ -45,6 +45,8 @@ pub enum Phase {
     Scanning,
     Indexing,
     Thumbnails,
+    /// Working out which photos look alike (see similar.rs).
+    Comparing,
     Faces,
 }
 

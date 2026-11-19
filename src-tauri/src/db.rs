@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -101,6 +101,12 @@ CREATE TABLE log_offsets (
     offset  INTEGER NOT NULL
 ) WITHOUT ROWID;
 CREATE INDEX photos_fingerprint ON photos (fingerprint);
+-- A small visual fingerprint of each photo, to find similar shots (see
+-- similar.rs). Keyed by content, like the thumbnails it is made from.
+CREATE TABLE visual (
+    fingerprint TEXT PRIMARY KEY,
+    hash        INTEGER NOT NULL
+) WITHOUT ROWID;
 ";
 
 /// One indexed file.
@@ -239,6 +245,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         version = 8;
     }
+    if version == 8 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS visual (
+                 fingerprint TEXT PRIMARY KEY,
+                 hash        INTEGER NOT NULL
+             ) WITHOUT ROWID;
+             PRAGMA user_version = 9;
+             COMMIT;",
+        )?;
+        version = 9;
+    }
     if version == SCHEMA_VERSION {
         return Ok(());
     }
@@ -249,6 +267,7 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
          DROP TABLE IF EXISTS photos;
          DROP TABLE IF EXISTS org_state;
          DROP TABLE IF EXISTS log_offsets;
+         DROP TABLE IF EXISTS visual;
          {SCHEMA}
          PRAGMA user_version = {SCHEMA_VERSION};
          COMMIT;"

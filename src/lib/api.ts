@@ -176,7 +176,7 @@ export function removeRecentLibrary(path: string): Promise<RecentLibrary[]> {
 
 /** Mirrors `Progress` in src-tauri/src/indexer.rs. */
 export interface ScanProgress {
-  phase: "scanning" | "indexing" | "thumbnails" | "faces";
+  phase: "scanning" | "indexing" | "thumbnails" | "comparing" | "faces";
   /** Image files found so far by the folder walk. */
   discovered: number;
   /** Items the current phase has to process, and how many are done. */

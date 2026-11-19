@@ -206,6 +206,9 @@
       if (progress?.phase === "faces") {
         return `Finding faces: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
       }
+      if (progress?.phase === "comparing") {
+        return `Comparing photos: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
+      }
       if (progress?.phase === "thumbnails") {
         return `Making thumbnails: ${formatNumber(progress.done)} of ${formatNumber(progress.total)}`;
       }

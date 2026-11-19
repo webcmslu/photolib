@@ -17,6 +17,7 @@ mod places;
 mod raw;
 mod recents;
 mod search;
+mod similar;
 mod thumbs;
 mod video;
 
@@ -326,8 +327,9 @@ fn run_scan(
     let summary = match indexer::scan_with(root, &mut conn, mode, cancel, &on_progress) {
         Ok(summary) => summary,
         Err(e @ indexer::ScanError::RootUnreachable(_)) => {
-            // Faces are searched in the cached thumbnails: no need for the
-            // library to be reachable.
+            // Similar shots and faces are found in the cached thumbnails: no
+            // need for the library to be reachable.
+            similar::hash_pending(&mut conn, cache, cancel, &on_progress)?;
             find_people(app, library_path, &mut conn, cache, cancel, &on_progress)?;
             return Err(e);
         }
@@ -348,9 +350,10 @@ fn run_scan(
         db::pair_parts(&mut conn)?;
     }
 
-    // Last, and only if the user switched it on: look for faces in the new
-    // photos and put them into groups.
+    // Then what is worked out from the thumbnails: which photos look alike,
+    // and last, only if the user switched it on, the faces.
     if !thumbnails.cancelled {
+        similar::hash_pending(&mut conn, cache, cancel, &on_progress)?;
         find_people(app, library_path, &mut conn, cache, cancel, &on_progress)?;
     }
     Ok((summary, thumbnails))
@@ -1096,6 +1099,12 @@ fn cancel_job(state: State<'_, AppState>) {
     state.job_cancel.store(true, Ordering::Relaxed);
 }
 
+/// Groups of similar shots (bursts, near-identical photos), newest first.
+#[tauri::command(async)]
+fn similar_groups(path: String, state: State<'_, AppState>) -> Result<Vec<similar::Group>, String> {
+    similar::groups(&open_index(&state, &path)?).map_err(|e| e.to_string())
+}
+
 /// Every photo stored more than once, with the copy the app suggests keeping.
 #[tauri::command(async)]
 fn duplicate_groups(
@@ -1330,6 +1339,7 @@ pub fn run() {
             export_photos,
             cancel_job,
             duplicate_groups,
+            similar_groups,
             park_duplicates,
             parked_duplicates,
             put_back_duplicates,
