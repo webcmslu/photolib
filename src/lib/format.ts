@@ -28,6 +28,11 @@ const shortDateFormat = new Intl.DateTimeFormat(locale, {
   timeZone: "UTC",
 });
 
+/** French and some other languages write month and day names in lower
+ * case; a heading or a line still starts with a capital: "Octobre 2023". */
+const capitalized = (text: string) =>
+  text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
+
 export const formatNumber = (value: number) => numberFormat.format(value);
 
 /** "Dec 28, 2024 – Jan 1, 2025", or a single date, from two day numbers. */
@@ -38,10 +43,12 @@ export function formatDayRange(first: number, last: number): string {
 }
 
 /** "Sunday, 14 July" for a day number (days since 1970-01-01). */
-export const formatDay = (day: number) => dayFormat.format(day * DAY_MS);
+export const formatDay = (day: number) =>
+  capitalized(dayFormat.format(day * DAY_MS));
 
 /** "July 2024" for a day number. */
-export const formatMonth = (day: number) => monthFormat.format(day * DAY_MS);
+export const formatMonth = (day: number) =>
+  capitalized(monthFormat.format(day * DAY_MS));
 
 /** "0:07", "12:34" or "1:02:03" for a video length. */
 export function formatDuration(ms: number): string {
@@ -59,7 +66,8 @@ export function monthKey(day: number): number {
   return date.getUTCFullYear() * 12 + date.getUTCMonth();
 }
 
-export const formatDateTime = (sortDate: number) => dateTimeFormat.format(sortDate);
+export const formatDateTime = (sortDate: number) =>
+  capitalized(dateTimeFormat.format(sortDate));
 
 export function formatBytes(bytes: number): string {
   const units = [t("bytes"), "KB", "MB", "GB"];
