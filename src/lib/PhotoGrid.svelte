@@ -38,6 +38,8 @@
     shapes?: number[] | null;
     /** Told the oldest and newest day on screen whenever they change. */
     onrange?: (range: { oldest: number; newest: number } | null) => void;
+    /** Starts a slideshow of the month that `day` is in, from its title. */
+    onmonthslideshow?: (day: number) => void;
   }
   let {
     groups,
@@ -50,6 +52,7 @@
     fit = "square",
     shapes = null,
     onrange,
+    onmonthslideshow,
   }: Props = $props();
 
   /** A plain click opens a photo, unless a selection is under way. */
@@ -477,7 +480,19 @@
       {#if section.day !== null}
         <header style:transform="translateY({section.top}px)" style:height="{section.headerHeight}px">
           {#if section.monthTitle}
-            <h2>{section.monthTitle}</h2>
+            <h2>
+              {section.monthTitle}
+              {#if onmonthslideshow}
+                <button
+                  class="play"
+                  onclick={() => section.day !== null && onmonthslideshow(section.day)}
+                  title="Slideshow of {section.monthTitle}"
+                  aria-label="Slideshow of {section.monthTitle}"
+                >
+                  <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M4 2.5v11L13.5 8z" /></svg>
+                </button>
+              {/if}
+            </h2>
           {/if}
           <h3>
             {formatDay(section.day)}
@@ -664,9 +679,42 @@
   }
 
   h2 {
+    display: flex;
+    gap: 10px;
     margin: 0 0 6px;
     font-size: 20px;
     font-weight: 650;
+  }
+
+  .play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--surface-hover);
+    color: var(--text-dim);
+    cursor: pointer;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+    align-self: center;
+  }
+
+  h2:hover .play,
+  .play:focus-visible {
+    opacity: 1;
+  }
+
+  .play:hover {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .play svg {
+    fill: currentColor;
   }
 
   h3 {

@@ -26,8 +26,10 @@
      * month's title it is the month's last day, and `month` is true.
      */
     onday: (day: number, month?: boolean) => void;
+    /** Starts a slideshow of the month that `day` is in. */
+    onslideshow?: (day: number) => void;
   }
-  let { mode, months, startYear = null, onyear, onday }: Props = $props();
+  let { mode, months, startYear = null, onyear, onday, onslideshow }: Props = $props();
 
   const DAY_MS = 86_400_000;
   const monthTitle = (entry: MonthSummary) =>
@@ -122,6 +124,16 @@
         <h2>
           <button class="title" onclick={() => onday(lastDay(entry), true)}>{monthTitle(entry)}</button>
           <span class="count">{photoCount(entry.count)}</span>
+          {#if onslideshow}
+            <button
+              class="play"
+              onclick={() => onslideshow(lastDay(entry))}
+              title="Slideshow of {monthTitle(entry)}"
+              aria-label="Slideshow of {monthTitle(entry)}"
+            >
+              <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true"><path d="M4 2.5v11L13.5 8z" /></svg>
+            </button>
+          {/if}
         </h2>
         <div
           class="days"
@@ -255,6 +267,37 @@
     color: var(--text-dim);
     font-size: 13px;
     font-weight: 400;
+  }
+
+  .play {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: var(--surface-hover);
+    color: var(--text-dim);
+    cursor: pointer;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+    align-self: center;
+  }
+
+  h2:hover .play,
+  .play:focus-visible {
+    opacity: 1;
+  }
+
+  .play:hover {
+    background: var(--accent);
+    color: var(--accent-text);
+  }
+
+  .play svg {
+    fill: currentColor;
   }
 
   .days {

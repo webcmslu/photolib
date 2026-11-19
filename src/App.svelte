@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { onMount } from "svelte";
   import {
     listRecentLibraries,
@@ -10,13 +11,42 @@
   } from "./lib/api";
   import LibraryView from "./lib/LibraryView.svelte";
   import AboutButton from "./lib/AboutButton.svelte";
+  import SettingsButton from "./lib/SettingsButton.svelte";
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
   let error = $state<string | null>(null);
   let busy = $state(false);
 
-  onMount(refreshRecents);
+  /** True while a folder is dragged over the welcome screen. */
+  let dropping = $state(false);
+
+  onMount(() => {
+    refreshRecents();
+    // A folder dropped on the window opens as a library, on the welcome
+    // screen only: in a library the window has other things to do.
+    const unlisten = getCurrentWebview().onDragDropEvent((event) => {
+      const kind = event.payload.type;
+      if (library || busy) {
+        dropping = false;
+        return;
+      }
+      if (kind === "enter" || kind === "over") dropping = true;
+      else if (kind === "leave") dropping = false;
+      else if (kind === "drop") {
+        dropping = false;
+        const [path] = event.payload.paths;
+        if (event.payload.paths.length > 1) {
+          error = "Drop one folder at a time.";
+        } else if (path) {
+          open(path);
+        }
+      }
+    });
+    return () => {
+      unlisten.then((stop) => stop());
+    };
+  });
 
   async function refreshRecents() {
     try {
@@ -73,14 +103,17 @@
     <LibraryView {library} onclose={closeLibrary} />
   {/key}
 {:else}
-  <div class="corner"><AboutButton /></div>
+  <div class="corner"><SettingsButton /><AboutButton /></div>
   <div class="welcome">
     <h1>Photolib</h1>
     <p class="dim">Browse any folder of photos: a NAS, an external drive or a local disk.</p>
 
-    <button class="primary" onclick={pickAndOpen} disabled={busy}>
-      {busy ? "Opening…" : "Open library folder…"}
-    </button>
+    <div class="drop" class:dropping>
+      <button class="primary" onclick={pickAndOpen} disabled={busy}>
+        {busy ? "Opening…" : "Open library folder…"}
+      </button>
+      <p class="hint">{dropping ? "Drop to open this folder" : "or drop a folder here"}</p>
+    </div>
 
     {#if error}
       <p class="error" role="alert">{error}</p>
@@ -129,6 +162,8 @@
     position: fixed;
     top: 12px;
     right: 12px;
+    display: flex;
+    gap: 6px;
   }
 
   .welcome {
@@ -158,8 +193,33 @@
     color: var(--text-dim);
   }
 
-  .primary {
+  .drop {
     margin-top: 24px;
+    padding: 24px 16px 18px;
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    transition:
+      border-color 0.15s,
+      background 0.15s;
+  }
+
+  .drop.dropping {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+  }
+
+  .hint {
+    margin: 10px 0 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .dropping .hint {
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .primary {
     padding: 10px 20px;
     border: none;
     border-radius: 8px;

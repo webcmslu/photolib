@@ -77,6 +77,30 @@ pub fn models_present(app_data_dir: &Path) -> bool {
     })
 }
 
+/// The file whose presence means the user switched face grouping off in the
+/// settings. The models stay, so switching it back on needs no download.
+fn off_marker(app_data_dir: &Path) -> std::path::PathBuf {
+    app_data_dir.join("faces-off")
+}
+
+/// True when the user switched face grouping off.
+pub fn switched_off(app_data_dir: &Path) -> bool {
+    off_marker(app_data_dir).exists()
+}
+
+/// Switches face grouping off or (back) on.
+pub fn set_switched_off(app_data_dir: &Path, off: bool) -> io::Result<()> {
+    let marker = off_marker(app_data_dir);
+    if off {
+        fs::write(marker, b"")
+    } else {
+        match fs::remove_file(marker) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
+}
+
 /// Downloads the model files that are missing. `on_progress` gets the bytes
 /// received so far, out of [`DOWNLOAD_BYTES`].
 pub fn download_models(app_data_dir: &Path, on_progress: &dyn Fn(u64)) -> io::Result<()> {

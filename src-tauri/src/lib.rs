@@ -355,6 +355,10 @@ fn run_scan(
 /// (the models were never downloaded) or they can't be loaded.
 fn face_finder(state: &AppState) -> Option<Arc<faces::FaceFinder>> {
     let mut slot = state.face_finder.lock().unwrap();
+    if faces::switched_off(&state.data_dir) {
+        *slot = None; // frees the models' memory
+        return None;
+    }
     if slot.is_none() && faces::models_present(&state.data_dir) {
         *slot = faces::FaceFinder::load(&state.data_dir).ok().map(Arc::new);
     }
@@ -581,6 +585,13 @@ fn open_library(
     state: State<'_, AppState>,
 ) -> Result<LibraryInfo, String> {
     let dir = Path::new(&path);
+    // E.g. a photo dropped on the window instead of its folder.
+    if dir.is_file() {
+        return Err(format!(
+            "\"{}\" is a file. Open the folder that holds your photos.",
+            library_name(dir)
+        ));
+    }
     // Listing it, not just seeing that it exists, is what proves it is reachable.
     let online = dir.is_dir() && fs::read_dir(dir).is_ok();
     let mut writable = false;
@@ -835,16 +846,21 @@ fn editable_library(state: &AppState, path: &str) -> Result<OpenLibrary, String>
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FacesStatus {
-    /// True once the face models are on this computer.
+    /// True when faces are searched: the models are on this computer and
+    /// face grouping is not switched off.
     enabled: bool,
+    /// True once the face models are on this computer.
+    downloaded: bool,
     /// Size of the download that switching it on needs.
     download_bytes: u64,
 }
 
 #[tauri::command(async)]
 fn faces_status(state: State<'_, AppState>) -> FacesStatus {
+    let downloaded = faces::models_present(&state.data_dir);
     FacesStatus {
-        enabled: faces::models_present(&state.data_dir),
+        enabled: downloaded && !faces::switched_off(&state.data_dir),
+        downloaded,
         download_bytes: faces::DOWNLOAD_BYTES,
     }
 }
@@ -854,6 +870,8 @@ fn faces_status(state: State<'_, AppState>) -> FacesStatus {
 /// again so that its photos are searched for faces.
 #[tauri::command(async)]
 fn enable_faces(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    faces::set_switched_off(&state.data_dir, false)
+        .map_err(|e| format!("Couldn't save the setting: {e}"))?;
     faces::download_models(&state.data_dir, &|received| {
         let _ = app.emit("faces-download", received);
     })
@@ -862,6 +880,16 @@ fn enable_faces(app: AppHandle, state: State<'_, AppState>) -> Result<(), String
     if let Some(open) = open {
         start_scan(&app, &open.path, indexer::Mode::Changes);
     }
+    Ok(())
+}
+
+/// Switches face grouping off: no more faces are searched, and the people
+/// already found stay. `enable_faces` switches it back on.
+#[tauri::command(async)]
+fn disable_faces(state: State<'_, AppState>) -> Result<(), String> {
+    faces::set_switched_off(&state.data_dir, true)
+        .map_err(|e| format!("Couldn't save the setting: {e}"))?;
+    *state.face_finder.lock().unwrap() = None;
     Ok(())
 }
 
@@ -1057,6 +1085,7 @@ pub fn run() {
             apple_import,
             faces_status,
             enable_faces,
+            disable_faces,
             people,
             name_person,
             months,

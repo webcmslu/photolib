@@ -1,6 +1,7 @@
 <!--
-  A full-screen slideshow: the selected photos, or the whole listing, one
-  after the other with a cross-fade. Each photo is loaded at full size before
+  A full-screen slideshow: the selected photos, a month, or the whole
+  listing, one after the other. How long each photo stays and the
+  transition between them are chosen in Settings. Each photo is loaded at full size before
   it is shown; videos are skipped.
 
   Keys: Space pauses, ← and → step back and forward, Esc ends it.
@@ -11,6 +12,7 @@
   import { photoUrl, thumbUrl, type PhotoItem } from "./api";
   import EditedImage from "./EditedImage.svelte";
   import type { PhotoPages } from "./pages.svelte";
+  import { settings } from "./settings.svelte";
 
   interface Props {
     pages: PhotoPages;
@@ -22,13 +24,21 @@
   }
   let { pages, count, indexAt, onclose }: Props = $props();
 
-  const SLIDE_MS = 4000;
+  const slideMs = $derived(settings.slideSeconds * 1000);
+  const transition = $derived(settings.transition);
   /** Longest wait for the full-size file before showing the preview instead. */
   const LOAD_LIMIT_MS = 5000;
 
   /** The two layers that cross-fade: the photo on screen and the one before. */
-  let shown = $state<{ photo: PhotoItem; src: string; key: number } | null>(null);
-  let previous = $state<{ photo: PhotoItem; src: string; key: number } | null>(null);
+  interface Layer {
+    photo: PhotoItem;
+    src: string;
+    key: number;
+    /** 1 going forward, -1 going back: the side a sliding photo comes from. */
+    direction: 1 | -1;
+  }
+  let shown = $state<Layer | null>(null);
+  let previous = $state<Layer | null>(null);
   let position = -1;
   let paused = $state(false);
   let finished = $state(false);
@@ -66,7 +76,7 @@
       const src = await preload(photo);
       if (mine !== generation) return;
       previous = shown;
-      shown = { photo, src, key: next };
+      shown = { photo, src, key: next, direction: step };
       position = next;
       schedule();
       return;
@@ -76,7 +86,7 @@
 
   function schedule() {
     clearTimeout(timer);
-    if (!paused && !finished) timer = setTimeout(() => show(position, 1), SLIDE_MS);
+    if (!paused && !finished) timer = setTimeout(() => show(position, 1), slideMs);
   }
 
   function togglePause() {
@@ -138,10 +148,16 @@
 <svelte:window onkeydown={onkeydown} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="slideshow" class:idle={!controlsVisible} onmousemove={wake} role="dialog" aria-label="Slideshow" aria-modal="true" tabindex="-1">
+<div
+  class="slideshow t-{transition}"
+  class:idle={!controlsVisible}
+  class:paused
+  style:--slide-ms="{slideMs}ms"
+  onmousemove={wake} role="dialog" aria-label="Slideshow" aria-modal="true" tabindex="-1">
   {#each [previous, shown] as layer, which (layer?.key ?? `empty-${which}`)}
     {#if layer}
-      <div class="layer" class:current={which === 1}>
+      <div class="layer" class:current={which === 1} class:back={layer.direction === -1}>
+        <div class="motion pan-{layer.key % 4}">
         {#if layer.photo.edit}
           <EditedImage
             src={layer.src}
@@ -153,6 +169,7 @@
         {:else}
           <img src={layer.src} alt="" draggable="false" />
         {/if}
+        </div>
       </div>
     {/if}
   {/each}
@@ -177,6 +194,7 @@
     inset: 0;
     z-index: 100;
     background: #000;
+    overflow: hidden;
     outline: none;
   }
 
@@ -191,13 +209,109 @@
     inset: 0;
   }
 
-  .layer.current {
+  .motion {
+    width: 100%;
+    height: 100%;
+  }
+
+  .t-fade .layer.current,
+  .t-kenburns .layer.current {
     animation: fade-in 0.9s ease;
+  }
+
+  .t-slide .layer.current {
+    animation: slide-in 0.7s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
+
+  .t-slide .layer.current.back {
+    animation-name: slide-in-back;
+  }
+
+  .t-zoom .layer.current {
+    animation: zoom-in 0.9s ease;
+  }
+
+  /* Pan and zoom: each photo drifts slowly for as long as it is on screen
+     (plus the fade into the next), in one of four directions. */
+  .t-kenburns .motion {
+    animation: var(--pan) calc(var(--slide-ms) + 900ms) linear forwards;
+  }
+
+  .t-kenburns.paused .motion {
+    animation-play-state: paused;
+  }
+
+  .pan-0 {
+    --pan: pan-0;
+  }
+  .pan-1 {
+    --pan: pan-1;
+  }
+  .pan-2 {
+    --pan: pan-2;
+  }
+  .pan-3 {
+    --pan: pan-3;
   }
 
   @keyframes fade-in {
     from {
       opacity: 0;
+    }
+  }
+
+  @keyframes slide-in {
+    from {
+      transform: translateX(100%);
+    }
+  }
+
+  @keyframes slide-in-back {
+    from {
+      transform: translateX(-100%);
+    }
+  }
+
+  @keyframes zoom-in {
+    from {
+      opacity: 0;
+      transform: scale(1.12);
+    }
+  }
+
+  @keyframes pan-0 {
+    from {
+      transform: scale(1) translate(0, 0);
+    }
+    to {
+      transform: scale(1.12) translate(-2%, -1.5%);
+    }
+  }
+
+  @keyframes pan-1 {
+    from {
+      transform: scale(1.12) translate(2%, 1%);
+    }
+    to {
+      transform: scale(1) translate(0, 0);
+    }
+  }
+
+  @keyframes pan-2 {
+    from {
+      transform: scale(1) translate(0, 0);
+    }
+    to {
+      transform: scale(1.12) translate(2%, -1%);
+    }
+  }
+
+  @keyframes pan-3 {
+    from {
+      transform: scale(1.12) translate(-2%, 1.5%);
+    }
+    to {
+      transform: scale(1) translate(0, 0);
     }
   }
 

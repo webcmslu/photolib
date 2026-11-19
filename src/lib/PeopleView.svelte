@@ -106,6 +106,9 @@
   {#if status && !status.enabled}
     <div class="intro">
       <h2>People</h2>
+      {#if status.downloaded}
+        <p>Finding faces is switched off in Settings. The people found so far are kept.</p>
+      {:else}
       <p>
         Photolib can find the faces in your photos and group the photos by person. It all
         happens on this computer: no photo and no face leaves it.
@@ -114,10 +117,13 @@
         This needs two model files ({formatBytes(status.downloadBytes)}), downloaded once from
         huggingface.co. Searching a large library then takes a while, in the background.
       </p>
+      {/if}
       {#if received !== null}
         <progress value={received} max={status.downloadBytes}></progress>
       {:else}
-        <button class="primary" onclick={download}>Download and find people</button>
+        <button class="primary" onclick={download}>
+          {status.downloaded ? "Switch on and find people" : "Download and find people"}
+        </button>
       {/if}
     </div>
   {:else if people}

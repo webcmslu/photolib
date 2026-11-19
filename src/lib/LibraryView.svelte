@@ -37,7 +37,7 @@
     type ScanSummary,
     type ThumbSummary,
   } from "./api";
-  import { formatDayRange, formatNumber, photoCount } from "./format";
+  import { formatDayRange, formatNumber, monthKey, photoCount } from "./format";
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
   import PeopleView from "./PeopleView.svelte";
@@ -46,6 +46,7 @@
   import Viewer from "./Viewer.svelte";
   import Slideshow from "./Slideshow.svelte";
   import AboutButton from "./AboutButton.svelte";
+  import SettingsButton from "./SettingsButton.svelte";
 
   interface Props {
     library: LibraryInfo;
@@ -593,6 +594,25 @@
       slideshow = { count: listedTotal, indexAt: (position) => position };
     }
   }
+  /** A slideshow of one month of the listing: `day` is any day in it. */
+  function slideshowOfMonth(day: number) {
+    const key = monthKey(day);
+    let index = 0;
+    let first = -1;
+    let count = 0;
+    for (const group of groups) {
+      if (group.day !== null && monthKey(group.day) === key) {
+        if (first < 0) first = index;
+        count += group.count;
+      } else if (first >= 0) {
+        break; // a month's days are next to each other
+      }
+      index += group.count;
+    }
+    if (count > 0) slideshow = { count, indexAt: (position) => first + position };
+  }
+  /** Changes when face grouping is switched on or off in Settings. */
+  let facesRevision = $state(0);
   let selectionAnchor: number | null = null;
 
   // Start afresh whenever something else is listed.
@@ -810,6 +830,7 @@
         </div>
       {/if}
     </span>
+    <SettingsButton onfaceschange={() => facesRevision++} />
     <AboutButton />
   </header>
 
@@ -977,6 +998,7 @@
         </div>
       {:else if section === "people"}
         <div class="map">
+          {#key facesRevision}
           <PeopleView
             libraryPath={library.path}
             {revision}
@@ -988,6 +1010,7 @@
               section = "photos";
             }}
           />
+          {/key}
         </div>
       {:else}
       <div class="toolbar">
@@ -1232,6 +1255,7 @@
                 month && order === "dateAsc" ? day - new Date(day * 86_400_000).getUTCDate() + 1 : day;
               viewMode = "all";
             }}
+            onslideshow={slideshowOfMonth}
           />
         {:else if groups.length > 0}
           <PhotoGrid
@@ -1246,6 +1270,7 @@
             startAt={startDay}
             onopen={(index) => (viewerIndex = index)}
             ontoggle={toggleSelected}
+            onmonthslideshow={slideshowOfMonth}
           />
         {:else if groupsLoaded}
           <p class="empty">{emptyText}</p>
@@ -1444,7 +1469,7 @@
     flex-shrink: 0;
     padding: 8px 0 16px;
     overflow-y: auto;
-    background: var(--surface);
+    background: var(--bg);
   }
 
   .search {
@@ -1803,6 +1828,7 @@
   nav input {
     width: calc(100% - 24px);
     margin: 2px 12px;
+    background: var(--surface);
   }
 
   main {
@@ -1810,6 +1836,7 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    background: var(--surface);
   }
 
   .toolbar {

@@ -348,8 +348,10 @@ export function mapClusters(
 
 /** Mirrors `FacesStatus` in src-tauri/src/lib.rs. */
 export interface FacesStatus {
-  /** True once the face models are on this computer. */
+  /** True when faces are searched: models downloaded and not switched off in Settings. */
   enabled: boolean;
+  /** True once the face models are on this computer. */
+  downloaded: boolean;
   /** Size of the download that switching it on needs. */
   downloadBytes: number;
 }
@@ -373,7 +375,12 @@ export function facesStatus(): Promise<FacesStatus> {
   return invoke("faces_status");
 }
 
-/** Downloads the face models, then searches the open library for faces. */
+/** Stops searching for faces; the people already found stay. */
+export function disableFaces(): Promise<void> {
+  return invoke("disable_faces");
+}
+
+/** Switches face grouping on: downloads the face models if needed, then searches the open library for faces. */
 export function enableFaces(): Promise<void> {
   return invoke("enable_faces");
 }
