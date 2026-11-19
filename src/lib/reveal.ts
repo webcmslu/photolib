@@ -13,8 +13,13 @@ export const REVEAL_LABEL = platform.includes("Mac")
     ? "Show in Explorer"
     : "Show in Files";
 
-export function revealPhoto(libraryPath: string, relPath: string): Promise<void> {
+export function revealPhoto(
+  libraryPath: string,
+  relPath: string,
+): Promise<void> {
   const separator = sep();
-  const root = libraryPath.endsWith(separator) ? libraryPath : libraryPath + separator;
+  const root = libraryPath.endsWith(separator)
+    ? libraryPath
+    : libraryPath + separator;
   return revealItemInDir(root + relPath.split("/").join(separator));
 }

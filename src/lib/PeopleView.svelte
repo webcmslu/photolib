@@ -22,6 +22,7 @@
   import { NO_EDIT } from "./edit";
   import EditedImage from "./EditedImage.svelte";
   import { formatBytes, formatNumber } from "./format";
+  import { showMenu } from "./contextMenu";
 
   interface Props {
     libraryPath: string;
@@ -159,7 +160,21 @@
             >
               {person.hidden ? "Show" : "Hide"}
             </button>
-            <button class="face" onclick={() => onopen(person)} aria-label={person.name ?? "Unnamed person"}>
+            <button
+              class="face"
+              onclick={() => onopen(person)}
+              oncontextmenu={(event) =>
+                showMenu(event, [
+                  { label: "Open", action: () => onopen(person) },
+                  "-",
+                  { label: person.name ? "Rename…" : "Name…", enabled: canEdit, action: () => startNaming(person) },
+                  {
+                    label: person.hidden ? "Show in People" : "Hide from People",
+                    action: () => setHidden(person, !person.hidden),
+                  },
+                ])}
+              aria-label={person.name ?? "Unnamed person"}
+            >
               <EditedImage
                 src={thumbUrl(person.cover, "preview")}
                 edit={{ ...NO_EDIT, crop: person.coverCrop }}

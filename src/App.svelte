@@ -12,6 +12,7 @@
   import LibraryView from "./lib/LibraryView.svelte";
   import AboutButton from "./lib/AboutButton.svelte";
   import SettingsButton from "./lib/SettingsButton.svelte";
+  import { suppressDefaultMenu } from "./lib/contextMenu";
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
@@ -97,6 +98,8 @@
     timeStyle: "short",
   });
 </script>
+
+<svelte:window oncontextmenu={suppressDefaultMenu} />
 
 {#if library}
   {#key library.path}

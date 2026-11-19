@@ -53,6 +53,9 @@
   import ExportDialog from "./ExportDialog.svelte";
   import DuplicatesView from "./DuplicatesView.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
+  import { showMenu, type MenuEntry } from "./contextMenu";
+  import { sep } from "@tauri-apps/api/path";
+  import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { saveSettings, settings } from "./settings.svelte";
 
   interface Props {
@@ -346,6 +349,9 @@
   });
 
   // --- Import from Apple Photos ---------------------------------------------------
+
+  /** Apple Photos libraries exist only on a Mac. */
+  const IS_MAC = navigator.userAgent.includes("Mac");
 
   /** The import being confirmed: which library, and what it would do. */
   let importing = $state<{ library: string; summary: ImportSummary; busy: boolean } | null>(null);
@@ -834,6 +840,88 @@
     await apply([{ op: "album_deleted", album, on: true }]);
   }
 
+  // --- Right-click menus --------------------------------------------------------
+
+  /** A photo's menu acts on the selection; a photo outside it becomes the selection. */
+  function photoMenu(index: number, event: MouseEvent) {
+    if (!selected.has(index)) {
+      selected.clear();
+      selected.add(index);
+    }
+    const one = selected.size === 1;
+    const fav = (on: boolean) => () => applyToSelection((photo) => ({ op: "fav", photo, on }));
+    const entries: MenuEntry[] = [
+      { label: "Open", enabled: one, action: () => (viewerIndex = index) },
+      { label: one ? "Slideshow from here" : "Slideshow of these", action: () => {
+          if (one) {
+            const total = listedTotal;
+            slideshow = { count: total - index, indexAt: (position) => index + position };
+          } else startSlideshow();
+        } },
+      "-",
+      { label: "Add to Favorites", enabled: online, action: fav(true) },
+      { label: "Remove from Favorites", enabled: online, action: fav(false) },
+      {
+        label: "Add to Album",
+        enabled: online && albums.length > 0,
+        items: albums.map((album) => ({
+          label: album.name,
+          action: () => applyToSelection((photo) => ({ op: "album_member", album: album.id, photo, on: true })),
+        })),
+      },
+    ];
+    if (listing.kind === "album") {
+      const album = listing.album;
+      entries.push({
+        label: "Remove from Album",
+        enabled: online,
+        action: () => applyToSelection((photo) => ({ op: "album_member", album, photo, on: false })),
+      });
+    }
+    entries.push({
+      label: listing.kind === "hidden" ? "Unhide" : "Hide",
+      enabled: online,
+      action: () => applyToSelection((photo) => ({ op: "hide", photo, on: listing.kind !== "hidden" })),
+    });
+    if (listing.kind === "person") {
+      entries.push(
+        "-",
+        { label: `Not ${personName ?? "this person"}`, enabled: online || personName === null, action: removeSelectionFromPerson },
+        { label: "Someone else", enabled: online || personName === null, action: splitSelectionFromPerson },
+      );
+    }
+    entries.push(
+      "-",
+      { label: REVEAL_LABEL, enabled: online && one, action: revealSelected },
+      { label: "Export…", enabled: online, action: exportSelection },
+    );
+    showMenu(event, entries);
+  }
+
+  function albumMenu(event: MouseEvent, album: { id: string; name: string }) {
+    const open = () => (listing = { kind: "album", album: album.id }, (section = "photos"));
+    showMenu(event, [
+      { label: "Open", action: open },
+      "-",
+      { label: "Rename…", enabled: online, action: () => (open(), (renaming = album.name)) },
+      { label: "Delete Album…", enabled: online, action: () => (open(), (confirmingDelete = true)) },
+    ]);
+  }
+
+  function folderMenu(event: MouseEvent, folder: string) {
+    const separator = sep();
+    const root = library.path.endsWith(separator) ? library.path : library.path + separator;
+    showMenu(event, [
+      { label: "Open", action: () => ((listing = folderListing(folder)), (section = "photos")) },
+      "-",
+      {
+        label: REVEAL_LABEL,
+        enabled: online,
+        action: () => revealItemInDir(root + folder.split("/").join(separator)).catch((e) => (error = String(e))),
+      },
+    ]);
+  }
+
   /** Puts the cursor in a text field as soon as it appears. */
   function focus(node: HTMLInputElement) {
     node.focus();
@@ -908,6 +996,20 @@
             <span class="mark"></span>
             <span>Rescan everything<small>Reads every file again; slow on a large library</small></span>
           </button>
+          {#if IS_MAC}
+            <hr />
+            <button
+              role="menuitem"
+              disabled={!online}
+              onclick={() => {
+                scanMenuOpen = false;
+                chooseAppleLibrary();
+              }}
+            >
+              <span class="mark"></span>
+              <span>Import from Apple Photos…<small>Favorites, hidden photos and albums</small></span>
+            </button>
+          {/if}
         </div>
       {/if}
     </span>
@@ -1020,18 +1122,16 @@
         </form>
       {/if}
       {#each albums as album (album.id)}
-        {@render row({ kind: "album", album: album.id }, album.name, album.count)}
+        <div class="menu-target" oncontextmenu={(event) => albumMenu(event, album)} role="presentation">
+          {@render row({ kind: "album", album: album.id }, album.name, album.count)}
+        </div>
       {:else}
         {#if newAlbumName === null}<p class="hint">No albums yet</p>{/if}
       {/each}
 
-      <button class="import" onclick={chooseAppleLibrary} disabled={!online}>
-        Import from Apple Photos…
-      </button>
-
       <h2>Folders</h2>
       {#each folderTree.rows as folder (folder.path)}
-        <div class="tree-row">
+        <div class="tree-row" oncontextmenu={(event) => folderMenu(event, folder.path)} role="presentation">
           {#if folder.hasChildren}
             <button
               class="twisty"
@@ -1412,6 +1512,7 @@
             onrange={setShownRange}
             startAt={startDay}
             onopen={(index) => (viewerIndex = index)}
+            oncontext={photoMenu}
             ontoggle={toggleSelected}
             onmonthslideshow={slideshowOfMonth}
           />
@@ -1568,6 +1669,19 @@
     font: inherit;
     cursor: pointer;
     white-space: nowrap;
+  }
+
+  /* Drawn like the buttons beside it: the system's own dropdown is shorter
+     and rounder. The arrow is drawn here instead. */
+  select {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 28px;
+    line-height: inherit;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M2 4.5 5 1.5 8 4.5M2 7.5 5 10.5 8 7.5' fill='none' stroke='%23888' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 9px 11px;
   }
 
   .secondary:disabled,
@@ -1830,21 +1944,6 @@
 
   .add:hover:not(:disabled) {
     background: var(--surface-hover);
-  }
-
-  .import {
-    margin: 6px 12px 0;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--accent);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .import:disabled {
-    opacity: 0.5;
-    cursor: default;
   }
 
   .backdrop {

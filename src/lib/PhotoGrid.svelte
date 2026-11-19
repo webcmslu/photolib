@@ -40,12 +40,15 @@
     onrange?: (range: { oldest: number; newest: number } | null) => void;
     /** Starts a slideshow of the month that `day` is in, from its title. */
     onmonthslideshow?: (day: number) => void;
+    /** A right-click on a photo. */
+    oncontext?: (index: number, event: MouseEvent) => void;
   }
   let {
     groups,
     pages,
     selected,
     onopen,
+    oncontext,
     ontoggle,
     cellSize = 150,
     startAt = null,
@@ -515,6 +518,7 @@
         <button
           class="open"
           onclick={(event) => onclick(event, cell.index)}
+          oncontextmenu={(event) => oncontext?.(cell.index, event)}
           aria-label={photo?.relPath ?? "Photo"}
         >
           {#if photo?.edit}
