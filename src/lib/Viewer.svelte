@@ -25,6 +25,7 @@
   import EditedImage from "./EditedImage.svelte";
   import { formatBytes, formatDateTime, formatDuration, formatNumber, rawPairLabel } from "./format";
   import type { PhotoPages } from "./pages.svelte";
+  import { REVEAL_LABEL, revealPhoto } from "./reveal";
 
   interface Props {
     pages: PhotoPages;
@@ -686,6 +687,16 @@
           <dt>Folder</dt>
           <dd>{folder}</dd>
         {/if}
+        {#if photo}
+          <dd>
+            <button
+              class="reveal"
+              onclick={() => photo && revealPhoto(pages.libraryPath, photo.relPath).catch(() => {})}
+            >
+              {REVEAL_LABEL}
+            </button>
+          </dd>
+        {/if}
         {#if details && details.relPath === photo?.relPath}
           <dt>Date</dt>
           <dd>
@@ -1052,5 +1063,19 @@
     display: block;
     font-size: 12px;
     color: #a0a0a8;
+  }
+
+  .reveal {
+    padding: 0;
+    border: none;
+    background: none;
+    color: #6ea8fe;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .reveal:hover {
+    text-decoration: underline;
   }
 </style>

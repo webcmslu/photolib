@@ -51,6 +51,7 @@
   import AboutButton from "./AboutButton.svelte";
   import SettingsButton from "./SettingsButton.svelte";
   import ExportDialog from "./ExportDialog.svelte";
+  import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { saveSettings, settings } from "./settings.svelte";
 
   interface Props {
@@ -763,6 +764,12 @@
     exporting = photos.flatMap((photo) => (photo ? [photo.fingerprint] : []));
   }
 
+  async function revealSelected() {
+    const [index] = selected;
+    const photo = index === undefined ? null : await pages.load(index);
+    if (photo) revealPhoto(library.path, photo.relPath).catch((e) => (error = String(e)));
+  }
+
   async function togglePersonHidden() {
     if (listing.kind !== "person") return;
     try {
@@ -1153,6 +1160,9 @@
           >
             {listing.kind === "hidden" ? "Unhide" : "Hide"}
           </button>
+          {#if selected.size === 1}
+            <button class="secondary" disabled={!online} onclick={revealSelected}>{REVEAL_LABEL}</button>
+          {/if}
           <button
             class="secondary"
             disabled={!online}
