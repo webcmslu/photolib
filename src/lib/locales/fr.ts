@@ -378,7 +378,6 @@ const fr: Record<string, string> = {
   "{photos} stored more than once:": "{photos} enregistrées plusieurs fois :",
   "← → to move, Space to keep or drop, Esc to close": "← → pour naviguer, Espace pour garder ou écarter, Échap pour fermer",
   "Couldn't enhance the photo: {detail}": "Impossible d’améliorer la photo : {detail}",
-  "Remove the enhancement": "Retirer l’amélioration",
   "Enhance": "Améliorer",
   "Auto": "Auto",
   "Hold to see the original": "Maintenir pour voir l’original",
@@ -420,6 +419,9 @@ const fr: Record<string, string> = {
   "Not a valid folder name.": "Nom de dossier non valide.",
   "Nothing new to import.": "Rien de nouveau à importer.",
   "The library folder is read-only, so nothing can be imported into it.": "Le dossier de la bibliothèque est en lecture seule, rien ne peut donc y être importé.",
+  "Enhanced: click to remove": "Amélioré : cliquer pour retirer",
+  "✨ Enhanced": "✨ Amélioré",
+  "Enhancement removed": "Amélioration retirée",
 };
 
 export default fr;

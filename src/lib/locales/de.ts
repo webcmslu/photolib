@@ -378,7 +378,6 @@ const de: Record<string, string> = {
   "{photos} stored more than once:": "{photos} mehrfach gespeichert:",
   "← → to move, Space to keep or drop, Esc to close": "← → zum Wechseln, Leertaste zum Behalten oder Verwerfen, Esc zum Schließen",
   "Couldn't enhance the photo: {detail}": "Das Foto konnte nicht verbessert werden: {detail}",
-  "Remove the enhancement": "Verbesserung entfernen",
   "Enhance": "Verbessern",
   "Auto": "Auto",
   "Hold to see the original": "Gedrückt halten, um das Original zu sehen",
@@ -420,6 +419,9 @@ const de: Record<string, string> = {
   "Not a valid folder name.": "Ungültiger Ordnername.",
   "Nothing new to import.": "Nichts Neues zum Importieren.",
   "The library folder is read-only, so nothing can be imported into it.": "Der Mediatheksordner ist schreibgeschützt, daher kann nichts importiert werden.",
+  "Enhanced: click to remove": "Verbessert: zum Entfernen klicken",
+  "✨ Enhanced": "✨ Verbessert",
+  "Enhancement removed": "Verbesserung entfernt",
 };
 
 export default de;

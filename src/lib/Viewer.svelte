@@ -277,6 +277,17 @@
       if (!edit.enhance) return;
     }
     await apply([{ op: "edit", photo: current.fingerprint, edit: isNeutral(edit) ? null : edit }]);
+    flash(edit.enhance ? t("✨ Enhanced") : t("Enhancement removed"));
+  }
+
+  /** Shows `text` over the photo for a moment. */
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  function flash(text: string) {
+    notice = text;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      if (notice === text) notice = null;
+    }, 1500);
   }
 
   /** The magic wand in the editing panel: changes the draft only. */
@@ -613,10 +624,12 @@
         {showingHidden ? t("Unhide") : t("Hide")}
       </button>
       <button
+        class="wand"
+        class:busy={enhancing}
         onclick={toggleEnhance}
         disabled={!canEdit || !photo || photo.video || editing || enhancing}
         aria-pressed={!!photo?.edit?.enhance}
-        title={photo?.edit?.enhance ? t("Remove the enhancement") : t("Enhance")}
+        title={photo?.edit?.enhance ? t("Enhanced: click to remove") : t("Enhance")}
       >
         ✨
       </button>
@@ -992,6 +1005,30 @@
     background: #1c1c1e;
     color: inherit;
     font: inherit;
+  }
+
+  /* The wand is grey when off and golden when on, so its state shows at a
+     glance (the favorite button changes shape instead). */
+  .bar button.wand {
+    filter: grayscale(1);
+    opacity: 0.6;
+  }
+
+  .bar button.wand[aria-pressed="true"] {
+    filter: none;
+    opacity: 1;
+    background: rgb(255 204 0 / 0.22);
+    box-shadow: inset 0 0 0 1px rgb(255 204 0 / 0.7);
+  }
+
+  .bar button.wand.busy {
+    animation: pulse 0.8s ease-in-out infinite alternate;
+  }
+
+  @keyframes pulse {
+    to {
+      opacity: 0.25;
+    }
   }
 
   .bar button:disabled {
