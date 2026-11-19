@@ -53,6 +53,7 @@
   import ExportDialog from "./ExportDialog.svelte";
   import DuplicatesView from "./DuplicatesView.svelte";
   import SimilarView from "./SimilarView.svelte";
+  import ShortcutsPanel from "./ShortcutsPanel.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { showMenu, type MenuEntry } from "./contextMenu";
   import { LABELS, labelForKey, type LabelColor } from "./labels";
@@ -579,8 +580,75 @@
     viewMode = mode;
   }
 
-  /** Ctrl/Cmd with + or - zooms the grid, like in a browser. */
+  let showShortcuts = $state(false);
+  let searchInput = $state<HTMLInputElement>();
+
+  const typing = (target: EventTarget | null) =>
+    target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement;
+
+  /** Gives the selection `on` for a yes/no op; if they all have it already, takes it away. */
+  async function toggleSelection(kind: "fav" | "hide") {
+    if (!online) return;
+    const target = pages;
+    const photos = (await Promise.all([...selected].map((index) => target.load(index)))).flatMap((p) => (p ? [p] : []));
+    if (target !== pages || photos.length === 0) return;
+    const on = kind === "fav" ? !photos.every((photo) => photo.favorite) : listing.kind !== "hidden";
+    await apply(photos.map((photo) => ({ op: kind, photo: photo.fingerprint, on })));
+  }
+
+  /** The grid's keys, the "?" panel, and Ctrl/Cmd with + or - to zoom like in a browser. */
   function onkeydown(event: KeyboardEvent) {
+    if (event.key === "?" && !typing(event.target) && !slideshow) {
+      event.preventDefault();
+      showShortcuts = true;
+      return;
+    }
+    const mod = event.ctrlKey || event.metaKey;
+    const inGrid = section === "photos" && viewerIndex === null && !slideshow;
+    if (inGrid && mod && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      searchInput?.focus();
+      return;
+    }
+    if (inGrid && !typing(event.target)) {
+      if (event.key === "/" && !mod) {
+        event.preventDefault();
+        searchInput?.focus();
+        return;
+      }
+      if (mod && !event.altKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        for (let index = 0; index < listedTotal; index++) selected.add(index);
+        return;
+      }
+      if (mod && !event.altKey && event.key.toLowerCase() === "e" && selected.size > 0) {
+        event.preventDefault();
+        exportSelection();
+        return;
+      }
+      if (!mod && !event.altKey && selected.size > 0) {
+        if (event.key === "Escape" && !(filterMenuOpen || sortMenuOpen || scanMenuOpen)) {
+          event.preventDefault();
+          selected.clear();
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
+          viewerIndex = Math.min(...selected);
+          return;
+        }
+        if (event.key === ".") {
+          event.preventDefault();
+          toggleSelection("fav");
+          return;
+        }
+        if (event.key.toLowerCase() === "h") {
+          event.preventDefault();
+          toggleSelection("hide");
+          return;
+        }
+      }
+    }
     if (event.key === "F5" && !slideshow && viewerIndex === null && section === "photos") {
       event.preventDefault();
       startSlideshow();
@@ -599,7 +667,7 @@
       viewerIndex === null &&
       section === "photos" &&
       selected.size > 0 &&
-      !(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)
+      !typing(event.target)
     ) {
       if (/^[1-5]$/.test(event.key)) {
         event.preventDefault();
@@ -1019,6 +1087,7 @@
     <div class="search">
       <input
         type="search"
+        bind:this={searchInput}
         bind:value={searchText}
         oninput={onSearchInput}
         onkeydown={(event) => event.key === "Escape" && clearSearch()}
@@ -1087,6 +1156,7 @@
         </div>
       {/if}
     </span>
+    <button class="keys-button" onclick={() => (showShortcuts = true)} title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
     <SettingsButton onfaceschange={() => facesRevision++} />
     <AboutButton />
   </header>
@@ -1686,6 +1756,10 @@
       </div>
     </div>
   </div>
+{/if}
+
+{#if showShortcuts}
+  <ShortcutsPanel onclose={() => (showShortcuts = false)} />
 {/if}
 
 {#if viewerIndex !== null}
@@ -2308,5 +2382,23 @@
     padding-top: 100px;
     text-align: center;
     color: var(--text-dim);
+  }
+
+  .keys-button {
+    width: 30px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .keys-button:hover {
+    background: var(--surface-hover);
   }
 </style>
