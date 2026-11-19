@@ -21,7 +21,6 @@ use chrono::{DateTime, Local};
 use rayon::prelude::*;
 use rusqlite::{Connection, TransactionBehavior};
 use serde::Serialize;
-use walkdir::{DirEntry, WalkDir};
 
 use crate::db::{self, PhotoRow};
 use crate::{fingerprint, metadata, places};
@@ -288,8 +287,16 @@ pub fn scan_with(
     Ok(summary)
 }
 
+/// Folders listed at the same time. On a network share each listing waits
+/// on the server, so several at once go 2 to 3 times faster than one by one
+/// (80,000 files over SMB: 30 s instead of 80); more threads gained nothing.
+const WALK_THREADS: usize = 8;
+
 /// Walks the folder and `stat`s every image, sending the new and changed ones
 /// to `candidates`. Files that match the index are only counted.
+///
+/// The walk has its own threads: it blocks when `candidates` is full, and
+/// must not hold up the threads that empty it.
 fn walk(
     root: &Path,
     known: &HashMap<String, (u64, i64)>,
@@ -299,66 +306,135 @@ fn walk(
     queued: &AtomicU64,
     candidates: mpsc::SyncSender<Candidate>,
 ) -> Result<Walked, ScanError> {
-    let mut walked = Walked {
-        seen: HashSet::with_capacity(known.len()),
-        ..Walked::default()
+    let entries = std::fs::read_dir(root).map_err(|e| ScanError::RootUnreachable(e.to_string()))?;
+    let walk = Walk {
+        root,
+        known,
+        mode,
+        cancel,
+        discovered,
+        queued,
+        seen: std::sync::Mutex::new(HashSet::with_capacity(known.len())),
+        unchanged: AtomicU64::new(0),
+        failed: AtomicU64::new(0),
+        unreadable_dirs: AtomicU64::new(0),
+        stopped: AtomicBool::new(false),
     };
-    let walker = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| entry.depth() == 0 || !is_skipped(entry));
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(WALK_THREADS)
+        .build()
+        .map_err(|e| ScanError::RootUnreachable(e.to_string()))?;
+    pool.install(|| walk.folder(entries, 1, &candidates));
+    Ok(Walked {
+        seen: walk.seen.into_inner().unwrap_or_else(|e| e.into_inner()),
+        unchanged: walk.unchanged.into_inner(),
+        failed: walk.failed.into_inner(),
+        unreadable_dirs: walk.unreadable_dirs.into_inner(),
+    })
+}
 
-    for entry in walker {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(e) if e.depth() == 0 => return Err(ScanError::RootUnreachable(e.to_string())),
-            Err(_) => {
-                walked.unreadable_dirs += 1;
+/// The state of a [`walk`], shared by its threads.
+struct Walk<'a> {
+    root: &'a Path,
+    known: &'a HashMap<String, (u64, i64)>,
+    mode: Mode,
+    cancel: &'a AtomicBool,
+    discovered: &'a AtomicU64,
+    queued: &'a AtomicU64,
+    seen: std::sync::Mutex<HashSet<String>>,
+    unchanged: AtomicU64,
+    failed: AtomicU64,
+    unreadable_dirs: AtomicU64,
+    /// The writer stopped (database error): stop walking too.
+    stopped: AtomicBool,
+}
+
+impl Walk<'_> {
+    /// Looks at a folder's entries (at `depth` below the root), then lists
+    /// its subfolders in parallel.
+    fn folder(
+        &self,
+        entries: std::fs::ReadDir,
+        depth: usize,
+        candidates: &mpsc::SyncSender<Candidate>,
+    ) {
+        let mut subfolders = Vec::new();
+        for entry in entries {
+            if self.cancel.load(Ordering::Relaxed) || self.stopped.load(Ordering::Relaxed) {
+                return;
+            }
+            let Ok(entry) = entry else {
+                self.unreadable_dirs.fetch_add(1, Ordering::Relaxed);
+                continue;
+            };
+            // Does not follow symbolic links, like the index never has.
+            let Ok(file_type) = entry.file_type() else {
+                self.failed.fetch_add(1, Ordering::Relaxed);
+                continue;
+            };
+            let name = entry.file_name();
+            if is_skipped(&name.to_string_lossy(), file_type.is_dir(), depth) {
                 continue;
             }
-        };
-        if !entry.file_type().is_file() || metadata::kind_of(entry.path()).is_none() {
-            continue;
+            if file_type.is_dir() {
+                subfolders.push(entry.path());
+            } else if file_type.is_file() {
+                self.file(entry, candidates);
+            }
         }
-        let Some(rel_path) = relative_path(root, entry.path()) else {
-            walked.failed += 1; // name is not valid Unicode
-            continue;
+        subfolders
+            .par_iter()
+            .for_each(|path| match std::fs::read_dir(path) {
+                Ok(entries) => self.folder(entries, depth + 1, candidates),
+                Err(_) => {
+                    self.unreadable_dirs.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+    }
+
+    fn file(&self, entry: std::fs::DirEntry, candidates: &mpsc::SyncSender<Candidate>) {
+        let path = entry.path();
+        if metadata::kind_of(&path).is_none() {
+            return;
+        }
+        let Some(rel_path) = relative_path(self.root, &path) else {
+            self.failed.fetch_add(1, Ordering::Relaxed); // name is not valid Unicode
+            return;
         };
-        discovered.fetch_add(1, Ordering::Relaxed);
-        walked.seen.insert(rel_path.clone());
+        self.discovered.fetch_add(1, Ordering::Relaxed);
+        self.seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(rel_path.clone());
 
         let Ok(meta) = entry.metadata() else {
-            walked.failed += 1;
-            continue;
+            self.failed.fetch_add(1, Ordering::Relaxed);
+            return;
         };
         let size = meta.len();
         let mtime_ms = meta.modified().map(unix_ms).unwrap_or(0);
 
-        match known.get(&rel_path) {
+        match self.known.get(&rel_path) {
             Some(&(known_size, known_mtime))
-                if mode == Mode::Changes && known_size == size && known_mtime == mtime_ms =>
+                if self.mode == Mode::Changes && known_size == size && known_mtime == mtime_ms =>
             {
-                walked.unchanged += 1;
+                self.unchanged.fetch_add(1, Ordering::Relaxed);
             }
             previous => {
                 let candidate = Candidate {
-                    abs_path: entry.into_path(),
+                    abs_path: path,
                     rel_path,
                     size,
                     mtime_ms,
                     is_new: previous.is_none(),
                 };
-                queued.fetch_add(1, Ordering::Relaxed);
+                self.queued.fetch_add(1, Ordering::Relaxed);
                 if candidates.send(candidate).is_err() {
-                    break; // the writer stopped (database error)
+                    self.stopped.store(true, Ordering::Relaxed);
                 }
             }
         }
     }
-    Ok(walked)
 }
 
 /// Reads one file. `None` means it could not be read.
@@ -396,12 +472,11 @@ fn index_file(candidate: &Candidate) -> Option<PhotoRow> {
 
 /// Hidden entries (`.photolib`, `.DS_Store`, macOS `._name.jpg` companions),
 /// NAS housekeeping folders, and the `Duplicates to delete` folder.
-fn is_skipped(entry: &DirEntry) -> bool {
-    let name = entry.file_name().to_string_lossy();
+fn is_skipped(name: &str, is_dir: bool, depth: usize) -> bool {
     name.starts_with('.')
-        || (entry.file_type().is_dir() && SKIPPED_DIRS.contains(&name.as_ref()))
+        || (is_dir && SKIPPED_DIRS.contains(&name))
         // Extra copies set aside for deletion (see duplicates.rs).
-        || (entry.depth() == 1 && entry.file_type().is_dir() && name == crate::duplicates::PARKED)
+        || (depth == 1 && is_dir && name == crate::duplicates::PARKED)
 }
 
 /// Path relative to the library root with '/' separators, so the same library
@@ -702,5 +777,69 @@ mod tests {
             second.unchanged, second.duration_ms
         );
         assert_eq!((first.added, second.unchanged), (10_000, 10_000));
+    }
+
+    /// Where a scan spends its time on a network share. Prints numbers only:
+    /// `PHOTOLIB_NAS=/Volumes/Share cargo test --release nas_timings -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark: needs a network share"]
+    fn nas_timings() {
+        let Ok(root) = std::env::var("PHOTOLIB_NAS") else {
+            return;
+        };
+        let root = PathBuf::from(root);
+
+        // The walk of a first scan: every file is a candidate.
+        let (tx, rx) = mpsc::sync_channel::<Candidate>(WRITE_BATCH);
+        let drain =
+            std::thread::spawn(move || rx.into_iter().map(|c| c.abs_path).collect::<Vec<_>>());
+        let (discovered, queued) = (AtomicU64::new(0), AtomicU64::new(0));
+        let started = Instant::now();
+        let known = HashMap::new();
+        walk(
+            &root,
+            &known,
+            Mode::Changes,
+            &AtomicBool::new(false),
+            &discovered,
+            &queued,
+            tx,
+        )
+        .unwrap();
+        let took = started.elapsed().as_secs_f64();
+        let files = drain.join().unwrap();
+        println!(
+            "walk: {} files in {took:.1} s = {:.0} files/s",
+            files.len(),
+            files.len() as f64 / took
+        );
+
+        // What reading costs, by kind of file, each part on files of its own
+        // so that the share's cache does not help the second.
+        let mut by_kind: HashMap<String, Vec<&PathBuf>> = HashMap::new();
+        for path in files.iter().step_by(11) {
+            let kind = format!("{:?}", metadata::kind_of(path).unwrap());
+            by_kind.entry(kind).or_default().push(path);
+        }
+        for (kind, paths) in &by_kind {
+            let paths = &paths[..paths.len().min(200)];
+            let half = paths.len() / 2;
+            let started = Instant::now();
+            paths[..half].par_iter().for_each(|path| {
+                let _ = fingerprint::fingerprint(path);
+            });
+            let fp = started.elapsed().as_secs_f64() / half.max(1) as f64;
+            let started = Instant::now();
+            paths[half..].par_iter().for_each(|path| {
+                let _ = metadata::read(path);
+            });
+            let meta = started.elapsed().as_secs_f64() / (paths.len() - half).max(1) as f64;
+            println!(
+                "{kind:>6}: fingerprint {:.1} ms, metadata {:.1} ms per file ({} files)",
+                fp * 1000.0,
+                meta * 1000.0,
+                paths.len()
+            );
+        }
     }
 }
