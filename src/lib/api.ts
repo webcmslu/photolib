@@ -74,6 +74,8 @@ export interface ImportPreview {
   newBytes: number;
   already: number;
   unreadable: number;
+  /** Why (the first file that could not be read). */
+  unreadableReason: string | null;
   /** Day numbers of the oldest and newest new file. */
   firstDay: number | null;
   lastDay: number | null;

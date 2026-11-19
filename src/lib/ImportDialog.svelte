@@ -234,6 +234,8 @@
         <span>
           {#if preview.tiles.length === 0}
             <strong>{t("The device shows no photos.")}</strong>
+          {:else if preview.new === 0 && preview.already === 0}
+            <strong>{t("None of these files could be read.")}</strong>
           {:else if preview.new === 0}
             <strong>{t("Everything here is already in the library.")}</strong>
           {:else}
@@ -243,7 +245,10 @@
             <span class="note">· {formatDayRange(preview.firstDay, preview.lastDay)}</span>
           {/if}
           {#if preview.unreadable > 0}
-            <span class="error">· {t("{n} can't be read.", { n: preview.unreadable })}</span>
+            <span class="error" title={preview.unreadableReason ?? ""}>
+              · {t("{n} can't be read.", { n: preview.unreadable })}
+              {#if preview.unreadableReason}({preview.unreadableReason}){/if}
+            </span>
           {/if}
         </span>
         <span class="spacer"></span>
@@ -286,7 +291,13 @@
           </button>
         {/each}
       </div>
+      {#if preview.tiles.length === 0 && source.path.startsWith("camera:")}
+        <p class="note empty">{t("If the phone has photos, unlock it, wait a moment and try again.")}</p>
+      {/if}
       <footer class="split">
+        {#if preview.tiles.length === 0}
+          <button class="secondary" onclick={() => source && retry(source)}>{t("Try again")}</button>
+        {/if}
         {#if preview.new > 0}
           <label class="folder">
             <span class="label">{t("Into the folder")}</span>
@@ -630,6 +641,10 @@
 
   footer.split .error {
     font-size: 12px;
+  }
+
+  .empty {
+    padding: 0 20px;
   }
 
   .folder {

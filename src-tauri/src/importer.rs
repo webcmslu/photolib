@@ -146,7 +146,9 @@ struct Item {
     origin: Origin,
     name: String,
     size: u64,
-    fingerprint: String,
+    /// Read from the file before copying; for a phone, worked out from the
+    /// download instead (reading every file on a phone is slow).
+    fingerprint: Option<String>,
     /// Remembers a file of a device without reading it again (see [`camera_key`]).
     key: Option<String>,
     modified: Option<i64>,
@@ -192,8 +194,9 @@ pub struct Preview {
     pub new_bytes: u64,
     /// Already in the library, or imported before.
     pub already: usize,
-    /// Files that could not be read.
+    /// Files that could not be read, and why (the first one).
     pub unreadable: usize,
+    pub unreadable_reason: Option<String>,
     /// The day numbers (days since 1970) of the oldest and newest new file.
     pub first_day: Option<i64>,
     pub last_day: Option<i64>,
@@ -347,42 +350,6 @@ fn camera_key(entry: &Entry) -> Option<String> {
     })
 }
 
-/// The fingerprint of an entry, read from the source.
-fn entry_fingerprint(entry: &Entry) -> io::Result<String> {
-    match &entry.origin {
-        Origin::File(path) => fingerprint::fingerprint(path),
-        Origin::Camera { device, index } => camera_fingerprint(device, *index, entry.size),
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn camera_fingerprint(device: &str, index: usize, size: u64) -> io::Result<String> {
-    use crate::camera_macos::read;
-    let chunk = fingerprint::CHUNK;
-    let read_exact = |offset: u64, length: u64| {
-        let data = read(device, index, offset, length as usize).map_err(io::Error::other)?;
-        if data.len() as u64 != length {
-            return Err(io::Error::other("the device returned less than asked"));
-        }
-        Ok(data)
-    };
-    if size <= 2 * chunk {
-        Ok(fingerprint::from_parts(size, &read_exact(0, size)?, &[]))
-    } else {
-        let head = read_exact(0, chunk)?;
-        let tail = read_exact(size - chunk, chunk)?;
-        Ok(fingerprint::from_parts(size, &head, &tail))
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn camera_fingerprint(_device: &str, _index: usize, _size: u64) -> io::Result<String> {
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        "the device is not connected",
-    ))
-}
-
 /// Reads what `source` holds and sorts out what the library at `library`
 /// does not have yet. Reports `(done, total)` as it reads the files.
 fn survey(
@@ -424,6 +391,9 @@ fn survey(
     let mut in_library = conn
         .prepare("SELECT 1 FROM photos WHERE fingerprint = ?1 LIMIT 1")
         .map_err(io::Error::other)?;
+    // A phone's photos are recognized by name and size: an original copied
+    // before, by Photolib or another app, has both.
+    let named = names_in_library(conn).map_err(io::Error::other)?;
     let total: usize = groups.values().map(Vec::len).sum();
     let mut done = 0;
     let mut last_report = Instant::now();
@@ -468,28 +438,37 @@ fn survey(
                 on_read(done, total);
             }
             let key = camera_key(&entry);
-            if key.as_ref().is_some_and(|key| imported.contains(key)) {
-                survey.already += 1;
-                continue;
-            }
-            let fingerprint = match entry_fingerprint(&entry) {
-                Ok(fingerprint) => fingerprint,
-                Err(e) => {
-                    survey.unreadable.push((entry.name, e.to_string()));
-                    unreadable_files += 1;
-                    continue;
+            let fingerprint = match &entry.origin {
+                Origin::Camera { .. } => {
+                    let named_alike = named.contains(&(entry.name.to_lowercase(), entry.size));
+                    if named_alike || key.as_ref().is_some_and(|key| imported.contains(key)) {
+                        survey.already += 1;
+                        continue;
+                    }
+                    None
+                }
+                Origin::File(path) => {
+                    let fingerprint = match fingerprint::fingerprint(path) {
+                        Ok(fingerprint) => fingerprint,
+                        Err(e) => {
+                            survey.unreadable.push((entry.name, e.to_string()));
+                            unreadable_files += 1;
+                            continue;
+                        }
+                    };
+                    let known = imported.contains(&fingerprint)
+                        || in_library
+                            .query_row([&fingerprint], |_| Ok(()))
+                            .optional()
+                            .map_err(io::Error::other)?
+                            .is_some();
+                    if known {
+                        survey.already += 1;
+                        continue;
+                    }
+                    Some(fingerprint)
                 }
             };
-            let known = imported.contains(&fingerprint)
-                || in_library
-                    .query_row([&fingerprint], |_| Ok(()))
-                    .optional()
-                    .map_err(io::Error::other)?
-                    .is_some();
-            if known {
-                survey.already += 1;
-                continue;
-            }
             if let Some(ms) = taken {
                 survey.days.push(ms.div_euclid(86_400_000));
             }
@@ -558,6 +537,22 @@ pub fn thumbnail(generation: u64, id: usize) -> Option<Vec<u8>> {
     }
 }
 
+/// The (lowercase file name, size) of every file in the library.
+fn names_in_library(conn: &Connection) -> rusqlite::Result<HashSet<(String, u64)>> {
+    let mut statement = conn.prepare("SELECT rel_path, size FROM photos")?;
+    let rows = statement.query_map([], |row| {
+        let rel_path: String = row.get(0)?;
+        let size: i64 = row.get(1)?;
+        let name = rel_path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&rel_path)
+            .to_lowercase();
+        Ok((name, size as u64))
+    })?;
+    rows.collect()
+}
+
 /// The part of a file name that ties it to its companions: `IMG_1234` for
 /// `IMG_1234.HEIC`, `IMG_1234.MOV` and the edited `IMG_E1234.HEIC`.
 fn group_stem(path: &Path) -> String {
@@ -587,6 +582,7 @@ pub fn preview(
         new_bytes: survey.new.iter().map(|item| item.size).sum(),
         already: survey.already,
         unreadable: survey.unreadable.len(),
+        unreadable_reason: survey.unreadable.first().map(|(_, why)| why.clone()),
         first_day: survey.days.iter().min().copied(),
         last_day: survey.days.iter().max().copied(),
     };
@@ -646,6 +642,20 @@ pub fn import(
     let mut last_progress = Instant::now();
 
     let mut history = History::open(library, device)?;
+    // For downloads, whose fingerprint is only known afterwards.
+    let imported = imported_before(library);
+    let mut in_library = conn
+        .prepare("SELECT 1 FROM photos WHERE fingerprint = ?1 LIMIT 1")
+        .map_err(io::Error::other)?;
+    let mut known = |fingerprint: &str| {
+        imported.contains(fingerprint)
+            || in_library
+                .query_row([fingerprint], |_| Ok(()))
+                .optional()
+                .ok()
+                .flatten()
+                .is_some()
+    };
     // Each group goes in one folder, under one stem: worked out at its first file.
     let mut stems: BTreeMap<usize, (PathBuf, Option<u32>)> = BTreeMap::new();
     let mut by_group: BTreeMap<usize, Vec<&Item>> = BTreeMap::new();
@@ -667,28 +677,40 @@ pub fn import(
             (dir, suffix)
         });
         let target = dir.join(with_suffix(&item.name, *suffix));
-        let copied = match &item.origin {
-            Origin::File(path) => copy_checked(path, &target, &item.fingerprint, cancel, |chunk| {
-                progress.bytes += chunk;
-                if last_progress.elapsed() >= PROGRESS_INTERVAL {
-                    last_progress = Instant::now();
-                    on_progress(progress);
-                }
-            }),
-            Origin::Camera { device, index } => {
-                let copied = download_checked(device, *index, item, &target, cancel);
+        let copied = match (&item.origin, &item.fingerprint) {
+            (Origin::File(path), Some(fingerprint)) => {
+                copy_checked(path, &target, fingerprint, cancel, |chunk| {
+                    progress.bytes += chunk;
+                    if last_progress.elapsed() >= PROGRESS_INTERVAL {
+                        last_progress = Instant::now();
+                        on_progress(progress);
+                    }
+                })
+                .map(|()| Some(fingerprint.clone()))
+            }
+            (Origin::File(_), None) => Err(io::Error::other("not read")),
+            (Origin::Camera { device, index }, _) => {
+                let copied = download_checked(device, *index, item, &target, cancel, &mut known);
                 progress.bytes += item.size;
                 copied
             }
         };
         match copied {
-            Ok(()) => {
-                history.add(&item.fingerprint)?;
+            Ok(Some(fingerprint)) => {
+                history.add(&fingerprint)?;
                 if let Some(key) = &item.key {
                     history.add(key)?;
                 }
                 summary.imported += 1;
                 summary.bytes += item.size;
+            }
+            Ok(None) => {
+                // Already in the library under another name: not copied, and
+                // remembered so that it is not offered again.
+                if let Some(key) = &item.key {
+                    history.add(key)?;
+                }
+                summary.already += 1;
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                 summary.cancelled = true;
@@ -707,7 +729,8 @@ pub fn import(
 }
 
 /// Downloads file `index` of a device to `target` through a hidden folder,
-/// then checks its size and fingerprint against what the survey read.
+/// checks its size, and returns its fingerprint; `None` (and no copy) if
+/// `known` says the library has it already.
 #[cfg(target_os = "macos")]
 fn download_checked(
     device: &str,
@@ -715,7 +738,8 @@ fn download_checked(
     item: &Item,
     target: &Path,
     cancel: &AtomicBool,
-) -> io::Result<()> {
+    known: &mut dyn FnMut(&str) -> bool,
+) -> io::Result<Option<String>> {
     let dir = target.parent().expect("a folder");
     let staging = dir.join(".photolib-import");
     fs::create_dir_all(&staging)?;
@@ -724,7 +748,7 @@ fn download_checked(
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
     let partial = staging.join(&name);
-    let result = (|| -> io::Result<()> {
+    let result = (|| -> io::Result<Option<String>> {
         crate::camera_macos::download(device, index, &staging, &name, cancel).map_err(|why| {
             if why == "cancelled" {
                 io::ErrorKind::Interrupted.into()
@@ -732,10 +756,13 @@ fn download_checked(
                 io::Error::other(why)
             }
         })?;
-        if fs::metadata(&partial)?.len() != item.size
-            || fingerprint::fingerprint(&partial)? != item.fingerprint
-        {
+        if fs::metadata(&partial)?.len() != item.size {
             return Err(io::Error::other("the copy doesn't match the original"));
+        }
+        let fingerprint = fingerprint::fingerprint(&partial)?;
+        if known(&fingerprint) {
+            fs::remove_file(&partial)?;
+            return Ok(None);
         }
         if let Some(ms) = item.modified {
             let when = UNIX_EPOCH + Duration::from_millis(ms.max(0) as u64);
@@ -750,7 +777,8 @@ fn download_checked(
                 "a file with that name appeared",
             ));
         }
-        fs::rename(&partial, target)
+        fs::rename(&partial, target)?;
+        Ok(Some(fingerprint))
     })();
     if result.is_err() {
         let _ = fs::remove_file(&partial);
@@ -760,7 +788,14 @@ fn download_checked(
 }
 
 #[cfg(not(target_os = "macos"))]
-fn download_checked(_: &str, _: usize, _: &Item, _: &Path, _: &AtomicBool) -> io::Result<()> {
+fn download_checked(
+    _: &str,
+    _: usize,
+    _: &Item,
+    _: &Path,
+    _: &AtomicBool,
+    _: &mut dyn FnMut(&str) -> bool,
+) -> io::Result<Option<String>> {
     Err(io::Error::new(
         io::ErrorKind::NotFound,
         "the device is not connected",

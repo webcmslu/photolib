@@ -11,14 +11,6 @@ extern "C" {
     fn pl_camera_free(text: *mut c_char);
     fn pl_camera_list() -> *mut c_char;
     fn pl_camera_files(device: *const c_char, timeout: f64) -> *mut c_char;
-    fn pl_camera_read(
-        device: *const c_char,
-        index: c_long,
-        offset: i64,
-        length: i64,
-        out: *mut u8,
-        error: *mut *mut c_char,
-    ) -> i64;
     fn pl_camera_thumbnail(
         device: *const c_char,
         index: c_long,
@@ -122,30 +114,6 @@ pub fn files(device: &str) -> Result<Vec<CameraFile>, CameraError> {
         Ok(Answer::Error { error }) => Err(CameraError::Other(error)),
         Err(e) => Err(CameraError::Other(e.to_string())),
     }
-}
-
-/// `length` bytes at `offset` of file `index`.
-pub fn read(device: &str, index: usize, offset: u64, length: usize) -> Result<Vec<u8>, String> {
-    let id = c_string(device);
-    let mut buffer = vec![0u8; length];
-    let mut error: *mut c_char = std::ptr::null_mut();
-    // SAFETY: `buffer` holds `length` bytes, which is all the bridge writes.
-    let got = unsafe {
-        pl_camera_read(
-            id.as_ptr(),
-            index as c_long,
-            offset as i64,
-            length as i64,
-            buffer.as_mut_ptr(),
-            &mut error,
-        )
-    };
-    let error = take(error);
-    if got < 0 {
-        return Err(error.unwrap_or_else(|| "can't read".into()));
-    }
-    buffer.truncate(got as usize);
-    Ok(buffer)
 }
 
 /// Downloads file `index` into `dir` as `name`.

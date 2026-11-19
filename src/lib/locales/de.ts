@@ -433,6 +433,8 @@ const de: Record<string, string> = {
   "Select none": "Keine auswählen",
   "Show the {n} already imported": "Die {n} bereits importierten zeigen",
   "The device shows no photos.": "Das Gerät zeigt keine Fotos.",
+  "None of these files could be read.": "Keine dieser Dateien konnte gelesen werden.",
+  "If the phone has photos, unlock it, wait a moment and try again.": "Wenn das Telefon Fotos enthält, entsperre es, warte einen Moment und versuche es erneut.",
 };
 
 export default de;

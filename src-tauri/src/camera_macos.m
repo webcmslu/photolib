@@ -98,10 +98,8 @@
 - (void)device:(ICDevice *)device didOpenSessionWithError:(NSError *)error {
 }
 - (void)device:(ICDevice *)device didCloseSessionWithError:(NSError *)error {
-    if (device.UUIDString) {
-        [self.ready removeObject:device.UUIDString];
-        [self.catalogs removeObjectForKey:device.UUIDString];
-    }
+    // The numbered list stays: its files are found again once a session is reopened.
+    if (device.UUIDString) [self.ready removeObject:device.UUIDString];
 }
 - (void)deviceDidBecomeReadyWithCompleteContentCatalog:(ICCameraDevice *)device {
     if (device.UUIDString) [self.ready addObject:device.UUIDString];
@@ -129,29 +127,14 @@
 - (void)cameraDevice:(ICCameraDevice *)camera didReceivePTPEvent:(NSData *)eventData {
 }
 - (void)cameraDeviceDidRemoveAccessRestriction:(ICDevice *)device {
-    // Unlocked and trusted: read its list of photos again, from a new session.
+    // Unlocked and trusted: its list of photos is (re)loaded now.
     NSString *uuid = device.UUIDString;
     if (!uuid) return;
     [self.ready removeObject:uuid];
-    [self.catalogs removeObjectForKey:uuid];
-    ICCameraDevice *camera = (ICCameraDevice *)device;
-    if (camera.hasOpenSession) {
-        [camera requestCloseSessionWithOptions:nil
-                                    completion:^(NSError *error) {
-                                        (void)error;
-                                        dispatch_async(dispatch_get_main_queue(), ^{
-                                            [self openSessionOn:camera];
-                                        });
-                                    }];
-    } else {
-        [self openSessionOn:camera];
-    }
+    [self openSessionOn:(ICCameraDevice *)device];
 }
 - (void)cameraDeviceDidEnableAccessRestriction:(ICDevice *)device {
-    if (device.UUIDString) {
-        [self.ready removeObject:device.UUIDString];
-        [self.catalogs removeObjectForKey:device.UUIDString];
-    }
+    if (device.UUIDString) [self.ready removeObject:device.UUIDString];
 }
 
 // --- Helpers (main queue) ---
@@ -269,8 +252,11 @@ char *pl_camera_files(const char *device_id, double timeout) {
         __block BOOL gone = NO;
         __block BOOL restricted = NO;
         dispatch_sync(dispatch_get_main_queue(), ^{
-            ready = [shared.ready containsObject:uuid];
             gone = [shared deviceWithId:uuid] == nil;
+            // Complete: the device said so, or has listed everything. (A
+            // phone that said so while locked had nothing to list yet.)
+            ready = device.mediaFiles.count > 0 &&
+                    ([shared.ready containsObject:uuid] || device.contentCatalogPercentCompleted >= 100);
             restricted = [shared isRestricted:device];
             if (!gone && !ready) [shared openSessionOn:device];
         });
@@ -306,8 +292,10 @@ static ICCameraFile *file_at(PLCameras *shared, NSString *uuid, long index) {
     __block ICCameraFile *file = nil;
     dispatch_sync(dispatch_get_main_queue(), ^{
         ICCameraDevice *device = [shared deviceWithId:uuid];
-        NSArray<ICCameraFile *> *catalog = device ? shared.catalogs[uuid] : nil;
-        if (catalog && index >= 0 && index < (long)catalog.count) file = catalog[index];
+        if (!device) return;
+        [shared openSessionOn:device];
+        NSArray<ICCameraFile *> *catalog = [shared catalogOf:device];
+        if (index >= 0 && index < (long)catalog.count) file = catalog[index];
     });
     return file;
 }
