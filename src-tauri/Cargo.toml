@@ -31,7 +31,7 @@ image = { version = "0.25.9", default-features = false, features = ["jpeg", "png
 fast_image_resize = "5.1.4"
 getrandom = "0.3"
 # Runs the face detection and recognition models (pure Rust, no system library).
-tract-onnx = "0.21"
+tract-onnx = "0.23"
 # Downloads those models the first time face grouping is switched on.
 ureq = "2"
 

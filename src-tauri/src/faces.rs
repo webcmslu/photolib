@@ -144,7 +144,7 @@ pub fn download_models(app_data_dir: &Path, on_progress: &dyn Fn(u64)) -> io::Re
     Ok(())
 }
 
-type Model = SimplePlan<TypedFact, Box<dyn TypedOp>, Graph<TypedFact, Box<dyn TypedOp>>>;
+type Model = std::sync::Arc<TypedRunnableModel>;
 
 /// The two loaded models. Loading takes a moment; make one and share it
 /// between threads.
@@ -241,10 +241,10 @@ impl FaceFinder {
         // the five points. Every grid cell proposes one face.
         let mut found = Vec::new();
         for (level, stride) in [8usize, 16, 32].into_iter().enumerate() {
-            let class = outputs[level].to_array_view::<f32>()?;
-            let object = outputs[3 + level].to_array_view::<f32>()?;
-            let boxes = outputs[6 + level].to_array_view::<f32>()?;
-            let points = outputs[9 + level].to_array_view::<f32>()?;
+            let class = outputs[level].to_plain_array_view::<f32>()?;
+            let object = outputs[3 + level].to_plain_array_view::<f32>()?;
+            let boxes = outputs[6 + level].to_plain_array_view::<f32>()?;
+            let points = outputs[9 + level].to_plain_array_view::<f32>()?;
             let columns = side / stride;
             let cell = stride as f32;
             for index in 0..columns * columns {
@@ -305,7 +305,11 @@ impl FaceFinder {
         }
         let input: Tensor = input.into();
         let outputs = self.recognizer.run(tvec!(input.into()))?;
-        let mut embedding: Vec<f32> = outputs[0].to_array_view::<f32>()?.iter().copied().collect();
+        let mut embedding: Vec<f32> = outputs[0]
+            .to_plain_array_view::<f32>()?
+            .iter()
+            .copied()
+            .collect();
         // Length 1, so that comparing two faces is a plain dot product.
         let length = embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
         if length > 0.0 {
