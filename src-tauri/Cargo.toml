@@ -1,6 +1,6 @@
 [package]
 name = "photolib"
-version = "0.1.9"
+version = "0.1.10"
 description = "Cross-platform photo browser where the library is any folder"
 edition = "2021"
 license = "GPL-3.0-or-later"
