@@ -11,6 +11,7 @@ extern "C" {
     fn pl_camera_free(text: *mut c_char);
     fn pl_camera_list() -> *mut c_char;
     fn pl_camera_files(device: *const c_char, timeout: f64) -> *mut c_char;
+    fn pl_camera_delete(device: *const c_char, wanted: *const c_char) -> *mut c_char;
     fn pl_camera_thumbnail(
         device: *const c_char,
         index: c_long,
@@ -177,4 +178,26 @@ pub fn thumbnail(device: &str, index: usize, max_side: u32) -> Result<Vec<u8>, S
     let bytes = unsafe { std::slice::from_raw_parts(out, length as usize) }.to_vec();
     unsafe { pl_camera_free(out.cast()) };
     Ok(bytes)
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Deleted {
+    /// The files deleted, and those the device refused to delete (with why).
+    pub deleted: Vec<usize>,
+    pub failed: Vec<(usize, String)>,
+}
+
+/// Deletes files from the device, given as (index, name, size): a file is
+/// only deleted if the one at that index still has that name and size.
+pub fn delete(device: &str, files: &[(usize, &str, u64)]) -> Result<Deleted, String> {
+    let id = c_string(device);
+    let wanted = c_string(&serde_json::to_string(files).map_err(|e| e.to_string())?);
+    // SAFETY: both strings live for the duration of the call.
+    let json =
+        take(unsafe { pl_camera_delete(id.as_ptr(), wanted.as_ptr()) }).ok_or("no answer")?;
+    match serde_json::from_str::<Answer<Deleted>>(&json) {
+        Ok(Answer::Value(deleted)) => Ok(deleted),
+        Ok(Answer::Error { error }) => Err(error),
+        Err(e) => Err(e.to_string()),
+    }
 }

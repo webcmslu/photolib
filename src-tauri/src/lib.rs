@@ -1228,6 +1228,33 @@ fn import_files(
     .map_err(|e| e.to_string())
 }
 
+/// What freeing up space on `source` would delete: photos safely in the
+/// library, older than `keep_days` days. Uses the last import preview.
+#[tauri::command(async)]
+fn free_up_plan(
+    path: String,
+    source: String,
+    keep_days: u32,
+    state: State<'_, AppState>,
+) -> Result<importer::FreeUpPlan, String> {
+    editable_library(&state, &path)?;
+    let conn = open_index(&state, &path)?;
+    importer::free_up_plan(&source, Path::new(&path), &conn, keep_days).map_err(|e| e.to_string())
+}
+
+/// Deletes from a phone, camera or memory card the photos safely in the library.
+#[tauri::command(async)]
+fn free_up(
+    path: String,
+    source: String,
+    keep_days: u32,
+    state: State<'_, AppState>,
+) -> Result<importer::FreeUpSummary, String> {
+    editable_library(&state, &path)?;
+    let conn = open_index(&state, &path)?;
+    importer::free_up(&source, Path::new(&path), &conn, keep_days).map_err(|e| e.to_string())
+}
+
 /// Groups of similar shots (bursts, near-identical photos), newest first.
 #[tauri::command(async)]
 fn similar_groups(path: String, state: State<'_, AppState>) -> Result<Vec<similar::Group>, String> {
@@ -1500,6 +1527,8 @@ pub fn run() {
             import_sources,
             import_preview,
             import_files,
+            free_up_plan,
+            free_up,
             park_duplicates,
             parked_duplicates,
             put_back_duplicates,

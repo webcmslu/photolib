@@ -20,7 +20,7 @@
 //!
 //! The device is only read.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -54,6 +54,23 @@ const CAMERA_PREFIX: &str = "camera:";
 
 /// The drives and devices connected right now that hold photos.
 pub fn sources() -> Vec<Source> {
+    #[allow(unused_mut)]
+    let mut found = drives();
+    #[cfg(target_os = "macos")]
+    found.extend(
+        crate::camera_macos::cameras()
+            .into_iter()
+            .map(|camera| Source {
+                path: format!("{CAMERA_PREFIX}{}", camera.id),
+                name: camera.name,
+                restricted: camera.restricted,
+            }),
+    );
+    found
+}
+
+/// The mounted drives with a DCIM folder (memory cards, cameras seen as disks).
+fn drives() -> Vec<Source> {
     let mut roots: Vec<PathBuf> = Vec::new();
     if cfg!(target_os = "macos") {
         roots.extend(children("/Volumes"));
@@ -71,8 +88,7 @@ pub fn sources() -> Vec<Source> {
         }
     }
     let mut seen = HashSet::new();
-    #[allow(unused_mut)]
-    let mut found: Vec<Source> = roots
+    roots
         .into_iter()
         .filter(|root| root.join("DCIM").is_dir() && seen.insert(root.clone()))
         .map(|root| Source {
@@ -80,18 +96,7 @@ pub fn sources() -> Vec<Source> {
             path: root.to_string_lossy().into_owned(),
             restricted: false,
         })
-        .collect();
-    #[cfg(target_os = "macos")]
-    found.extend(
-        crate::camera_macos::cameras()
-            .into_iter()
-            .map(|camera| Source {
-                path: format!("{CAMERA_PREFIX}{}", camera.id),
-                name: camera.name,
-                restricted: camera.restricted,
-            }),
-    );
-    found
+        .collect()
 }
 
 fn children(dir: &str) -> Vec<PathBuf> {
@@ -268,6 +273,30 @@ struct Survey {
     /// Every file found, by number, for thumbnails.
     origins: Vec<(Origin, bool)>,
     generation: u64,
+    /// The files already in the library, and how that is known (see [`free_up_plan`]).
+    known: Vec<Known>,
+}
+
+/// A file of the source that is already in the library.
+#[derive(Debug, Clone)]
+struct Known {
+    origin: Origin,
+    name: String,
+    size: u64,
+    taken: Option<i64>,
+    group: usize,
+    evidence: Evidence,
+}
+
+/// How a file of the source is known to be in the library.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Evidence {
+    /// Its content (fingerprint), read from it.
+    Fingerprint(String),
+    /// Photolib imported it (device key, see [`camera_key`]).
+    Imported(String),
+    /// A file of the same name and size is in the library.
+    NameAndSize,
 }
 
 static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -421,6 +450,7 @@ fn survey(
         tiles: Vec::new(),
         origins,
         generation: GENERATION.fetch_add(1, Ordering::Relaxed),
+        known: Vec::new(),
     };
     let mut in_library = conn
         .prepare("SELECT 1 FROM photos WHERE fingerprint = ?1 LIMIT 1")
@@ -479,10 +509,27 @@ fn survey(
                 on_read(done, total);
             }
             let key = camera_key(&entry);
+            let mut remember = |evidence: Evidence| {
+                survey.known.push(Known {
+                    origin: entry.origin.clone(),
+                    name: entry.name.clone(),
+                    size: entry.size,
+                    taken,
+                    group,
+                    evidence,
+                });
+            };
             let fingerprint = match &entry.origin {
                 Origin::Camera { .. } => {
                     let named_alike = named.contains(&(entry.name.to_lowercase(), entry.size));
-                    if named_alike || key.as_ref().is_some_and(|key| imported.contains(key)) {
+                    let imported_key = key.as_ref().filter(|key| imported.contains(*key));
+                    if let Some(key) = imported_key {
+                        remember(Evidence::Imported(key.clone()));
+                        survey.already += 1;
+                        continue;
+                    }
+                    if named_alike {
+                        remember(Evidence::NameAndSize);
                         survey.already += 1;
                         continue;
                     }
@@ -504,6 +551,7 @@ fn survey(
                             .map_err(io::Error::other)?
                             .is_some();
                     if known {
+                        remember(Evidence::Fingerprint(fingerprint));
                         survey.already += 1;
                         continue;
                     }
@@ -758,6 +806,9 @@ pub fn import(
                 history.add(&fingerprint)?;
                 if let Some(key) = &item.key {
                     history.add(key)?;
+                    // Which library file the device's file became, so that it
+                    // can be deleted from the device once that is checked.
+                    history.add(&format!("m:{key}\t{fingerprint}"))?;
                 }
                 summary.imported += 1;
                 summary.bytes += item.size;
@@ -858,6 +909,255 @@ fn download_checked(
         io::ErrorKind::NotFound,
         "the device is not connected",
     ))
+}
+
+/// What freeing up space on a source would delete.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeUpPlan {
+    /// Photos and videos (tiles) that would be deleted, their files and bytes.
+    pub photos: usize,
+    pub files: usize,
+    pub bytes: u64,
+    /// Kept because they are recent.
+    pub kept_recent: usize,
+    /// Kept because they could not be checked in the library (missing files,
+    /// a library that can't be reached, a companion that is not imported).
+    pub not_checked: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeUpSummary {
+    pub deleted: usize,
+    pub bytes: u64,
+    /// File names that could not be deleted, with why.
+    pub failed: Vec<(String, String)>,
+}
+
+/// Works out which files of the last preview of `source` can be deleted
+/// from it: every file of a photo (with its video, its RAW file) must be in
+/// the library at `library`, and found on its disk. Photos taken in the last
+/// `keep_days` days stay.
+fn free_up_files(
+    source: &str,
+    library: &Path,
+    conn: &Connection,
+    keep_days: u32,
+) -> io::Result<(FreeUpPlan, Vec<Known>)> {
+    let survey = LAST_SURVEY
+        .lock()
+        .unwrap()
+        .clone()
+        .filter(|(last_source, last_library, _, _)| {
+            last_source == source && last_library == library
+        })
+        .map(|(_, _, _, survey)| survey)
+        .ok_or_else(|| io::Error::other("Look at the device's photos again first."))?;
+
+    // Where each fingerprint and each (name, size) is in the library.
+    let mut by_fingerprint: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut by_name: BTreeMap<(String, u64), Vec<String>> = BTreeMap::new();
+    {
+        let mut statement = conn
+            .prepare("SELECT rel_path, size, fingerprint FROM photos")
+            .map_err(io::Error::other)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .map_err(io::Error::other)?;
+        for row in rows {
+            let (rel_path, size, fingerprint) = row.map_err(io::Error::other)?;
+            let name = rel_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(&rel_path)
+                .to_lowercase();
+            by_name
+                .entry((name, size as u64))
+                .or_default()
+                .push(rel_path.clone());
+            by_fingerprint
+                .entry(fingerprint)
+                .or_default()
+                .push(rel_path);
+        }
+    }
+    let mapping = imported_map(library);
+    let on_disk = |paths: Option<&Vec<String>>| {
+        paths.is_some_and(|paths| {
+            paths
+                .iter()
+                .any(|rel_path| library.join(rel_path).is_file())
+        })
+    };
+    let safe = |file: &Known| match &file.evidence {
+        Evidence::Fingerprint(fingerprint) => on_disk(by_fingerprint.get(fingerprint)),
+        Evidence::Imported(key) => mapping
+            .get(key)
+            .is_some_and(|fingerprint| on_disk(by_fingerprint.get(fingerprint))),
+        Evidence::NameAndSize => on_disk(by_name.get(&(file.name.to_lowercase(), file.size))),
+    };
+
+    // Every file of a group, known or not.
+    let mut group_sizes: BTreeMap<usize, usize> = BTreeMap::new();
+    for item in &survey.new {
+        *group_sizes.entry(item.group).or_default() += 1;
+    }
+    let mut known_by_group: BTreeMap<usize, Vec<&Known>> = BTreeMap::new();
+    for file in &survey.known {
+        known_by_group.entry(file.group).or_default().push(file);
+    }
+    let now = crate::indexer::wall_clock_ms(
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+    );
+    let cutoff = now - i64::from(keep_days) * 86_400_000;
+
+    let mut plan = FreeUpPlan::default();
+    let mut files = Vec::new();
+    for (group, known) in known_by_group {
+        // A photo whose video or RAW file is not in the library stays whole.
+        let complete = !group_sizes.contains_key(&group);
+        let taken = known.iter().filter_map(|file| file.taken).max();
+        if keep_days > 0 && taken.is_none_or(|taken| taken >= cutoff) {
+            plan.kept_recent += 1;
+            continue;
+        }
+        if !complete || !known.iter().all(|file| safe(file)) {
+            plan.not_checked += 1;
+            continue;
+        }
+        plan.photos += 1;
+        plan.files += known.len();
+        plan.bytes += known.iter().map(|file| file.size).sum::<u64>();
+        files.extend(known.into_iter().cloned());
+    }
+    Ok((plan, files))
+}
+
+/// What freeing up space on `source` would delete (see [`free_up`]).
+pub fn free_up_plan(
+    source: &str,
+    library: &Path,
+    conn: &Connection,
+    keep_days: u32,
+) -> io::Result<FreeUpPlan> {
+    free_up_files(source, library, conn, keep_days).map(|(plan, _)| plan)
+}
+
+/// Deletes from `source` the photos and videos that are safely in the
+/// library (see [`free_up_files`]). Only for phones, cameras and drives
+/// with a DCIM folder, never for any other folder.
+pub fn free_up(
+    source: &str,
+    library: &Path,
+    conn: &Connection,
+    keep_days: u32,
+) -> io::Result<FreeUpSummary> {
+    let is_device =
+        source.starts_with(CAMERA_PREFIX) || drives().iter().any(|found| found.path == source);
+    if !is_device {
+        return Err(io::Error::other(
+            "Only a phone, a camera or a memory card can be cleared.",
+        ));
+    }
+    delete_safe_files(source, library, conn, keep_days)
+}
+
+/// [`free_up`], whatever the source.
+fn delete_safe_files(
+    source: &str,
+    library: &Path,
+    conn: &Connection,
+    keep_days: u32,
+) -> io::Result<FreeUpSummary> {
+    let (_, files) = free_up_files(source, library, conn, keep_days)?;
+    let mut summary = FreeUpSummary::default();
+    let mut on_device: BTreeMap<String, Vec<&Known>> = BTreeMap::new();
+    for file in &files {
+        match &file.origin {
+            Origin::File(path) => {
+                // The card may have changed since it was looked at.
+                let unchanged = fs::metadata(path).is_ok_and(|m| m.len() == file.size);
+                if !unchanged {
+                    summary.failed.push((
+                        file.name.clone(),
+                        "changed on the device since it was looked at".into(),
+                    ));
+                    continue;
+                }
+                match fs::remove_file(path) {
+                    Ok(()) => {
+                        summary.deleted += 1;
+                        summary.bytes += file.size;
+                    }
+                    Err(e) => summary.failed.push((file.name.clone(), e.to_string())),
+                }
+            }
+            Origin::Camera { device, .. } => {
+                on_device.entry(device.clone()).or_default().push(file)
+            }
+        }
+    }
+    for (device, files) in on_device {
+        delete_on_device(&device, &files, &mut summary);
+    }
+    // What the source holds has changed: the next look reads it again.
+    *LAST_SURVEY.lock().unwrap() = None;
+    Ok(summary)
+}
+
+#[cfg(target_os = "macos")]
+fn delete_on_device(device: &str, files: &[&Known], summary: &mut FreeUpSummary) {
+    let wanted: Vec<(usize, &str, u64)> = files
+        .iter()
+        .filter_map(|file| match file.origin {
+            Origin::Camera { index, .. } => Some((index, file.name.as_str(), file.size)),
+            Origin::File(_) => None,
+        })
+        .collect();
+    let by_index: BTreeMap<usize, &Known> = files
+        .iter()
+        .filter_map(|file| match file.origin {
+            Origin::Camera { index, .. } => Some((index, *file)),
+            Origin::File(_) => None,
+        })
+        .collect();
+    match crate::camera_macos::delete(device, &wanted) {
+        Ok(result) => {
+            for index in result.deleted {
+                if let Some(file) = by_index.get(&index) {
+                    summary.deleted += 1;
+                    summary.bytes += file.size;
+                }
+            }
+            for (index, why) in result.failed {
+                if let Some(file) = by_index.get(&index) {
+                    summary.failed.push((file.name.clone(), why));
+                }
+            }
+        }
+        Err(why) => summary
+            .failed
+            .extend(files.iter().map(|file| (file.name.clone(), why.clone()))),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn delete_on_device(_: &str, files: &[&Known], summary: &mut FreeUpSummary) {
+    summary.failed.extend(
+        files
+            .iter()
+            .map(|file| (file.name.clone(), "not connected".to_string())),
+    );
 }
 
 /// A folder name typed by the user, made safe: no slashes, no leading dot.
@@ -997,6 +1297,27 @@ fn imported_before(library: &Path) -> HashSet<String> {
     seen
 }
 
+/// For files Photolib imported from a device: device key → fingerprint of
+/// the library file it became (`m:` lines of the import logs).
+fn imported_map(library: &Path) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let Ok(entries) = fs::read_dir(history_dir(library)) else {
+        return map;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        if let Ok(file) = File::open(entry.path()) {
+            for line in BufReader::new(file).lines().map_while(Result::ok) {
+                if let Some((key, fingerprint)) =
+                    line.strip_prefix("m:").and_then(|l| l.split_once('\t'))
+                {
+                    map.insert(key.to_string(), fingerprint.trim().to_string());
+                }
+            }
+        }
+    }
+    map
+}
+
 fn history_dir(library: &Path) -> PathBuf {
     library.join(".photolib").join("imports")
 }
@@ -1027,6 +1348,13 @@ impl History {
 mod tests {
     use super::*;
 
+    /// The tests share the last survey: one at a time.
+    static SERIAL: Mutex<()> = Mutex::new(());
+
+    fn serial() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn index(dir: &Path) -> Connection {
         crate::db::open(&dir.join("index.db")).unwrap()
     }
@@ -1046,6 +1374,7 @@ mod tests {
 
     #[test]
     fn imports_only_new_files_once_and_keeps_companions_together() {
+        let _serial = serial();
         let dir = tempfile::tempdir().unwrap();
         let card = card(dir.path());
         let library = dir.path().join("library");
@@ -1115,6 +1444,7 @@ mod tests {
 
     #[test]
     fn imports_only_the_selected_tiles() {
+        let _serial = serial();
         let dir = tempfile::tempdir().unwrap();
         let card = card(dir.path()).to_string_lossy().into_owned();
         let library = dir.path().join("library");
@@ -1145,6 +1475,7 @@ mod tests {
 
     #[test]
     fn raw_files_go_beside_in_a_subfolder_or_nowhere() {
+        let _serial = serial();
         for (choice, expected) in [
             (RawFiles::Beside, Some("IMG_0005.CR2")),
             (RawFiles::Subfolder, Some("cr2/IMG_0005.CR2")),
@@ -1196,6 +1527,68 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn frees_up_only_what_is_safely_in_the_library() {
+        let _serial = serial();
+        let dir = tempfile::tempdir().unwrap();
+        let card = card(dir.path()).to_string_lossy().into_owned();
+        let library = dir.path().join("library");
+        fs::create_dir_all(&library).unwrap();
+        let conn = index(dir.path());
+        preview(&card, &library, &conn, |_, _| {}).unwrap();
+        let cancel = AtomicBool::new(false);
+        let summary = import(
+            &card,
+            &library,
+            &conn,
+            "Card",
+            None,
+            RawFiles::Beside,
+            "dev1",
+            &cancel,
+            |_, _| {},
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(summary.imported, 3);
+        // The library indexes the copies (as the scan after an import does).
+        for entry in WalkDir::new(&library).into_iter().filter_map(Result::ok) {
+            if entry.file_type().is_file() && !entry.path().starts_with(library.join(".photolib")) {
+                let rel = entry
+                    .path()
+                    .strip_prefix(&library)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                crate::indexer::reindex_file(&library, &conn, &rel).unwrap();
+            }
+        }
+        preview(&card, &library, &conn, |_, _| {}).unwrap();
+
+        // Taken today (no EXIF: the file date): kept when keeping 30 days.
+        let recent = free_up_plan(&card, &library, &conn, 30).unwrap();
+        assert_eq!((recent.photos, recent.kept_recent), (0, 2));
+
+        // One copy goes missing from the library: that photo stays on the card.
+        let missing = WalkDir::new(&library)
+            .into_iter()
+            .filter_map(Result::ok)
+            .find(|e| e.file_name() == "IMG_0002.JPG")
+            .unwrap()
+            .into_path();
+        fs::remove_file(&missing).unwrap();
+        let plan = free_up_plan(&card, &library, &conn, 0).unwrap();
+        assert_eq!((plan.photos, plan.files, plan.not_checked), (1, 2, 1));
+
+        let freed = delete_safe_files(&card, &library, &conn, 0).unwrap();
+        assert_eq!((freed.deleted, freed.failed.len()), (2, 0));
+        let folder = Path::new(&card).join("DCIM/100APPLE");
+        assert!(!folder.join("IMG_0001.JPG").exists() && !folder.join("IMG_0001.MOV").exists());
+        assert!(folder.join("IMG_0002.JPG").exists());
+        // A folder that is not a device is never cleared.
+        assert!(free_up(&card, &library, &conn, 0).is_err());
     }
 
     #[test]

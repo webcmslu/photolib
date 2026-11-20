@@ -92,6 +92,8 @@ export function tn(count: number, one: string, other: string, params?: Params): 
  * stays as the system wrote it.
  */
 const RUST_MESSAGES = [
+  "Look at the device's photos again first.",
+  "Only a phone, a camera or a memory card can be cleared.",
   "The library is offline, so changes can't be saved right now.",
   "This library is not open.",
   "The library can't be reached right now.",

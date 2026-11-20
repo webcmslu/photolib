@@ -10,12 +10,16 @@
   import { SvelteSet } from "svelte/reactivity";
   import {
     cancelJob,
+    freeUp,
+    freeUpPlan,
     importFiles,
     importPreview,
     importSources,
     onImportProgress,
     onImportSurvey,
     pickImportFolder,
+    type FreeUpPlan,
+    type FreeUpSummary,
     type ImportPreview,
     type ImportProgress,
     type ImportSource,
@@ -48,6 +52,8 @@
   /** The phone is locked or doesn't trust this computer yet. */
   let needsTrust = $state(false);
   const running = $derived(progress !== null && summary === null);
+  /** The source is a folder picked by hand: never offered for clearing. */
+  let pickedFolder = $state(false);
 
   // --- Choosing what to import ------------------------------------------------
 
@@ -127,8 +133,10 @@
     };
   });
 
-  async function choose(chosen: ImportSource) {
+  async function choose(chosen: ImportSource, picked = false) {
     source = chosen;
+    pickedFolder = picked;
+    freeing = null;
     folder = rememberedFolder(chosen.name);
     try {
       const saved = localStorage.getItem(rawKey(chosen.name));
@@ -166,7 +174,7 @@
     const path = await pickImportFolder().catch(() => null);
     if (!path) return;
     const name = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-    await choose({ path, name, restricted: false });
+    await choose({ path, name, restricted: false }, true);
   }
 
   async function start() {
@@ -188,7 +196,88 @@
     }
   }
 
+  // --- Freeing up space on the device -------------------------------------------
+
+  /** The "free up space" step, once opened. */
+  let freeing = $state<{
+    plan: FreeUpPlan | null;
+    summary: FreeUpSummary | null;
+    busy: boolean;
+    error: string | null;
+  } | null>(null);
+  /** Days of recent photos that stay on the device; remembered for each source. */
+  let keepDays = $state(30);
+  let deleting = $state(false);
+  const keepKey = (name: string) => `photolib.freeUpKeep.${name}`;
+  const canFreeUp = $derived(!!source && !pickedFolder && !source.restricted);
+
+  async function openFreeUp(lookAgain: boolean) {
+    if (!source) return;
+    try {
+      const saved = Number(localStorage.getItem(keepKey(source.name)));
+      keepDays = localStorage.getItem(keepKey(source.name)) !== null && Number.isFinite(saved) ? saved : 30;
+    } catch {
+      keepDays = 30;
+    }
+    freeing = { plan: null, summary: null, busy: true, error: null };
+    try {
+      // After an import, what the device holds is looked at again.
+      if (lookAgain) {
+        surveyed = null;
+        summary = null;
+        progress = null;
+        preview = await importPreview(libraryPath, source.path);
+      }
+      await planFreeUp();
+    } catch (e) {
+      freeing = { plan: null, summary: null, busy: false, error: errorText(e) };
+    }
+  }
+
+  async function planFreeUp() {
+    if (!source || !freeing) return;
+    const days = Math.max(0, Math.min(3650, Math.round(keepDays || 0)));
+    freeing.busy = true;
+    freeing.error = null;
+    try {
+      freeing.plan = await freeUpPlan(libraryPath, source.path, days);
+    } catch (e) {
+      freeing.error = errorText(e);
+    } finally {
+      freeing.busy = false;
+    }
+  }
+
+  async function startFreeUp() {
+    if (!source || !freeing?.plan || freeing.plan.photos === 0) return;
+    const days = Math.max(0, Math.min(3650, Math.round(keepDays || 0)));
+    try {
+      localStorage.setItem(keepKey(source.name), String(days));
+    } catch {
+      // Not remembered; no harm.
+    }
+    freeing.busy = true;
+    freeing.error = null;
+    deleting = true;
+    try {
+      freeing.summary = await freeUp(libraryPath, source.path, days);
+    } catch (e) {
+      freeing.error = errorText(e);
+    } finally {
+      freeing.busy = false;
+      deleting = false;
+    }
+  }
+
+  /** Back to the photos of the device, looked at again after deleting. */
+  async function leaveFreeUp() {
+    const deleted = !!freeing?.summary;
+    freeing = null;
+    if (deleted && source) await choose(source, pickedFolder);
+  }
+
   function close() {
+    if (freeing?.busy) return;
     if (running) cancelJob();
     else onclose();
   }
@@ -199,17 +288,92 @@
 <svelte:window onkeydown={(event) => event.key === "Escape" && close()} />
 
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="backdrop" onclick={() => !running && onclose()}>
+<div class="backdrop" onclick={() => !running && !freeing?.busy && onclose()}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-  <div class="box" class:wide={!!preview && !summary && !progress} role="dialog" aria-modal="true" aria-label={t("Import")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
+  <div class="box" class:wide={!!preview && !summary && !progress && !freeing} role="dialog" aria-modal="true" aria-label={t("Import")} tabindex="-1" onclick={(event) => event.stopPropagation()}>
     <header>
       <h2>{source ? t("Import from “{name}”", { name: source.name }) : t("Import photos")}</h2>
-      {#if !running}
+      {#if !running && !freeing?.busy}
         <button class="close" onclick={onclose} aria-label={t("Close")}>✕</button>
       {/if}
     </header>
 
-    {#if summary}
+    {#if freeing && source}
+      {@const plan = freeing.plan}
+      {#if freeing.summary}
+        <section>
+          <p>{t("{items} deleted from “{name}” ({size} freed).", { items: items(freeing.summary.deleted), name: source.name, size: formatBytes(freeing.summary.bytes) })}</p>
+          {#if freeing.summary.failed.length > 0}
+            <p class="error">{t("{n} could not be deleted:", { n: freeing.summary.failed.length })}</p>
+            <ul class="failed">
+              {#each freeing.summary.failed.slice(0, 20) as [name, why] (name)}
+                <li><span class="path">{name}</span> {why}</li>
+              {/each}
+            </ul>
+          {/if}
+          {#if source.path.startsWith("camera:")}
+            <p class="note">{t("On an iPhone, deleted photos may wait in “Recently Deleted” in the Photos app: empty it there to get the space back.")}</p>
+          {/if}
+        </section>
+        <footer>
+          <button class="secondary" onclick={leaveFreeUp}>{t("Back to the photos")}</button>
+          <button class="primary" onclick={onclose}>{t("Done")}</button>
+        </footer>
+      {:else}
+        <section>
+          <p class="lead">{t("Free up space on “{name}”", { name: source.name })}</p>
+          <p class="note">{t("Only photos and videos whose copy is in this library, and found on its disk, are deleted from the device; a photo goes with its Live Photo video and RAW file, or stays whole.")}</p>
+          <label class="keep">
+            {t("Keep the last")}
+            <input type="number" min="0" max="3650" bind:value={keepDays} onchange={planFreeUp} disabled={freeing.busy} />
+            {t("days on the device")}
+          </label>
+          {#if freeing.error}
+            <p class="error" role="alert">{freeing.error}</p>
+          {:else if !plan}
+            {#if surveyed && surveyed[1] > 0 && surveyed[0] < surveyed[1]}
+              <p class="note">{t("Looking at the device again…")} {t("{done} of {total}", { done: surveyed[0], total: surveyed[1] })}</p>
+              <progress value={surveyed[0]} max={surveyed[1]}></progress>
+            {:else}
+              <progress></progress>
+            {/if}
+          {:else}
+            {#if plan.photos > 0}
+              <p><strong>{t("{items} can be deleted ({size}).", { items: items(plan.photos), size: formatBytes(plan.bytes) })}</strong></p>
+            {:else}
+              <p><strong>{t("Nothing can be deleted from the device yet.")}</strong></p>
+            {/if}
+            {#if plan.keptRecent > 0}
+              <p class="note">{tn(plan.keptRecent, "{n} recent photo or video stays.", "{n} recent photos and videos stay.")}</p>
+            {/if}
+            {#if plan.notChecked > 0}
+              <p class="note">
+                {tn(plan.notChecked, "{n} stays: its copy is not in the library yet, or could not be found.", "{n} stay: their copy is not in the library yet, or could not be found.")}
+                {t("Photos just imported count once the library has finished reading them.")}
+                <button class="link" onclick={() => openFreeUp(true)} disabled={freeing.busy}>{t("Check again")}</button>
+              </p>
+            {/if}
+            {#if plan.photos > 0}
+              {#if source.path.startsWith("camera:")}
+                <p class="warning">{t("If iCloud Photos is on for this iPhone, they are deleted from iCloud and your other devices too.")}</p>
+              {:else}
+                <p class="warning">{t("They are deleted from the card for good.")}</p>
+              {/if}
+            {/if}
+          {/if}
+        </section>
+        <footer>
+          <button class="secondary" onclick={leaveFreeUp} disabled={freeing.busy}>{t("Back")}</button>
+          <button class="danger" onclick={startFreeUp} disabled={freeing.busy || !plan || plan.photos === 0}>
+            {deleting
+              ? t("Deleting…")
+              : plan && plan.photos > 0
+                ? t("Delete {items} from “{name}”", { items: items(plan.photos), name: source.name })
+                : t("Delete")}
+          </button>
+        </footer>
+      {/if}
+    {:else if summary}
       <section>
         <p>
           {summary.cancelled ? t("Stopped:") + " " : ""}{t("{items} imported ({size}).", { items: items(summary.imported), size: formatBytes(summary.bytes) })}
@@ -227,6 +391,9 @@
         </p>
       </section>
       <footer>
+        {#if canFreeUp && summary.imported > 0 && !summary.cancelled}
+          <button class="secondary" onclick={() => openFreeUp(true)}>{t("Free up space on the device…")}</button>
+        {/if}
         {#if summary.imported > 0}
           <button class="secondary" onclick={() => revealItemInDir(`${libraryPath}/${folder.trim()}`).catch(() => {})}>
             {t("Show the folder")}
@@ -268,6 +435,9 @@
           {/if}
         </span>
         <span class="spacer"></span>
+        {#if canFreeUp && preview.already > 0}
+          <button class="secondary small" onclick={() => openFreeUp(false)}>{t("Free up space…")}</button>
+        {/if}
         {#if preview.new > 0}
           {#if preview.already > 0}
             <label class="check">
@@ -717,6 +887,50 @@
 
   .source:hover {
     background: var(--surface-hover);
+  }
+
+  .lead {
+    font-weight: 600;
+  }
+
+  .keep {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 12px 0;
+  }
+
+  .keep input {
+    width: 64px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+  }
+
+  .warning {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    color: var(--text);
+  }
+
+  .link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .danger {
+    border: none;
+    background: var(--danger);
+    color: #fff;
+    font-weight: 600;
   }
 
   footer button:disabled {

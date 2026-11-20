@@ -97,6 +97,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   checking each copy. A connected drive with a `DCIM` folder is offered in a
   banner. Imports are remembered in `.photolib/imports/<device>.log`, so a
   photo is imported only once.
+  "Free up space…" then deletes from the phone or card the photos whose copy
+  is in the library and on its disk (with their video and RAW file), except
+  those of the last days (30 by default); each file is checked by name and
+  size just before it is deleted.
 - English, French and German: Settings › Language (the system's language
   by default). The English text in the code is the key; `src/lib/locales/`
   holds the translations and `npm run check` lists any that are missing.

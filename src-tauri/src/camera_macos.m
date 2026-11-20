@@ -408,3 +408,71 @@ long long pl_camera_thumbnail(const char *device_id, long index, long max_side, 
     memcpy(*out, jpeg.bytes, jpeg.length);
     return (long long)jpeg.length;
 }
+
+/// Deletes files from the device. `wanted` is a JSON array of
+/// [index, name, size]: a file is only deleted if the one at `index` in the
+/// catalog still has that name and size (the phone may have changed since
+/// it was looked at). Returns {deleted: [index…], failed: [[index, why]…]}
+/// or {error}.
+char *pl_camera_delete(const char *device_id, const char *wanted) {
+    PLCameras *shared = cameras();
+    NSString *uuid = [NSString stringWithUTF8String:device_id];
+    NSData *data = [NSData dataWithBytes:wanted length:strlen(wanted)];
+    NSArray *list = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![list isKindOfClass:[NSArray class]]) return error_json(@"bad request");
+    __block ICCameraDevice *device = nil;
+    NSMutableArray<ICCameraFile *> *files = [NSMutableArray array];
+    NSMapTable<ICCameraFile *, NSNumber *> *numbers = [NSMapTable strongToStrongObjectsMapTable];
+    NSMutableArray *failed = [NSMutableArray array];
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        device = [shared deviceWithId:uuid];
+        if (!device) return;
+        NSArray<ICCameraFile *> *catalog = [shared catalogOf:device];
+        for (NSArray *one in list) {
+            if (![one isKindOfClass:[NSArray class]] || one.count != 3) continue;
+            NSNumber *number = one[0];
+            NSString *name = one[1];
+            NSNumber *size = one[2];
+            long index = number.longValue;
+            ICCameraFile *file = index >= 0 && index < (long)catalog.count ? catalog[index] : nil;
+            if (!file || ![file.name isEqualToString:name] || file.fileSize != size.longLongValue) {
+                [failed addObject:@[ number, @"changed on the device since it was looked at" ]];
+                continue;
+            }
+            [files addObject:file];
+            [numbers setObject:number forKey:file];
+        }
+    });
+    if (!device) return error_json(@"not connected");
+    if (files.count == 0) return json_string(@{@"deleted" : @[], @"failed" : failed});
+
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block NSDictionary *result = nil;
+    __block NSString *failure = nil;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [device requestDeleteFiles:files
+            deleteFailed:^(NSDictionary<ICDeleteError, ICCameraItem *> *failed) {
+                (void)failed;
+            }
+            completion:^(NSDictionary<ICDeleteResult, NSArray<ICCameraItem *> *> *outcome, NSError *error) {
+                result = outcome;
+                if (error && !outcome) failure = error.localizedDescription ?: @"can't delete";
+                dispatch_semaphore_signal(done);
+            }];
+    });
+    // Deleting thousands of files takes a while.
+    if (!wait_for(done, 1800)) return error_json(@"the device doesn't answer");
+    if (failure) return error_json(failure);
+
+    NSMutableArray *deleted = [NSMutableArray array];
+    for (ICCameraItem *item in result[ICDeleteSuccessful]) {
+        NSNumber *number = [numbers objectForKey:(ICCameraFile *)item];
+        if (number) [deleted addObject:number];
+    }
+    for (ICCameraItem *item in result[ICDeleteFailed]) {
+        NSNumber *number = [numbers objectForKey:(ICCameraFile *)item];
+        if (number) [failed addObject:@[ number, @"the device refused" ]];
+    }
+    // The catalog is numbered afresh at the next listing.
+    return json_string(@{@"deleted" : deleted, @"failed" : failed});
+}

@@ -121,6 +121,33 @@ export function importFiles(
   return invoke("import_files", { path, source, folder, groups, rawFiles });
 }
 
+/** What freeing up space on a device would delete (from the last preview). */
+export interface FreeUpPlan {
+  /** Photos and videos that are safely in the library, their files and size. */
+  photos: number;
+  files: number;
+  bytes: number;
+  /** Kept because they were taken in the last days. */
+  keptRecent: number;
+  /** Kept because their copy in the library could not be found. */
+  notChecked: number;
+}
+
+export interface FreeUpSummary {
+  deleted: number;
+  bytes: number;
+  failed: [string, string][];
+}
+
+export function freeUpPlan(path: string, source: string, keepDays: number): Promise<FreeUpPlan> {
+  return invoke("free_up_plan", { path, source, keepDays });
+}
+
+/** Deletes from a phone, camera or memory card what is safely in the library. */
+export function freeUp(path: string, source: string, keepDays: number): Promise<FreeUpSummary> {
+  return invoke("free_up", { path, source, keepDays });
+}
+
 export function onImportProgress(handler: (progress: ImportProgress) => void): Promise<UnlistenFn> {
   return listen<ImportProgress>("import-progress", (event) => handler(event.payload));
 }
