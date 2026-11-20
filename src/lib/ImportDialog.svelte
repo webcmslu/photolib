@@ -21,6 +21,7 @@
     type ImportSource,
     type ImportSummary,
     type ImportTile,
+    type RawFiles,
   } from "./api";
   import { formatBytes, formatDateTime, formatDayRange } from "./format";
   import { errorText, t, tn } from "./i18n";
@@ -59,9 +60,15 @@
   );
   const selectable = (tile: ImportTile) => !tile.already && !tile.unreadable;
   const selectedTiles = $derived(preview ? preview.tiles.filter((tile) => selected.has(tile.group)) : []);
-  const selectedBytes = $derived(selectedTiles.reduce((sum, tile) => sum + tile.bytes, 0));
+  /** Where RAW files go; remembered for each source. */
+  let rawFiles = $state<RawFiles>("beside");
+  const rawKey = (name: string) => `photolib.importRaw.${name}`;
+  const hasRaw = $derived(!!preview?.tiles.some((tile) => tile.raw && selectable(tile)));
+  const selectedBytes = $derived(
+    selectedTiles.reduce((sum, tile) => sum + tile.bytes - (rawFiles === "skip" ? tile.rawBytes : 0), 0),
+  );
   /** Some selected photos come with their RAW file, which counts in the size. */
-  const selectedRaw = $derived(selectedTiles.some((tile) => tile.raw));
+  const selectedRaw = $derived(rawFiles !== "skip" && selectedTiles.some((tile) => tile.rawBytes > 0));
   /** Where a shift-click selects from. */
   let anchor: number | null = null;
 
@@ -123,6 +130,12 @@
   async function choose(chosen: ImportSource) {
     source = chosen;
     folder = rememberedFolder(chosen.name);
+    try {
+      const saved = localStorage.getItem(rawKey(chosen.name));
+      rawFiles = saved === "subfolder" || saved === "skip" ? saved : "beside";
+    } catch {
+      rawFiles = "beside";
+    }
     preview = null;
     error = null;
     surveyed = null;
@@ -161,12 +174,13 @@
     error = null;
     try {
       localStorage.setItem(folderKey(source.name), folder.trim());
+      localStorage.setItem(rawKey(source.name), rawFiles);
     } catch {
       // Not remembered; no harm.
     }
     progress = { done: 0, total: selectedTiles.length, bytes: 0, totalBytes: selectedBytes };
     try {
-      summary = await importFiles(libraryPath, source.path, folder.trim(), [...selected]);
+      summary = await importFiles(libraryPath, source.path, folder.trim(), [...selected], rawFiles);
       if (summary.imported > 0) onimported();
     } catch (e) {
       error = errorText(e);
@@ -306,6 +320,16 @@
             <input type="text" bind:value={folder} spellcheck="false" />
             <span class="note">{`${folder.trim() || "…"}/${exampleMonth}/`}</span>
           </label>
+          {#if hasRaw}
+            <label class="folder">
+              <span class="label">{t("RAW files")}</span>
+              <select bind:value={rawFiles}>
+                <option value="beside">{t("Next to the JPEGs")}</option>
+                <option value="subfolder">{t("In a subfolder (cr2, nef…)")}</option>
+                <option value="skip">{t("Don't import")}</option>
+              </select>
+            </label>
+          {/if}
         {/if}
         <span class="spacer"></span>
         {#if error}
@@ -657,6 +681,15 @@
     display: grid;
     gap: 4px;
     margin-top: 12px;
+  }
+
+  .folder select {
+    padding: 5px 6px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
   }
 
   .folder input {

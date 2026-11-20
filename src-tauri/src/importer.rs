@@ -140,6 +140,19 @@ struct Entry {
     modified: Option<i64>,
 }
 
+/// Where the RAW file of a JPEG + RAW pair goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RawFiles {
+    /// Next to its JPEG (the library shows the pair as one photo).
+    #[default]
+    Beside,
+    /// In a subfolder named after its format: `cr2/`, `nef/`, `dng/`…
+    Subfolder,
+    /// Not imported.
+    Skip,
+}
+
 /// One file to import.
 #[derive(Debug, Clone)]
 struct Item {
@@ -156,6 +169,23 @@ struct Item {
     month: String,
     /// Files with the same group number keep a common name stem.
     group: usize,
+    /// A camera RAW file.
+    raw: bool,
+}
+
+impl Item {
+    /// Where it goes, from the month's folder.
+    fn place(&self, raw_files: RawFiles) -> PathBuf {
+        let extension = Path::new(&self.name)
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase());
+        match extension {
+            Some(extension) if self.raw && raw_files == RawFiles::Subfolder => {
+                Path::new(&extension).to_path_buf()
+            }
+            _ => PathBuf::new(),
+        }
+    }
 }
 
 /// One photo or video as the import window shows it: a file with its
@@ -175,6 +205,8 @@ pub struct Tile {
     pub live: bool,
     /// A photo with its RAW file (or a RAW file alone).
     pub raw: bool,
+    /// Of `bytes`, those of RAW files.
+    pub raw_bytes: u64,
     /// Already in the library, or imported before.
     pub already: bool,
     /// None of its new files could be read.
@@ -430,6 +462,7 @@ fn survey(
             raw: files.iter().any(|(_, entry)| {
                 metadata::kind_of(Path::new(&entry.name)) == Some(metadata::Kind::Raw)
             }),
+            raw_bytes: 0,
             already: false,
             unreadable: false,
             thumb: main.0,
@@ -482,6 +515,10 @@ fn survey(
             }
             new_files += 1;
             tile.bytes += entry.size;
+            let raw = metadata::kind_of(Path::new(&entry.name)) == Some(metadata::Kind::Raw);
+            if raw {
+                tile.raw_bytes += entry.size;
+            }
             survey.new.push(Item {
                 origin: entry.origin,
                 name: entry.name,
@@ -491,6 +528,7 @@ fn survey(
                 modified: entry.modified,
                 month: month.clone(),
                 group,
+                raw,
             });
         }
         tile.unreadable = new_files == 0 && unreadable_files > 0;
@@ -613,6 +651,7 @@ pub fn import(
     conn: &Connection,
     folder: &str,
     selection: Option<&HashSet<usize>>,
+    raw_files: RawFiles,
     device: &str,
     cancel: &AtomicBool,
     on_read: impl Fn(usize, usize),
@@ -635,6 +674,16 @@ pub fn import(
     if let Some(selection) = selection {
         survey.new.retain(|item| selection.contains(&item.group));
     }
+    let mut history = History::open(library, device)?;
+    if raw_files == RawFiles::Skip {
+        // Left out on purpose: remembered, so that they are not offered again.
+        for item in survey.new.iter().filter(|item| item.raw) {
+            for line in item.fingerprint.iter().chain(item.key.iter()) {
+                history.add(line)?;
+            }
+        }
+        survey.new.retain(|item| !item.raw);
+    }
     let mut summary = Summary {
         already: survey.already,
         failed: survey.unreadable,
@@ -649,7 +698,6 @@ pub fn import(
     on_progress(progress);
     let mut last_progress = Instant::now();
 
-    let mut history = History::open(library, device)?;
     // For downloads, whose fingerprint is only known afterwards.
     let imported = imported_before(library);
     let mut in_library = conn
@@ -677,14 +725,16 @@ pub fn import(
         }
         let (dir, suffix) = stems.entry(item.group).or_insert_with(|| {
             let dir = library.join(&folder).join(&item.month);
-            let names: Vec<&str> = by_group[&item.group]
+            let places: Vec<(PathBuf, &str)> = by_group[&item.group]
                 .iter()
-                .map(|i| i.name.as_str())
+                .map(|i| (i.place(raw_files), i.name.as_str()))
                 .collect();
-            let suffix = free_suffix(&dir, &names);
+            let suffix = free_suffix(&dir, &places);
             (dir, suffix)
         });
-        let target = dir.join(with_suffix(&item.name, *suffix));
+        let target = dir
+            .join(item.place(raw_files))
+            .join(with_suffix(&item.name, *suffix));
         let copied = match (&item.origin, &item.fingerprint) {
             (Origin::File(path), Some(fingerprint)) => {
                 copy_checked(path, &target, fingerprint, cancel, |chunk| {
@@ -826,12 +876,13 @@ pub fn clean_folder_name(name: &str) -> Option<String> {
     (!cleaned.is_empty() && cleaned.len() <= 100).then_some(cleaned)
 }
 
-/// The first suffix (none, then 2, 3…) under which none of `names` is taken in `dir`.
-fn free_suffix(dir: &Path, names: &[&str]) -> Option<u32> {
+/// The first suffix (none, then 2, 3…) under which none of `places`
+/// (subfolder, name) is taken in `dir`.
+fn free_suffix(dir: &Path, places: &[(PathBuf, &str)]) -> Option<u32> {
     let free = |suffix: Option<u32>| {
-        names
+        places
             .iter()
-            .all(|name| !dir.join(with_suffix(name, suffix)).exists())
+            .all(|(sub, name)| !dir.join(sub).join(with_suffix(name, suffix)).exists())
     };
     if free(None) {
         return None;
@@ -1028,6 +1079,7 @@ mod tests {
             &conn,
             "Card",
             None,
+            RawFiles::Beside,
             "dev1",
             &cancel,
             |_, _| {},
@@ -1078,6 +1130,7 @@ mod tests {
             &conn,
             "Card",
             Some(&selection),
+            RawFiles::Beside,
             "dev1",
             &cancel,
             |_, _| {},
@@ -1088,6 +1141,61 @@ mod tests {
         // The Live Photo is still to import; the plain photo is done.
         let after = super::preview(&card, &library, &conn, |_, _| {}).unwrap();
         assert_eq!((after.new, after.already), (2, 1));
+    }
+
+    #[test]
+    fn raw_files_go_beside_in_a_subfolder_or_nowhere() {
+        for (choice, expected) in [
+            (RawFiles::Beside, Some("IMG_0005.CR2")),
+            (RawFiles::Subfolder, Some("cr2/IMG_0005.CR2")),
+            (RawFiles::Skip, None),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let folder = dir.path().join("card/DCIM/100CANON");
+            fs::create_dir_all(&folder).unwrap();
+            fs::write(folder.join("IMG_0005.JPG"), b"jpeg").unwrap();
+            fs::write(folder.join("IMG_0005.CR2"), b"raw file").unwrap();
+            let card = dir.path().join("card").to_string_lossy().into_owned();
+            let library = dir.path().join("library");
+            fs::create_dir_all(&library).unwrap();
+            let conn = index(dir.path());
+            let first = preview(&card, &library, &conn, |_, _| {}).unwrap();
+            assert_eq!(first.tiles.len(), 1);
+            assert!(first.tiles[0].raw && first.tiles[0].raw_bytes == 8);
+            let cancel = AtomicBool::new(false);
+            let summary = import(
+                &card,
+                &library,
+                &conn,
+                "Card",
+                None,
+                choice,
+                "dev1",
+                &cancel,
+                |_, _| {},
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(summary.imported, if expected.is_some() { 2 } else { 1 });
+            let month = WalkDir::new(library.join("Card"))
+                .min_depth(2)
+                .max_depth(2)
+                .into_iter()
+                .next()
+                .unwrap()
+                .unwrap()
+                .into_path();
+            assert!(month.join("IMG_0005.JPG").is_file());
+            match expected {
+                Some(raw) => assert!(month.join(raw).is_file(), "{choice:?}"),
+                None => {
+                    assert!(!month.join("IMG_0005.CR2").exists());
+                    // Skipped on purpose: not offered again.
+                    let again = preview(&card, &library, &conn, |_, _| {}).unwrap();
+                    assert_eq!(again.new, 0);
+                }
+            }
+        }
     }
 
     #[test]

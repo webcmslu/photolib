@@ -436,6 +436,10 @@ const fr: Record<string, string> = {
   "None of these files could be read.": "Aucun de ces fichiers n’a pu être lu.",
   "If the phone has photos, unlock it, wait a moment and try again.": "Si le téléphone contient des photos, déverrouillez-le, patientez un instant et réessayez.",
   "Import {items} ({size} with their RAW files)": "Importer {items} ({size} avec leurs fichiers RAW)",
+  "RAW files": "Fichiers RAW",
+  "Next to the JPEGs": "À côté des JPEG",
+  "In a subfolder (cr2, nef…)": "Dans un sous-dossier (cr2, nef…)",
+  "Don't import": "Ne pas importer",
 };
 
 export default fr;

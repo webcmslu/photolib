@@ -436,6 +436,10 @@ const de: Record<string, string> = {
   "None of these files could be read.": "Keine dieser Dateien konnte gelesen werden.",
   "If the phone has photos, unlock it, wait a moment and try again.": "Wenn das Telefon Fotos enthält, entsperre es, warte einen Moment und versuche es erneut.",
   "Import {items} ({size} with their RAW files)": "{items} importieren ({size} mit ihren RAW-Dateien)",
+  "RAW files": "RAW-Dateien",
+  "Next to the JPEGs": "Neben den JPEGs",
+  "In a subfolder (cr2, nef…)": "In einem Unterordner (cr2, nef…)",
+  "Don't import": "Nicht importieren",
 };
 
 export default de;

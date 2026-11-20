@@ -61,6 +61,8 @@ export interface ImportTile {
   video: boolean;
   live: boolean;
   raw: boolean;
+  /** Of `bytes`, those of RAW files. */
+  rawBytes: number;
   already: boolean;
   unreadable: boolean;
   /** For the thumbnail: importthumb://localhost/<generation>/<thumb>. */
@@ -105,14 +107,18 @@ export function importPreview(path: string, source: string): Promise<ImportPrevi
   return invoke("import_preview", { path, source });
 }
 
+/** Where the RAW file of a JPEG + RAW pair goes. */
+export type RawFiles = "beside" | "subfolder" | "skip";
+
 /** Imports what is new on `source`, or only the tiles whose `group` is in `groups`. */
 export function importFiles(
   path: string,
   source: string,
   folder: string,
   groups: number[] | null = null,
+  rawFiles: RawFiles = "beside",
 ): Promise<ImportSummary> {
-  return invoke("import_files", { path, source, folder, groups });
+  return invoke("import_files", { path, source, folder, groups, rawFiles });
 }
 
 export function onImportProgress(handler: (progress: ImportProgress) => void): Promise<UnlistenFn> {

@@ -1198,6 +1198,7 @@ fn import_files(
     source: String,
     folder: String,
     groups: Option<Vec<usize>>,
+    raw_files: Option<importer::RawFiles>,
     state: State<'_, AppState>,
 ) -> Result<importer::Summary, String> {
     let selection: Option<std::collections::HashSet<usize>> =
@@ -1214,6 +1215,7 @@ fn import_files(
         &conn,
         &folder,
         selection.as_ref(),
+        raw_files.unwrap_or_default(),
         &state.device,
         &state.job_cancel,
         |done, total| {
