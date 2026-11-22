@@ -177,7 +177,7 @@ pub fn plan(conn: &Connection, photos_library: &Path) -> Result<Plan, String> {
     }
     plan.summary
         .albums
-        .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        .sort_by_key(|album| album.name.to_lowercase());
     Ok(plan)
 }
 
