@@ -149,7 +149,7 @@
     surveyed = null;
     needsTrust = chosen.restricted;
     if (needsTrust) {
-      error = t("Unlock the device and tap “Trust” on it, then try again.");
+      error = t("Unlock the device and tap “Trust” or “Allow” on it, then try again.");
       return;
     }
     try {
@@ -160,7 +160,7 @@
       selectAll();
     } catch (e) {
       error = errorText(e);
-      needsTrust = error === t("Unlock the device and tap “Trust” on it, then try again.");
+      needsTrust = error === t("Unlock the device and tap “Trust” or “Allow” on it, then try again.");
     }
   }
 
@@ -547,11 +547,14 @@
           {#each sources as found (found.path)}
             <button class="source" onclick={() => choose(found)}>
               {found.name}
-              {#if found.restricted}<span class="note">— {t("unlock it and tap “Trust”")}</span>{/if}
+              {#if found.restricted}<span class="note">— {t("unlock it and tap “Trust” or “Allow”")}</span>{/if}
             </button>
           {/each}
         {:else}
           <p class="note">{t("No phone, memory card or camera is connected. You can also import from any folder.")}</p>
+        {/if}
+        {#if navigator.userAgent.includes("Mac")}
+          <p class="note">{t("Android phone: on the phone, tap the USB notification and choose “Transfer photos” (PTP).")}</p>
         {/if}
       </section>
       <footer>

@@ -88,7 +88,8 @@ fn drives() -> Vec<Source> {
         }
     }
     let mut seen = HashSet::new();
-    roots
+    #[allow(unused_mut)]
+    let mut found: Vec<Source> = roots
         .into_iter()
         .filter(|root| root.join("DCIM").is_dir() && seen.insert(root.clone()))
         .map(|root| Source {
@@ -96,7 +97,131 @@ fn drives() -> Vec<Source> {
             path: root.to_string_lossy().into_owned(),
             restricted: false,
         })
-        .collect()
+        .collect();
+    #[cfg(target_os = "linux")]
+    found.extend(phone_mounts());
+    found
+}
+
+/// Phones and cameras that the desktop (GNOME's gvfs, also used by Xfce,
+/// Cinnamon, MATE…) mounts as folders: Android phones (MTP), iPhones (AFC,
+/// once paired), cameras (PTP). Their photos are in `DCIM`, at the top or in
+/// each storage ("Internal shared storage", "SD card").
+#[cfg(target_os = "linux")]
+fn phone_mounts() -> Vec<Source> {
+    let Ok(runtime) = std::env::var("XDG_RUNTIME_DIR") else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for mount in children(&format!("{runtime}/gvfs")) {
+        let mount_name = mount
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let Some(device) = gvfs_device_name(&mount_name) else {
+            continue;
+        };
+        if mount.join("DCIM").is_dir() {
+            found.push(Source {
+                name: device,
+                path: mount.to_string_lossy().into_owned(),
+                restricted: false,
+            });
+            continue;
+        }
+        let storages: Vec<PathBuf> = children(&mount.to_string_lossy())
+            .into_iter()
+            .filter(|storage| storage.join("DCIM").is_dir())
+            .collect();
+        if storages.is_empty() && mount_name.starts_with("mtp:") {
+            // A locked Android phone shows no storage until it is unlocked
+            // and "Allow" (access to phone data) is tapped.
+            found.push(Source {
+                name: device,
+                path: mount.to_string_lossy().into_owned(),
+                restricted: true,
+            });
+            continue;
+        }
+        let several = storages.len() > 1;
+        for storage in storages {
+            let name = if several {
+                let storage_name = storage
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                format!("{device} – {storage_name}")
+            } else {
+                device.clone()
+            };
+            found.push(Source {
+                name,
+                path: storage.to_string_lossy().into_owned(),
+                restricted: false,
+            });
+        }
+    }
+    found
+}
+
+/// A readable name for a gvfs mount of a phone or camera
+/// (`mtp:host=SAMSUNG_SAMSUNG_Android_R58M12AB3CD` → "SAMSUNG Android"),
+/// `None` for mounts that are not one (network shares…).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn gvfs_device_name(mount: &str) -> Option<String> {
+    let (scheme, rest) = mount.split_once(':')?;
+    if scheme == "afc" {
+        return Some("iPhone".into());
+    }
+    if scheme != "mtp" && scheme != "gphoto2" {
+        return None;
+    }
+    let host = rest
+        .split(',')
+        .find_map(|part| part.strip_prefix("host="))
+        .unwrap_or("");
+    let host = percent_decode(host);
+    let fallback = if scheme == "mtp" { "Phone" } else { "Camera" };
+    if host.is_empty() || host.starts_with('[') {
+        // Older gvfs names the USB port only: "[usb:001,005]".
+        return Some(fallback.into());
+    }
+    let mut words: Vec<&str> = host.split('_').filter(|word| !word.is_empty()).collect();
+    // The serial number at the end.
+    if words.len() > 1
+        && words
+            .last()
+            .is_some_and(|last| last.len() >= 6 && last.chars().any(|c| c.is_ascii_digit()))
+    {
+        words.pop();
+    }
+    words.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    let name = words.join(" ");
+    Some(if name.is_empty() {
+        fallback.into()
+    } else {
+        name
+    })
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn percent_decode(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn children(dir: &str) -> Vec<PathBuf> {
@@ -1589,6 +1714,32 @@ mod tests {
         assert!(folder.join("IMG_0002.JPG").exists());
         // A folder that is not a device is never cleared.
         assert!(free_up(&card, &library, &conn, 0).is_err());
+    }
+
+    #[test]
+    fn phones_mounted_by_gvfs_get_readable_names() {
+        let name = |mount: &str| gvfs_device_name(mount);
+        assert_eq!(
+            name("mtp:host=SAMSUNG_SAMSUNG_Android_R58M12AB3CD").as_deref(),
+            Some("SAMSUNG Android")
+        );
+        assert_eq!(
+            name("mtp:host=HUAWEI_ELE-L29_7XBNW19A12003456").as_deref(),
+            Some("HUAWEI ELE-L29")
+        );
+        assert_eq!(
+            name("mtp:host=%5Busb%3A001%2C005%5D").as_deref(),
+            Some("Phone")
+        );
+        assert_eq!(
+            name("afc:host=00008030-001A2B3C4D5E6F,port=3").as_deref(),
+            Some("iPhone")
+        );
+        assert_eq!(
+            name("gphoto2:host=Canon_Inc._Canon_Digital_Camera").as_deref(),
+            Some("Canon Inc. Canon Digital Camera")
+        );
+        assert_eq!(name("smb-share:server=nas,share=photos"), None);
     }
 
     #[test]

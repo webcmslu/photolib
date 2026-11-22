@@ -112,7 +112,7 @@ const RUST_MESSAGES = [
   "Not a valid edit.",
   "The library folder is read-only, so nothing can be imported into it.",
   "Not a valid folder name.",
-  "Unlock the device and tap “Trust” on it, then try again.",
+  "Unlock the device and tap “Trust” or “Allow” on it, then try again.",
 ];
 
 /** An error to show: a message from the Rust side is translated when it is a known one. */

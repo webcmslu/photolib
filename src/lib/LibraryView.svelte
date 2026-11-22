@@ -1235,7 +1235,7 @@
     <p class="banner device">
       <span>{t("“{name}” is connected.", { name: offeredSource.name })}</span>
       {#if offeredSource.restricted}
-        <span>{t("Unlock it and tap “Trust” on it to import its photos.")}</span>
+        <span>{t("Unlock it and tap “Trust” or “Allow” on it to import its photos.")}</span>
       {:else}
         <button class="link" onclick={() => (deviceImport = { source: offeredSource })}>{t("Import photos…")}</button>
       {/if}

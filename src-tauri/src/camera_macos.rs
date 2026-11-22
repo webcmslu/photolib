@@ -85,7 +85,7 @@ impl std::fmt::Display for CameraError {
         match self {
             Self::Restricted => write!(
                 f,
-                "Unlock the device and tap “Trust” on it, then try again."
+                "Unlock the device and tap “Trust” or “Allow” on it, then try again."
             ),
             Self::Other(why) => write!(f, "{why}"),
         }

@@ -422,9 +422,9 @@ const fr: Record<string, string> = {
   "From a phone, a memory card, a camera or a folder": "Depuis un téléphone, une carte mémoire, un appareil photo ou un dossier",
   "No phone, memory card or camera is connected. You can also import from any folder.": "Aucun téléphone, carte mémoire ni appareil photo n’est connecté. Vous pouvez aussi importer depuis n’importe quel dossier.",
   "Try again": "Réessayer",
-  "Unlock it and tap “Trust” on it to import its photos.": "Déverrouillez-le et touchez « Se fier » pour importer ses photos.",
-  "unlock it and tap “Trust”": "déverrouillez-le et touchez « Se fier »",
-  "Unlock the device and tap “Trust” on it, then try again.": "Déverrouillez l’appareil et touchez « Se fier », puis réessayez.",
+  "Unlock it and tap “Trust” or “Allow” on it to import its photos.": "Déverrouillez-le et touchez « Se fier » ou « Autoriser » pour importer ses photos.",
+  "unlock it and tap “Trust” or “Allow”": "déverrouillez-le et touchez « Se fier » ou « Autoriser »",
+  "Unlock the device and tap “Trust” or “Allow” on it, then try again.": "Déverrouillez l’appareil et touchez « Se fier » ou « Autoriser », puis réessayez.",
   "Can't be read": "Illisible",
   "Everything here is already in the library.": "Tout est déjà dans la bibliothèque.",
   "Import {items} ({size})": "Importer {items} ({size})",
@@ -465,6 +465,7 @@ const fr: Record<string, string> = {
   "Free up space…": "Libérer de l’espace…",
   "Look at the device's photos again first.": "Relisez d’abord les photos de l’appareil.",
   "Only a phone, a camera or a memory card can be cleared.": "Seuls un téléphone, un appareil photo ou une carte mémoire peuvent être vidés.",
+  "Android phone: on the phone, tap the USB notification and choose “Transfer photos” (PTP).": "Téléphone Android : sur le téléphone, touchez la notification USB et choisissez « Transférer des photos » (PTP).",
 };
 
 export default fr;
