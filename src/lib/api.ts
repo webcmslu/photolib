@@ -44,7 +44,7 @@ export async function pickExportFolder(): Promise<string | null> {
 
 // --- Import from a memory card, camera or folder (see importer.rs) -------------
 
-/** A connected drive with a DCIM folder, or (Mac) a phone or camera on USB. */
+/** A connected drive with a DCIM folder, or a phone or camera on USB (Mac, Windows; on Linux the desktop mounts them as folders). */
 export interface ImportSource {
   path: string;
   name: string;

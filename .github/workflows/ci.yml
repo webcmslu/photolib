@@ -49,3 +49,32 @@ jobs:
       - name: Test
         working-directory: src-tauri
         run: cargo test
+
+  # Windows-only code (camera_windows.rs, phones on USB) is otherwise only
+  # compiled by the release workflow. Built like the Windows release:
+  # without HEIC (no libheif there).
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # The app embeds the built UI.
+      - run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Lint
+        working-directory: src-tauri
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+      - name: Test
+        working-directory: src-tauri
+        run: cargo test --no-default-features

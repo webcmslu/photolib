@@ -1,6 +1,13 @@
 mod apple;
 #[cfg(target_os = "macos")]
 mod camera_macos;
+#[cfg(windows)]
+mod camera_windows;
+/// Phones and cameras connected by USB, where the system has a way to read them.
+#[cfg(target_os = "macos")]
+use camera_macos as camera;
+#[cfg(windows)]
+use camera_windows as camera;
 mod db;
 mod duplicates;
 mod enhance;

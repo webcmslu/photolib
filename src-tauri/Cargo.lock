@@ -3167,6 +3167,7 @@ dependencies = [
  "tract-onnx",
  "ureq",
  "walkdir",
+ "windows",
 ]
 
 [[package]]

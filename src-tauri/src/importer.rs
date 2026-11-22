@@ -39,8 +39,8 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(150);
 const BUFFER: usize = 1 << 20;
 
 /// A memory card or camera that shows up as a drive with a `DCIM` folder
-/// (the folder every camera stores its photos in), or on a Mac an iPhone,
-/// iPad or camera connected by USB (`path` is then `camera:<id>`).
+/// (the folder every camera stores its photos in), or on a Mac or a PC a
+/// phone or camera connected by USB (`path` is then `camera:<id>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Source {
@@ -56,16 +56,12 @@ const CAMERA_PREFIX: &str = "camera:";
 pub fn sources() -> Vec<Source> {
     #[allow(unused_mut)]
     let mut found = drives();
-    #[cfg(target_os = "macos")]
-    found.extend(
-        crate::camera_macos::cameras()
-            .into_iter()
-            .map(|camera| Source {
-                path: format!("{CAMERA_PREFIX}{}", camera.id),
-                name: camera.name,
-                restricted: camera.restricted,
-            }),
-    );
+    #[cfg(any(target_os = "macos", windows))]
+    found.extend(crate::camera::cameras().into_iter().map(|camera| Source {
+        path: format!("{CAMERA_PREFIX}{}", camera.id),
+        name: camera.name,
+        restricted: camera.restricted,
+    }));
     found
 }
 
@@ -247,8 +243,9 @@ fn drive_name(root: &Path) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Origin {
     File(PathBuf),
-    /// File `index` of a device connected by USB (see camera_macos.rs).
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    /// File `index` of a device connected by USB (see camera_macos.rs and
+    /// camera_windows.rs).
+    #[cfg_attr(not(any(target_os = "macos", windows)), allow(dead_code))]
     Camera {
         device: String,
         index: usize,
@@ -491,9 +488,9 @@ fn folder_entries(source: &Path, unreadable: &mut Vec<(String, String)>) -> io::
 }
 
 /// The photos and videos of a device connected by USB.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn camera_entries(device: &str) -> io::Result<Vec<Entry>> {
-    let files = crate::camera_macos::files(device).map_err(|e| io::Error::other(e.to_string()))?;
+    let files = crate::camera::files(device).map_err(|e| io::Error::other(e.to_string()))?;
     Ok(files
         .into_iter()
         .enumerate()
@@ -517,7 +514,7 @@ fn camera_entries(device: &str) -> io::Result<Vec<Entry>> {
         .collect())
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn camera_entries(_device: &str) -> io::Result<Vec<Entry>> {
     Err(io::Error::new(
         io::ErrorKind::NotFound,
@@ -728,11 +725,11 @@ pub fn thumbnail(generation: u64, id: usize) -> Option<Vec<u8>> {
         survey.origins.get(id)?.clone()
     };
     match origin {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         Origin::Camera { device, index } => {
-            crate::camera_macos::thumbnail(&device, index, THUMB_SIDE).ok()
+            crate::camera::thumbnail(&device, index, THUMB_SIDE).ok()
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         Origin::Camera { .. } => None,
         Origin::File(_) if is_video => None,
         Origin::File(path) => {
@@ -965,7 +962,7 @@ pub fn import(
 /// Downloads file `index` of a device to `target` through a hidden folder,
 /// checks its size, and returns its fingerprint; `None` (and no copy) if
 /// `known` says the library has it already.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn download_checked(
     device: &str,
     index: usize,
@@ -983,7 +980,7 @@ fn download_checked(
         .unwrap_or_default();
     let partial = staging.join(&name);
     let result = (|| -> io::Result<Option<String>> {
-        crate::camera_macos::download(device, index, &staging, &name, cancel).map_err(|why| {
+        crate::camera::download(device, index, &staging, &name, cancel).map_err(|why| {
             if why == "cancelled" {
                 io::ErrorKind::Interrupted.into()
             } else {
@@ -1021,7 +1018,7 @@ fn download_checked(
     result
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn download_checked(
     _: &str,
     _: usize,
@@ -1240,7 +1237,7 @@ fn delete_safe_files(
     Ok(summary)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", windows))]
 fn delete_on_device(device: &str, files: &[&Known], summary: &mut FreeUpSummary) {
     let wanted: Vec<(usize, &str, u64)> = files
         .iter()
@@ -1256,7 +1253,7 @@ fn delete_on_device(device: &str, files: &[&Known], summary: &mut FreeUpSummary)
             Origin::File(_) => None,
         })
         .collect();
-    match crate::camera_macos::delete(device, &wanted) {
+    match crate::camera::delete(device, &wanted) {
         Ok(result) => {
             for index in result.deleted {
                 if let Some(file) = by_index.get(&index) {
@@ -1276,7 +1273,7 @@ fn delete_on_device(device: &str, files: &[&Known], summary: &mut FreeUpSummary)
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 fn delete_on_device(_: &str, files: &[&Known], summary: &mut FreeUpSummary) {
     summary.failed.extend(
         files
