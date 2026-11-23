@@ -60,7 +60,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxMDYxREQyOTE2QjQ2NzcKUldSM1JtdVIwaDBHd1hFK2hYczdnN1l4Q0hjaEdldnl2akx0N3pvYkRFbU91dmVXZGFyc3lFcUoK",
       "endpoints": [
-        "https://github.com/webcmslu/photolib/releases/latest/download/latest.json"
+        "https://github.com/webcmslu/phototek/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

@@ -11,8 +11,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 
-const RELEASES = "https://github.com/webcmslu/photolib/releases/latest";
-const LATEST_API = "https://api.github.com/repos/webcmslu/photolib/releases/latest";
+const RELEASES = "https://github.com/webcmslu/phototek/releases/latest";
+const LATEST_API = "https://api.github.com/repos/webcmslu/phototek/releases/latest";
 
 export const about = $state({
   name: "Phototek",
