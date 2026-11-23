@@ -28,6 +28,7 @@ mod people;
 mod places;
 mod raw;
 mod recents;
+mod rename;
 mod search;
 mod similar;
 mod thumbs;
@@ -1437,6 +1438,8 @@ fn sync_library(path: String, state: State<'_, AppState>) -> Result<bool, String
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything reads them: the folders the app kept as Photolib.
+    rename::move_old_data();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())

@@ -1,7 +1,7 @@
 <!--
   The ⓘ button and the Info dialog: who makes the app, its version, and a
   notice with a direct download when a newer version is out (the button then
-  shows a green dot). Same design as Marka's, in Photolib's colors.
+  shows a green dot). Same design as Marka's, in Phototek's colors.
 -->
 <script lang="ts">
   import { t } from "./i18n";

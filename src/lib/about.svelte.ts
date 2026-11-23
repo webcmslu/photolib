@@ -15,7 +15,7 @@ const RELEASES = "https://github.com/webcmslu/photolib/releases/latest";
 const LATEST_API = "https://api.github.com/repos/webcmslu/photolib/releases/latest";
 
 export const about = $state({
-  name: "Photolib",
+  name: "Phototek",
   version: "",
   /** A newer release, with the link to the installer for this computer. */
   update: null as { version: string; url: string } | null,

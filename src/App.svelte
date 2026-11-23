@@ -109,7 +109,7 @@
 {:else}
   <div class="corner"><SettingsButton /><AboutButton /></div>
   <div class="welcome">
-    <h1>Photolib</h1>
+    <h1>Phototek</h1>
     <p class="dim">{t("Browse any folder of photos: a NAS, an external drive or a local disk.")}</p>
 
     <div class="drop" class:dropping>

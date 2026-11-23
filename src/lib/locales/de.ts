@@ -212,7 +212,7 @@ const de: Record<string, string> = {
   "Photo": "Foto",
   "Photo viewer": "Fotoansicht",
   "Photo {n}": "Foto {n}",
-  "Photolib can find the faces in your photos and group the photos by person. It all happens on this computer: no photo and no face leaves it.": "Photolib kann die Gesichter in deinen Fotos finden und die Fotos nach Person gruppieren. Alles geschieht auf diesem Computer: Kein Foto und kein Gesicht verlässt ihn.",
+  "Phototek can find the faces in your photos and group the photos by person. It all happens on this computer: no photo and no face leaves it.": "Phototek kann die Gesichter in deinen Fotos finden und die Fotos nach Person gruppieren. Alles geschieht auf diesem Computer: Kein Foto und kein Gesicht verlässt ihn.",
   "Photos": "Fotos",
   "Photos Library": "Fotos-Mediathek",
   "Photos from the map": "Fotos von der Karte",

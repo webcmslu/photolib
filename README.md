@@ -1,9 +1,10 @@
-# Photolib
+# Phototek
 
 A cross-platform photo browser where the library is any folder: a NAS mount, an
 external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
 
-"Photolib" is a working name.
+Formerly called Photolib. The shared folder in each library is still named
+`.photolib`, so every version, older ones included, works on the same library.
 
 ## Status
 
@@ -137,7 +138,7 @@ cd src-tauri && cargo test
 cargo test --release benchmark -- --ignored --nocapture   # 10k-file indexing benchmark
 # (`tools/photos-schema.sh` prints an Apple Photos database's structure)
 # check RAW support against your own camera files:
-PHOTOLIB_RAW_SAMPLES=/some/folder cargo test real_raw -- --ignored --nocapture
+PHOTOTEK_RAW_SAMPLES=/some/folder cargo test real_raw -- --ignored --nocapture
 npm run tauri build    # release bundle
 ```
 

@@ -218,11 +218,11 @@ mod tests {
     }
 
     /// Checks real camera files. Run it with a folder of RAW samples:
-    /// `PHOTOLIB_RAW_SAMPLES=/path cargo test real_raw -- --ignored --nocapture`
+    /// `PHOTOTEK_RAW_SAMPLES=/path cargo test real_raw -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn real_raw_samples() {
-        let dir = std::env::var("PHOTOLIB_RAW_SAMPLES").expect("set PHOTOLIB_RAW_SAMPLES");
+        let dir = std::env::var("PHOTOTEK_RAW_SAMPLES").expect("set PHOTOTEK_RAW_SAMPLES");
         let mut checked = 0;
         for entry in std::fs::read_dir(dir).unwrap() {
             let path = entry.unwrap().path();

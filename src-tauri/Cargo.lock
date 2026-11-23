@@ -3142,12 +3142,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "photolib"
+name = "phototek"
 version = "0.1.12"
 dependencies = [
  "blake3",
  "cc",
  "chrono",
+ "dirs",
  "fast_image_resize",
  "getrandom 0.3.4",
  "image",

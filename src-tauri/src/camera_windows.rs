@@ -176,7 +176,7 @@ fn open_device(id: &str) -> windows::core::Result<IPortableDevice> {
     unsafe {
         let client: IPortableDeviceValues =
             CoCreateInstance(&PortableDeviceValues, None, CLSCTX_INPROC_SERVER)?;
-        client.SetStringValue(&WPD_CLIENT_NAME, &HSTRING::from("Photolib"))?;
+        client.SetStringValue(&WPD_CLIENT_NAME, &HSTRING::from("Phototek"))?;
         client.SetUnsignedIntegerValue(&WPD_CLIENT_MAJOR_VERSION, 1)?;
         client.SetUnsignedIntegerValue(&WPD_CLIENT_MINOR_VERSION, 0)?;
         client.SetUnsignedIntegerValue(&WPD_CLIENT_REVISION, 0)?;

@@ -1,5 +1,5 @@
 [package]
-name = "photolib"
+name = "phototek"
 version = "0.1.12"
 description = "Cross-platform photo browser where the library is any folder"
 edition = "2021"
@@ -9,7 +9,7 @@ publish = false
 
 [lib]
 # The `_lib` suffix avoids a name clash between the library and the binary on Windows.
-name = "photolib_lib"
+name = "phototek_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -19,6 +19,8 @@ cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# The folders each system keeps app data in (see rename.rs).
+dirs = "6"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }

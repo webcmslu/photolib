@@ -832,11 +832,11 @@ mod tests {
     }
 
     /// Where a scan spends its time on a network share. Prints numbers only:
-    /// `PHOTOLIB_NAS=/Volumes/Share cargo test --release nas_timings -- --ignored --nocapture`
+    /// `PHOTOTEK_NAS=/Volumes/Share cargo test --release nas_timings -- --ignored --nocapture`
     #[test]
     #[ignore = "benchmark: needs a network share"]
     fn nas_timings() {
-        let Ok(root) = std::env::var("PHOTOLIB_NAS") else {
+        let Ok(root) = std::env::var("PHOTOTEK_NAS") else {
             return;
         };
         let root = PathBuf::from(root);

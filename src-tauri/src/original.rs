@@ -1,5 +1,5 @@
 //! "Apply to original": draws a photo's edit into its file, for people who
-//! want the change outside Photolib too. Everything else in the app leaves
+//! want the change outside Phototek too. Everything else in the app leaves
 //! files alone; this is only done when asked, after a warning.
 //!
 //! Only JPEG files are rewritten. The new file keeps the original's metadata

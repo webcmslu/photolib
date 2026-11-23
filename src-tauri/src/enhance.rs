@@ -261,12 +261,12 @@ mod tests {
 }
 
 /// Statistics of the wand over a folder of cached previews, numbers only:
-/// `PHOTOLIB_PREVIEWS=<dir> cargo test enhance_stats -- --ignored --nocapture`
+/// `PHOTOTEK_PREVIEWS=<dir> cargo test enhance_stats -- --ignored --nocapture`
 #[cfg(test)]
 #[test]
 #[ignore]
 fn enhance_stats() {
-    let dir = std::env::var("PHOTOLIB_PREVIEWS").expect("PHOTOLIB_PREVIEWS");
+    let dir = std::env::var("PHOTOTEK_PREVIEWS").expect("PHOTOTEK_PREVIEWS");
     let files: Vec<_> = walkdir::WalkDir::new(dir)
         .into_iter()
         .filter_map(Result::ok)

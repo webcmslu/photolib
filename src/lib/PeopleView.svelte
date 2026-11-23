@@ -126,7 +126,7 @@
         <p>{t("Finding faces is switched off in Settings. The people found so far are kept.")}</p>
       {:else}
       <p>
-        {t("Photolib can find the faces in your photos and group the photos by person. It all happens on this computer: no photo and no face leaves it.")}
+        {t("Phototek can find the faces in your photos and group the photos by person. It all happens on this computer: no photo and no face leaves it.")}
       </p>
       <p>
         {t("This needs two model files ({size}), downloaded once from huggingface.co. Searching a large library then takes a while, in the background.", { size: formatBytes(status.downloadBytes) })}

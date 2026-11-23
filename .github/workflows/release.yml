@@ -64,7 +64,7 @@ jobs:
                   --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -n 1)"
           if [ -z "$id" ]; then
             id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" \
-                    -f tag_name="$TAG" -f name="Photolib $TAG" -F draft=true --jq .id)"
+                    -f tag_name="$TAG" -f name="Phototek $TAG" -F draft=true --jq .id)"
           fi
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
@@ -268,7 +268,7 @@ jobs:
         if: github.ref_type != 'tag' && inputs.tag == ''
         uses: actions/upload-artifact@v4
         with:
-          name: photolib-${{ matrix.target || runner.os }}
+          name: phototek-${{ matrix.target || runner.os }}
           if-no-files-found: error
           path: |
             src-tauri/target/**/release/bundle/dmg/*.dmg

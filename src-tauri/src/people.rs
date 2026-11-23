@@ -583,20 +583,20 @@ mod tests {
     use super::*;
 
     /// Measures face search and grouping on a copy of a real library:
-    /// `PHOTOLIB_BENCH_DIR` holds `index.db` and `faces.db`, and
-    /// `PHOTOLIB_APP_DATA` is the app's data folder (models and thumbnails).
-    /// `PHOTOLIB_BENCH_PHOTOS` limits how many photos are searched.
+    /// `PHOTOTEK_BENCH_DIR` holds `index.db` and `faces.db`, and
+    /// `PHOTOTEK_APP_DATA` is the app's data folder (models and thumbnails).
+    /// `PHOTOTEK_BENCH_PHOTOS` limits how many photos are searched.
     /// Prints numbers only, never names or file paths.
     #[test]
     #[ignore]
     fn benchmark_real_library() {
         let (Ok(dir), Ok(data)) = (
-            std::env::var("PHOTOLIB_BENCH_DIR"),
-            std::env::var("PHOTOLIB_APP_DATA"),
+            std::env::var("PHOTOTEK_BENCH_DIR"),
+            std::env::var("PHOTOTEK_APP_DATA"),
         ) else {
             return;
         };
-        let limit: u64 = std::env::var("PHOTOLIB_BENCH_PHOTOS")
+        let limit: u64 = std::env::var("PHOTOTEK_BENCH_PHOTOS")
             .ok()
             .and_then(|n| n.parse().ok())
             .unwrap_or(1000);

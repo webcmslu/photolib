@@ -415,7 +415,7 @@ struct Known {
 enum Evidence {
     /// Its content (fingerprint), read from it.
     Fingerprint(String),
-    /// Photolib imported it (device key, see [`camera_key`]).
+    /// Phototek imported it (device key, see [`camera_key`]).
     Imported(String),
     /// A file of the same name and size is in the library.
     NameAndSize,
@@ -578,7 +578,7 @@ fn survey(
         .prepare("SELECT 1 FROM photos WHERE fingerprint = ?1 LIMIT 1")
         .map_err(io::Error::other)?;
     // A phone's photos are recognized by name and size: an original copied
-    // before, by Photolib or another app, has both.
+    // before, by Phototek or another app, has both.
     let named = names_in_library(conn).map_err(io::Error::other)?;
     let total: usize = groups.values().map(Vec::len).sum();
     let mut done = 0;
@@ -1419,7 +1419,7 @@ fn imported_before(library: &Path) -> HashSet<String> {
     seen
 }
 
-/// For files Photolib imported from a device: device key → fingerprint of
+/// For files Phototek imported from a device: device key → fingerprint of
 /// the library file it became (`m:` lines of the import logs).
 fn imported_map(library: &Path) -> HashMap<String, String> {
     let mut map = HashMap::new();

@@ -354,13 +354,13 @@ mod benchmark {
     use super::*;
 
     /// How many groups each setting makes on a copy of a real library's
-    /// index (`PHOTOLIB_BENCH_DIR` holds `index.db`; `PHOTOLIB_APP_DATA` is
+    /// index (`PHOTOTEK_BENCH_DIR` holds `index.db`; `PHOTOTEK_APP_DATA` is
     /// the app's data folder with the thumbnails). Prints numbers only.
     #[test]
     #[ignore]
     fn thresholds_on_a_real_library() {
-        let index = std::env::var("PHOTOLIB_BENCH_DIR").unwrap();
-        let data = std::path::PathBuf::from(std::env::var("PHOTOLIB_APP_DATA").unwrap());
+        let index = std::env::var("PHOTOTEK_BENCH_DIR").unwrap();
+        let data = std::path::PathBuf::from(std::env::var("PHOTOTEK_APP_DATA").unwrap());
         let conn = Connection::open(format!("{index}/index.db")).unwrap();
         let cache = ThumbCache::new(&data);
         let rows: Vec<(String, String, i64)> = conn

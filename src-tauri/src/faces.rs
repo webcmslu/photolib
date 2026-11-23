@@ -399,11 +399,11 @@ mod tests {
     use super::*;
 
     /// Prints the fingerprints to put in `DETECTOR` and `RECOGNIZER` when
-    /// the model files change: `PHOTOLIB_DATA=<dir> cargo test model_hashes -- --ignored --nocapture`
+    /// the model files change: `PHOTOTEK_DATA=<dir> cargo test model_hashes -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn model_hashes() {
-        let data = std::env::var("PHOTOLIB_DATA").expect("set PHOTOLIB_DATA");
+        let data = std::env::var("PHOTOTEK_DATA").expect("set PHOTOTEK_DATA");
         for model in [&DETECTOR, &RECOGNIZER] {
             let bytes = fs::read(models_dir(Path::new(&data)).join(model.name)).unwrap();
             println!(
@@ -451,12 +451,12 @@ mod tests {
     /// Checks the real models on real photos. Download the models first
     /// (switch face grouping on in the app, or copy the two .onnx files to
     /// `<dir>/models/`), then run:
-    /// `PHOTOLIB_FACES=<dir of jpgs> PHOTOLIB_DATA=<dir> cargo test real_faces -- --ignored --nocapture`
+    /// `PHOTOTEK_FACES=<dir of jpgs> PHOTOTEK_DATA=<dir> cargo test real_faces -- --ignored --nocapture`
     #[test]
     #[ignore]
     fn real_faces() {
-        let pictures = std::env::var("PHOTOLIB_FACES").expect("set PHOTOLIB_FACES");
-        let data = std::env::var("PHOTOLIB_DATA").expect("set PHOTOLIB_DATA");
+        let pictures = std::env::var("PHOTOTEK_FACES").expect("set PHOTOTEK_FACES");
+        let data = std::env::var("PHOTOTEK_DATA").expect("set PHOTOTEK_DATA");
         let finder = FaceFinder::load(Path::new(&data)).unwrap();
         let mut all: Vec<(String, Face)> = Vec::new();
         let mut names: Vec<PathBuf> = fs::read_dir(pictures)
