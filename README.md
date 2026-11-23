@@ -118,7 +118,7 @@ Formerly called Photolib. The shared folder in each library is still named
 
 ## Develop
 
-Prerequisites: Node 20+, Rust 1.88+ and the
+Prerequisites: Node 20+, Rust 1.90+ and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
 
 HEIC: macOS decodes it with its own ImageIO framework, so nothing extra is
