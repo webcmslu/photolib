@@ -7,7 +7,7 @@
 <script lang="ts">
   import { gearOptions, type Gear, type GearOptions, type Listing } from "./api";
   import { t } from "./i18n";
-  import { formatNumber } from "./format";
+  import { cameraName, formatNumber } from "./format";
 
   interface Props {
     libraryPath: string;
@@ -69,14 +69,6 @@
       stale = true;
     };
   });
-
-  /** "Canon EOS R6", "Apple iPhone 15", "NIKON D850" (not "NIKON CORPORATION NIKON D850"). */
-  function cameraName(make: string | null, model: string | null): string {
-    if (!make) return model ?? "";
-    if (!model) return make;
-    const brand = make.split(/\s+/)[0].toLowerCase();
-    return model.toLowerCase().startsWith(brand) ? model : `${make} ${model}`;
-  }
 
   const cameraKey = (make: string | null | undefined, model: string | null | undefined) =>
     JSON.stringify([make ?? null, model ?? null]);

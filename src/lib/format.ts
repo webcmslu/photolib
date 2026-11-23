@@ -124,3 +124,48 @@ export function rawPairLabel(relPath: string): string {
   const extension = relPath.slice(relPath.lastIndexOf(".") + 1).toUpperCase();
   return `${extension === "JPG" ? "JPEG" : extension} + RAW`;
 }
+
+/** Brands whose cameras write a company name rather than the brand. */
+const BRAND_ALIASES: [RegExp, string][] = [
+  [/^eastman kodak\b/i, "Kodak"],
+  [/^hewlett[- ]packard\b/i, "HP"],
+];
+
+/** "Co., Ltd.", "Corporation", "Optical"…: words that aren't the brand. */
+const COMPANY_WORDS =
+  /[\s,]+(co\.?,?\s*ltd\.?|co\.?|ltd\.?|inc\.?|corp\.?|corporation|company|optical|computer|techwin|imaging|electronics?|digital solutions)(?=[\s,.]|$)/gi;
+
+/** The brand a camera's "make" stands for: "OLYMPUS OPTICAL CO.,LTD" → "Olympus". */
+export function cameraBrand(make: string): string {
+  let brand = make.trim();
+  for (const [pattern, name] of BRAND_ALIASES) if (pattern.test(brand)) return name;
+  let previous;
+  do {
+    previous = brand;
+    brand = brand.replace(COMPANY_WORDS, "").replace(/[\s,.]+$/, "");
+  } while (brand !== previous);
+  if (!brand) brand = make.trim();
+  // "SAMSUNG" → "Samsung"; short initials like "HP" or "JVC" stay as they are.
+  return brand.replace(/\b[A-Z]{4,}\b/g, (word) => word[0] + word.slice(1).toLowerCase());
+}
+
+/**
+ * A camera's name as people say it: "Canon EOS R6", "Nikon D850" (not
+ * "NIKON CORPORATION NIKON D850"), "Kodak EasyShare M853" (not "EASTMAN
+ * KODAK COMPANY KODAK EASYSHARE M853 ZOOM DIGITAL CAMERA").
+ */
+export function cameraName(make: string | null | undefined, model: string | null | undefined): string {
+  let name = (model ?? "").trim().replace(/\s+digital camera$/i, "");
+  if (!make?.trim()) return name;
+  const brand = cameraBrand(make);
+  if (!name) return brand;
+  // The model often repeats the brand ("KODAK EASYSHARE…", "Canon EOS 6D").
+  const words = [brand, ...make.trim().split(/[\s,]+/)].filter((word) => word.length > 1);
+  for (const word of words) {
+    if (name.toLowerCase().startsWith(word.toLowerCase() + " ") || name.toLowerCase() === word.toLowerCase()) {
+      name = name.slice(word.length).trim();
+      break;
+    }
+  }
+  return name ? `${brand} ${name}` : brand;
+}

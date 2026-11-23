@@ -29,7 +29,7 @@
   import CropBox from "./CropBox.svelte";
   import { editedSize, isNeutral, NO_EDIT, type Edit } from "./edit";
   import EditedImage from "./EditedImage.svelte";
-  import { formatBytes, formatDateTime, formatDuration, formatNumber, formatShooting, rawPairLabel } from "./format";
+  import { cameraName, formatBytes, formatDateTime, formatDuration, formatNumber, formatShooting, rawPairLabel } from "./format";
   import type { PhotoPages } from "./pages.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { LABELS, labelForKey, type LabelColor } from "./labels";
@@ -957,7 +957,7 @@
           {/if}
           {#if details.cameraMake || details.cameraModel}
             <dt>{t("Camera")}</dt>
-            <dd>{[details.cameraMake, details.cameraModel].filter(Boolean).join(" ")}</dd>
+            <dd>{cameraName(details.cameraMake, details.cameraModel)}</dd>
           {/if}
           {#if shooting}
             {#if shooting.lens}

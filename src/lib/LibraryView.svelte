@@ -44,7 +44,7 @@
     type Gear,
   } from "./api";
   import GearPanel from "./GearPanel.svelte";
-  import { formatDayRange, formatNumber, monthKey, photoCount } from "./format";
+  import { cameraName, formatDayRange, formatNumber, monthKey, photoCount } from "./format";
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
   import PeopleView from "./PeopleView.svelte";
@@ -537,7 +537,7 @@
   /** "f/2.8 · 35 mm" for the button's tooltip. */
   const gearSummary = $derived(
     [
-      gear.cameraModel ?? gear.cameraMake,
+      gear.cameraMake || gear.cameraModel ? cameraName(gear.cameraMake, gear.cameraModel) : null,
       gear.lens,
       gear.aperture != null ? `f/${formatNumber(gear.aperture)}` : null,
       gear.focalLength != null ? `${gear.focalLength} mm` : null,
