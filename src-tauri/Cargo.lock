@@ -3293,7 +3293,7 @@ dependencies = [
 
 [[package]]
 name = "phototek"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "blake3",
  "cc",
