@@ -872,6 +872,24 @@ fn photo_details(
     db::photo_details(&open_index(&state, &path)?, &rel_path).map_err(|e| e.to_string())
 }
 
+/// How a photo was taken (lens, aperture, shutter speed, ISO…), read from
+/// the file. Only photos in the index can be read this way.
+#[tauri::command(async)]
+fn photo_shooting(
+    path: String,
+    rel_path: String,
+    state: State<'_, AppState>,
+) -> Result<Option<metadata::Shooting>, String> {
+    let conn = open_index(&state, &path)?;
+    if db::find_by_path(&conn, &rel_path)
+        .map_err(|e| e.to_string())?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    Ok(metadata::shooting(&Path::new(&path).join(&rel_path)))
+}
+
 #[tauri::command(async)]
 fn albums(path: String, state: State<'_, AppState>) -> Result<Vec<db::Album>, String> {
     db::albums(&open_index(&state, &path)?).map_err(|e| e.to_string())
@@ -1515,6 +1533,7 @@ pub fn run() {
             release_asset_suffix,
             folders,
             photo_details,
+            photo_shooting,
             apple_import_preview,
             apple_import,
             faces_status,

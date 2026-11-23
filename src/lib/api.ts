@@ -527,6 +527,28 @@ export function listFolders(path: string): Promise<FolderEntry[]> {
   return invoke("folders", { path });
 }
 
+/** How a photo was taken; mirrors `Shooting` in src-tauri/src/metadata.rs. */
+export interface Shooting {
+  lens: string | null;
+  /** In mm, and the 35 mm equivalent. */
+  focalLength: number | null;
+  focalLength35mm: number | null;
+  /** The f-number: 2.8 for f/2.8. */
+  aperture: number | null;
+  /** Exposure time in seconds. */
+  exposure: number | null;
+  iso: number | null;
+  /** Exposure compensation in EV. */
+  exposureBias: number | null;
+  flash: boolean | null;
+  software: string | null;
+}
+
+/** Read from the file when asked (not kept in the index). */
+export function photoShooting(path: string, relPath: string): Promise<Shooting | null> {
+  return invoke("photo_shooting", { path, relPath });
+}
+
 export function photoDetails(path: string, relPath: string): Promise<PhotoDetails | null> {
   return invoke("photo_details", { path, relPath });
 }

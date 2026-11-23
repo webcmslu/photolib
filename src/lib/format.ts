@@ -69,6 +69,40 @@ export function monthKey(day: number): number {
 export const formatDateTime = (sortDate: number) =>
   capitalized(dateTimeFormat.format(sortDate));
 
+const oneDecimal = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 });
+
+/** "35 mm (52 mm)", "f/2.8", "1/250 s", "ISO 400", "−0.7 EV": how a photo was taken. */
+export function formatShooting(shot: {
+  focalLength: number | null;
+  focalLength35mm: number | null;
+  aperture: number | null;
+  exposure: number | null;
+  iso: number | null;
+  exposureBias: number | null;
+}): string[] {
+  const parts: string[] = [];
+  if (shot.focalLength !== null) {
+    const mm = `${oneDecimal.format(shot.focalLength)} mm`;
+    const equivalent =
+      shot.focalLength35mm !== null && Math.abs(shot.focalLength35mm - shot.focalLength) >= 1
+        ? ` (${t("{mm} mm in 35 mm", { mm: shot.focalLength35mm })})`
+        : "";
+    parts.push(mm + equivalent);
+  }
+  if (shot.aperture !== null) parts.push(`f/${oneDecimal.format(shot.aperture)}`);
+  if (shot.exposure !== null) {
+    const seconds = shot.exposure;
+    // 1/250 s below a third of a second, 0.5 s, 2 s, 30 s above.
+    parts.push(seconds < 0.3 ? `1/${Math.round(1 / seconds)} s` : `${oneDecimal.format(seconds)} s`);
+  }
+  if (shot.iso !== null) parts.push(`ISO ${shot.iso}`);
+  if (shot.exposureBias !== null) {
+    const ev = oneDecimal.format(Math.abs(shot.exposureBias));
+    parts.push(`${shot.exposureBias < 0 ? "−" : "+"}${ev} EV`);
+  }
+  return parts;
+}
+
 export function formatBytes(bytes: number): string {
   const units = [t("bytes"), "KB", "MB", "GB"];
   let value = bytes;

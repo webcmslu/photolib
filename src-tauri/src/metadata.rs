@@ -131,6 +131,100 @@ pub fn from_exif(exif: &Exif) -> PhotoMeta {
     }
 }
 
+/// How a photo was taken, for the info panel: read from the file when it
+/// is shown, not kept in the index.
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Shooting {
+    pub lens: Option<String>,
+    /// Focal length in mm, and its 35 mm equivalent.
+    pub focal_length: Option<f64>,
+    pub focal_length_35mm: Option<u32>,
+    /// The f-number: 2.8 for f/2.8.
+    pub aperture: Option<f64>,
+    /// Exposure time in seconds.
+    pub exposure: Option<f64>,
+    pub iso: Option<u32>,
+    /// Exposure compensation in EV.
+    pub exposure_bias: Option<f64>,
+    /// Whether the flash fired; `None` if the photo doesn't say.
+    pub flash: Option<bool>,
+    /// The program that last wrote the file (a camera's firmware, an editor).
+    pub software: Option<String>,
+}
+
+impl Shooting {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// How the photo at `path` was taken; `None` for videos and photos that don't say.
+pub fn shooting(path: &Path) -> Option<Shooting> {
+    let exif = match kind_of(path)? {
+        Kind::Video => return None,
+        Kind::Raw => {
+            let mut header = Vec::new();
+            File::open(path)
+                .ok()?
+                .take(raw::HEADER_BYTES as u64)
+                .read_to_end(&mut header)
+                .ok()?;
+            match raw::exif_of_header(&header) {
+                Some(exif) => exif,
+                None => raw::exif_of_preview(&fs::read(path).ok()?)?,
+            }
+        }
+        Kind::Image => exif::Reader::new()
+            .read_from_container(&mut BufReader::new(File::open(path).ok()?))
+            .ok()?,
+    };
+    let shooting = shooting_of(&exif);
+    (!shooting.is_empty()).then_some(shooting)
+}
+
+pub fn shooting_of(exif: &Exif) -> Shooting {
+    let lens = text(exif, Tag::LensModel).map(|model| {
+        // Some cameras write the brand in LensMake only.
+        match text(exif, Tag::LensMake) {
+            Some(make)
+                if !model.to_lowercase().contains(&make.to_lowercase())
+                    && !text(exif, Tag::Make)
+                        .is_some_and(|camera| camera.eq_ignore_ascii_case(&make)) =>
+            {
+                format!("{make} {model}")
+            }
+            _ => model,
+        }
+    });
+    Shooting {
+        lens,
+        focal_length: rational(exif, Tag::FocalLength).filter(|mm| *mm > 0.0),
+        focal_length_35mm: uint(exif, Tag::FocalLengthIn35mmFilm).filter(|mm| *mm > 0),
+        aperture: rational(exif, Tag::FNumber)
+            .or_else(|| {
+                // APEX value: f-number = 2^(value / 2).
+                rational(exif, Tag::ApertureValue).map(|apex| 2f64.powf(apex / 2.0))
+            })
+            .filter(|f| *f > 0.0 && *f < 1000.0),
+        exposure: rational(exif, Tag::ExposureTime).filter(|s| *s > 0.0),
+        iso: uint(exif, Tag::PhotographicSensitivity).filter(|iso| *iso > 0),
+        exposure_bias: rational(exif, Tag::ExposureBiasValue).filter(|ev| ev.abs() > 0.001),
+        flash: uint(exif, Tag::Flash).map(|flash| flash & 1 == 1),
+        software: text(exif, Tag::Software),
+    }
+}
+
+/// A rational value (signed or not) as a number.
+fn rational(exif: &Exif, tag: Tag) -> Option<f64> {
+    let value = match &exif.get_field(tag, In::PRIMARY)?.value {
+        Value::Rational(values) => values.first().filter(|r| r.denom != 0)?.to_f64(),
+        Value::SRational(values) => values.first().filter(|r| r.denom != 0)?.to_f64(),
+        _ => return None,
+    };
+    value.is_finite().then_some(value)
+}
+
 fn uint(exif: &Exif, tag: Tag) -> Option<u32> {
     exif.get_field(tag, In::PRIMARY)?.value.get_uint(0)
 }
@@ -250,6 +344,52 @@ mod tests {
         let path = dir.path().join("photo.jpg");
         fs::write(&path, jpeg_with_exif(fields)).unwrap();
         read(&path)
+    }
+
+    #[test]
+    fn reads_how_the_photo_was_taken() {
+        use exif::{Field, Rational, SRational};
+        let rational = |tag, num, denom| Field {
+            tag,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num, denom }]),
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.jpg");
+        fs::write(
+            &path,
+            jpeg_with_exif(&[
+                ascii_field(Tag::Make, "Canon"),
+                ascii_field(Tag::LensMake, "Sigma"),
+                ascii_field(Tag::LensModel, "35mm F1.4 DG HSM | Art 012"),
+                rational(Tag::FocalLength, 35, 1),
+                rational(Tag::FNumber, 28, 10),
+                rational(Tag::ExposureTime, 1, 250),
+                short_field(Tag::PhotographicSensitivity, 400),
+                Field {
+                    tag: Tag::ExposureBiasValue,
+                    ifd_num: In::PRIMARY,
+                    value: Value::SRational(vec![SRational { num: -2, denom: 3 }]),
+                },
+                short_field(Tag::Flash, 0x10),
+            ]),
+        )
+        .unwrap();
+        let shooting = shooting(&path).unwrap();
+        assert_eq!(
+            shooting.lens.as_deref(),
+            Some("Sigma 35mm F1.4 DG HSM | Art 012")
+        );
+        assert_eq!(shooting.focal_length, Some(35.0));
+        assert_eq!(shooting.aperture, Some(2.8));
+        assert_eq!(shooting.exposure, Some(0.004));
+        assert_eq!(shooting.iso, Some(400));
+        assert!((shooting.exposure_bias.unwrap() + 2.0 / 3.0).abs() < 1e-9);
+        assert_eq!(shooting.flash, Some(false));
+
+        // Nothing about the shot: nothing to show.
+        fs::write(&path, jpeg_with_exif(&[ascii_field(Tag::Make, "Canon")])).unwrap();
+        assert_eq!(super::shooting(&path), None);
     }
 
     #[test]

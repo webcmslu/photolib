@@ -16,6 +16,7 @@
     applyEditToOriginal,
     autoEnhance,
     photoDetails,
+    photoShooting,
     photoUrl,
     thumbUrl,
     videoUrl,
@@ -23,11 +24,12 @@
     type Op,
     type PhotoDetails,
     type PhotoItem,
+    type Shooting,
   } from "./api";
   import CropBox from "./CropBox.svelte";
   import { editedSize, isNeutral, NO_EDIT, type Edit } from "./edit";
   import EditedImage from "./EditedImage.svelte";
-  import { formatBytes, formatDateTime, formatDuration, formatNumber, rawPairLabel } from "./format";
+  import { formatBytes, formatDateTime, formatDuration, formatNumber, formatShooting, rawPairLabel } from "./format";
   import type { PhotoPages } from "./pages.svelte";
   import { REVEAL_LABEL, revealPhoto } from "./reveal";
   import { LABELS, labelForKey, type LabelColor } from "./labels";
@@ -71,6 +73,8 @@
 
   let photo = $state<PhotoItem | undefined>();
   let details = $state<PhotoDetails | null>(null);
+  /** Lens, aperture, shutter speed…: read from the file, after the details. */
+  let shooting = $state<Shooting | null>(null);
   let showInfo = $state(false);
 
   // --- The filmstrip under the photo, as in Windows Photos ---------------------
@@ -377,6 +381,17 @@
     photoDetails(pages.libraryPath, relPath)
       .then((found) => {
         if (photo?.relPath === relPath) details = found;
+      })
+      .catch(() => {});
+  });
+
+  $effect(() => {
+    const relPath = photo?.relPath;
+    shooting = null;
+    if (!showInfo || !relPath) return;
+    photoShooting(pages.libraryPath, relPath)
+      .then((found) => {
+        if (photo?.relPath === relPath) shooting = found;
       })
       .catch(() => {});
   });
@@ -944,6 +959,24 @@
             <dt>{t("Camera")}</dt>
             <dd>{[details.cameraMake, details.cameraModel].filter(Boolean).join(" ")}</dd>
           {/if}
+          {#if shooting}
+            {#if shooting.lens}
+              <dt>{t("Lens")}</dt>
+              <dd>{shooting.lens}</dd>
+            {/if}
+            {@const settings = formatShooting(shooting)}
+            {#if settings.length > 0 || shooting.flash}
+              <dt>{t("Exposure")}</dt>
+              <dd class="shot">
+                {#each settings as part (part)}<span>{part}</span>{/each}
+                {#if shooting.flash}<span>{t("Flash fired")}</span>{/if}
+              </dd>
+            {/if}
+            {#if shooting.software}
+              <dt>{t("Software")}</dt>
+              <dd>{shooting.software}</dd>
+            {/if}
+          {/if}
           {#if details.latitude !== null && details.longitude !== null}
             <dt>{t("Location")}</dt>
             <dd>
@@ -958,6 +991,12 @@
 </div>
 
 <style>
+  .shot {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 10px;
+  }
+
   .viewer {
     position: fixed;
     inset: 0;

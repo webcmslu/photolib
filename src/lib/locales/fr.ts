@@ -466,6 +466,11 @@ const fr: Record<string, string> = {
   "Look at the device's photos again first.": "Relisez d’abord les photos de l’appareil.",
   "Only a phone, a camera or a memory card can be cleared.": "Seuls un téléphone, un appareil photo ou une carte mémoire peuvent être vidés.",
   "Android phone: on the phone, tap the USB notification and choose “Transfer photos” (PTP).": "Téléphone Android : sur le téléphone, touchez la notification USB et choisissez « Transférer des photos » (PTP).",
+  "Lens": "Objectif",
+  "Exposure": "Exposition",
+  "Flash fired": "Flash déclenché",
+  "Software": "Logiciel",
+  "{mm} mm in 35 mm": "{mm} mm en 24×36",
 };
 
 export default fr;
