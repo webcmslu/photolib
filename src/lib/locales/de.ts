@@ -471,6 +471,17 @@ const de: Record<string, string> = {
   "Flash fired": "Blitz ausgelöst",
   "Software": "Software",
   "{mm} mm in 35 mm": "{mm} mm KB",
+  "Camera and lens": "Kamera und Objektiv",
+  "The camera filter can't be shown right now.": "Der Kamerafilter kann gerade nicht angezeigt werden.",
+  "Loading…": "Wird geladen…",
+  "Any camera": "Alle Kameras",
+  "Any lens": "Alle Objektive",
+  "Aperture": "Blende",
+  "Any": "Alle",
+  "Focal length": "Brennweite",
+  "Lens and settings are still being read for {n} photos.": "Objektiv und Einstellungen werden noch für {n} Fotos gelesen.",
+  "These photos don't say which camera took them.": "Diese Fotos geben keine Kamera an.",
+  "Show all": "Alle anzeigen",
 };
 
 export default de;

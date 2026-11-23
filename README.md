@@ -16,7 +16,10 @@ external drive or a local disk. Tauri 2 (Rust) + Svelte 5 (TypeScript).
   to the UI over `thumb://`. JPEG, PNG, WebP, GIF, TIFF and HEIC.
 - Milestone 4 (browsing): virtualized timeline grid grouped by month and day,
   folder view, and a viewer with arrow keys, zoom, pan, full screen and an
-  info panel.
+  info panel (camera, lens, focal length, aperture, shutter speed, ISO).
+- Camera filter: the grid narrowed to a camera, a lens, an aperture or a
+  focal length (chips, to go from f/2.8 to f/8 in one click each). Lens and
+  settings are read into the index after each scan (`fill_shooting`).
 - Milestone 5 (shared organization): favorites, hidden photos and albums,
   stored as per-device append-only logs in `<library>/.photolib/` and merged
   on every computer that opens the folder. Works offline from the local cache

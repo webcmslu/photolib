@@ -41,7 +41,9 @@
     type ScanProgress,
     type ScanSummary,
     type ThumbSummary,
+    type Gear,
   } from "./api";
+  import GearPanel from "./GearPanel.svelte";
   import { formatDayRange, formatNumber, monthKey, photoCount } from "./format";
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
@@ -523,8 +525,29 @@
     sortMenuOpen = false;
   }
 
+  /** The camera filter's choice; like the filter menu's, it belongs to its listing. */
+  let gearChoice = $state.raw<{ listing: Listing; gear: Gear } | null>(null);
+  const gear = $derived<Gear>(gearChoice?.listing === listing ? gearChoice.gear : {});
+  const gearActive = $derived(
+    !!(gear.cameraMake || gear.cameraModel || gear.lens) || gear.aperture != null || gear.focalLength != null,
+  );
+  let gearOpen = $state(false);
+  /** What the camera filter narrows down: the listing with the filter menu's choice. */
+  const filtered = $derived<Listing>(only ? { kind: "only", within: listing, only } : listing);
+  /** "f/2.8 · 35 mm" for the button's tooltip. */
+  const gearSummary = $derived(
+    [
+      gear.cameraModel ?? gear.cameraMake,
+      gear.lens,
+      gear.aperture != null ? `f/${formatNumber(gear.aperture)}` : null,
+      gear.focalLength != null ? `${gear.focalLength} mm` : null,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  );
+
   const pages = $derived(
-    new PhotoPages(library.path, only ? { kind: "only", within: listing, only } : listing, order),
+    new PhotoPages(library.path, gearActive ? { kind: "gear", within: filtered, ...gear } : filtered, order),
   );
   let groups = $state<DayGroup[]>([]);
   /** False until the first timeline for the current listing has arrived. */
@@ -672,7 +695,7 @@
         return;
       }
       if (!mod && !event.altKey && selected.size > 0) {
-        if (event.key === "Escape" && !(filterMenuOpen || sortMenuOpen || scanMenuOpen)) {
+        if (event.key === "Escape" && !(filterMenuOpen || sortMenuOpen || scanMenuOpen || gearOpen)) {
           event.preventDefault();
           selected.clear();
           return;
@@ -699,7 +722,8 @@
       startSlideshow();
       return;
     }
-    if (event.key === "Escape" && (filterMenuOpen || sortMenuOpen || scanMenuOpen)) {
+    if (event.key === "Escape" && (filterMenuOpen || sortMenuOpen || scanMenuOpen || gearOpen)) {
+      gearOpen = false;
       filterMenuOpen = false;
       sortMenuOpen = false;
       scanMenuOpen = false;
@@ -1126,6 +1150,7 @@
     filterMenuOpen = false;
     sortMenuOpen = false;
     scanMenuOpen = false;
+    gearOpen = false;
   }}
 />
 
@@ -1171,6 +1196,7 @@
           event.stopPropagation();
           filterMenuOpen = false;
           sortMenuOpen = false;
+          gearOpen = false;
           scanMenuOpen = !scanMenuOpen;
         }}
       >
@@ -1598,6 +1624,7 @@
                 event.stopPropagation();
                 filterMenuOpen = false;
                 scanMenuOpen = false;
+                gearOpen = false;
                 sortMenuOpen = !sortMenuOpen;
               }}
               title={t("Sort")}
@@ -1635,6 +1662,7 @@
                 event.stopPropagation();
                 sortMenuOpen = false;
                 scanMenuOpen = false;
+                gearOpen = false;
                 filterMenuOpen = !filterMenuOpen;
               }}
               title={only ? t("Showing: {filter}", { filter: filterName(only) }) : t("Filter")}
@@ -1672,6 +1700,36 @@
                   </button>
                 {/each}
               </div>
+            {/if}
+          </span>
+          <span class="menu-anchor">
+            <button
+              class="secondary icon"
+              class:active={gearActive}
+              aria-haspopup="dialog"
+              aria-expanded={gearOpen}
+              onclick={(event) => {
+                event.stopPropagation();
+                filterMenuOpen = false;
+                sortMenuOpen = false;
+                scanMenuOpen = false;
+                gearOpen = !gearOpen;
+              }}
+              title={gearActive ? t("Showing: {filter}", { filter: gearSummary }) : t("Camera and lens")}
+              aria-label={t("Camera and lens")}
+            >
+              <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+                <circle cx="8" cy="8" r="6.2" />
+                <path d="M8 1.8 10.6 7M14.1 7.2 9.2 10.4M11.6 13 6.4 12.1M3.2 11.8 5.6 6.7M3.4 4 9.1 3.3" />
+              </svg>
+            </button>
+            {#if gearOpen}
+              <GearPanel
+                libraryPath={library.path}
+                base={filtered}
+                {gear}
+                onchange={(next) => (gearChoice = { listing, gear: next })}
+              />
             {/if}
           </span>
           <button

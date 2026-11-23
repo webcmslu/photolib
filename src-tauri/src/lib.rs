@@ -764,6 +764,16 @@ fn months(
     db::months(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
 }
 
+/// The cameras, lenses, apertures and focal lengths of a listing, for the camera filter.
+#[tauri::command(async)]
+fn gear_options(
+    path: String,
+    listing: db::Listing,
+    state: State<'_, AppState>,
+) -> Result<db::GearOptions, String> {
+    db::gear_options(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
+}
+
 /// Day groups of a listing, newest first.
 #[tauri::command(async)]
 fn timeline(
@@ -1534,6 +1544,7 @@ pub fn run() {
             folders,
             photo_details,
             photo_shooting,
+            gear_options,
             apple_import_preview,
             apple_import,
             faces_status,

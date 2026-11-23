@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -59,7 +59,18 @@ CREATE TABLE photos (
     -- The same in lowercase and without accents, for searching.
     place_search  TEXT,
     -- On the photo of a JPEG + RAW pair: the fingerprint of its RAW file.
-    raw_file      TEXT
+    raw_file      TEXT,
+    -- How the photo was taken, read after the scan (see fill_shooting):
+    -- 0 until then, 1 once read (even if the photo doesn't say).
+    shot_read     INTEGER NOT NULL DEFAULT 0,
+    lens          TEXT,
+    -- In mm, and its 35 mm equivalent.
+    focal_length  REAL,
+    focal_35mm    INTEGER,
+    -- The f-number (2.8), the exposure time in seconds, the ISO.
+    aperture      REAL,
+    exposure      REAL,
+    iso           INTEGER
 );
 -- The order the timeline and the folder view list photos in. Partial, to match
 -- their WHERE clause, so skipping to a far offset reads only the index.
@@ -257,6 +268,23 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         version = 9;
     }
+    if version == 9 {
+        // Lens and exposure, for the camera filter: read for every photo
+        // after the next scan, without indexing the library again.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE photos ADD COLUMN shot_read INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE photos ADD COLUMN lens TEXT;
+             ALTER TABLE photos ADD COLUMN focal_length REAL;
+             ALTER TABLE photos ADD COLUMN focal_35mm INTEGER;
+             ALTER TABLE photos ADD COLUMN aperture REAL;
+             ALTER TABLE photos ADD COLUMN exposure REAL;
+             ALTER TABLE photos ADD COLUMN iso INTEGER;
+             PRAGMA user_version = 10;
+             COMMIT;",
+        )?;
+        version = 10;
+    }
     if version == SCHEMA_VERSION {
         return Ok(());
     }
@@ -314,7 +342,10 @@ pub fn upsert(tx: &Transaction<'_>, row: &PhotoRow) -> rusqlite::Result<()> {
                           THEN photos.place END,
              place_search = CASE WHEN photos.latitude IS excluded.latitude
                                   AND photos.longitude IS excluded.longitude
-                                 THEN photos.place_search END",
+                                 THEN photos.place_search END,
+             -- New content: how it was taken is read again.
+             shot_read = CASE WHEN photos.fingerprint = excluded.fingerprint
+                              THEN photos.shot_read ELSE 0 END",
     )?
     .execute(params![
         row.rel_path,
@@ -592,6 +623,46 @@ pub fn fill_places(
     Ok(pending.len())
 }
 
+/// Photos whose lens and exposure have not been read yet: (id, rel_path),
+/// at most `limit`. Videos are marked as read: they don't say.
+pub fn pending_shooting(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<(i64, String)>> {
+    conn.execute(
+        "UPDATE photos SET shot_read = 1 WHERE shot_read = 0 AND (kind = 1 OR thumb_state = 2)",
+        [],
+    )?;
+    conn.prepare_cached("SELECT id, rel_path FROM photos WHERE shot_read = 0 LIMIT ?1")?
+        .query_map([limit], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
+/// Saves what was read by [`pending_shooting`]'s caller (`None`: nothing).
+pub fn set_shooting(
+    conn: &mut Connection,
+    read: &[(i64, Option<crate::metadata::Shooting>)],
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    {
+        let mut update = tx.prepare_cached(
+            "UPDATE photos SET shot_read = 1, lens = ?2, focal_length = ?3, focal_35mm = ?4,
+                               aperture = ?5, exposure = ?6, iso = ?7
+             WHERE id = ?1",
+        )?;
+        for (id, shot) in read {
+            let shot = shot.clone().unwrap_or_default();
+            update.execute(params![
+                id,
+                shot.lens,
+                shot.focal_length,
+                shot.focal_length_35mm,
+                shot.aperture,
+                shot.exposure,
+                shot.iso
+            ])?;
+        }
+    }
+    tx.commit()
+}
+
 /// Pairs the files that are shown through another one, and returns how many
 /// rows changed:
 /// - a Live Photo's video, a short (or Apple-tagged) video next to a photo
@@ -820,6 +891,137 @@ pub enum Listing {
         within: Box<Listing>,
         only: Only,
     },
+    /// Another listing narrowed down to a camera, a lens, an aperture or a
+    /// focal length (each optional).
+    Gear {
+        within: Box<Listing>,
+        #[serde(flatten)]
+        gear: Gear,
+    },
+}
+
+/// What the camera filter narrows a listing down to.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Gear {
+    #[serde(default)]
+    pub camera_make: Option<String>,
+    #[serde(default)]
+    pub camera_model: Option<String>,
+    #[serde(default)]
+    pub lens: Option<String>,
+    /// The f-number, to one decimal (2.8).
+    #[serde(default)]
+    pub aperture: Option<f64>,
+    /// The focal length in whole mm.
+    #[serde(default)]
+    pub focal_length: Option<f64>,
+}
+
+/// A text value written into SQL as a literal.
+fn sql_text(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+/// A number written into SQL: `{:?}` prints a finite float exactly, and
+/// anything else matches nothing.
+fn sql_number(value: f64) -> String {
+    if value.is_finite() {
+        format!("{value:?}")
+    } else {
+        "NULL".into()
+    }
+}
+
+/// The aperture as the filter compares it (f/2.8, not f/2.83).
+const APERTURE: &str = "round(aperture, 1)";
+/// The focal length as the filter compares it, in whole mm.
+const FOCAL: &str = "CAST(round(focal_length) AS INTEGER)";
+
+impl Gear {
+    fn condition(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(make) = &self.camera_make {
+            parts.push(format!("camera_make = {}", sql_text(make)));
+        }
+        if let Some(model) = &self.camera_model {
+            parts.push(format!("camera_model = {}", sql_text(model)));
+        }
+        if let Some(lens) = &self.lens {
+            parts.push(format!("lens = {}", sql_text(lens)));
+        }
+        if let Some(aperture) = self.aperture {
+            parts.push(format!(
+                "{APERTURE} = {}",
+                sql_number((aperture * 10.0).round() / 10.0)
+            ));
+        }
+        if let Some(focal) = self.focal_length {
+            parts.push(format!("{FOCAL} = {}", sql_number(focal.round())));
+        }
+        if parts.is_empty() {
+            "1".into()
+        } else {
+            parts.join(" AND ")
+        }
+    }
+}
+
+/// The cameras, lenses, apertures and focal lengths of a listing, with how
+/// many photos have each: what the camera filter offers.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GearOptions {
+    /// (make, model, photos)
+    pub cameras: Vec<(Option<String>, Option<String>, u32)>,
+    pub lenses: Vec<(String, u32)>,
+    pub apertures: Vec<(f64, u32)>,
+    pub focal_lengths: Vec<(f64, u32)>,
+    /// Photos whose lens and exposure are not read yet (until the scan ends).
+    pub unread: u32,
+}
+
+/// What the camera filter can narrow `listing` down to.
+pub fn gear_options(conn: &Connection, listing: &Listing) -> rusqlite::Result<GearOptions> {
+    let (filter, param) = listing.filter();
+    let mut options = GearOptions::default();
+    let mut stmt = conn.prepare(&format!(
+        "SELECT camera_make, camera_model, COUNT(*) FROM photos {filter}
+           AND (camera_make IS NOT NULL OR camera_model IS NOT NULL)
+         GROUP BY camera_make, camera_model ORDER BY COUNT(*) DESC"
+    ))?;
+    options.cameras = stmt
+        .query_map([param], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT lens, COUNT(*) FROM photos {filter} AND lens IS NOT NULL
+         GROUP BY lens ORDER BY COUNT(*) DESC"
+    ))?;
+    options.lenses = stmt
+        .query_map([param], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {APERTURE} AS f, COUNT(*) FROM photos {filter} AND aperture IS NOT NULL
+         GROUP BY f ORDER BY f"
+    ))?;
+    options.apertures = stmt
+        .query_map([param], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {FOCAL} AS mm, COUNT(*) FROM photos {filter} AND focal_length IS NOT NULL
+         GROUP BY mm ORDER BY mm"
+    ))?;
+    options.focal_lengths = stmt
+        .query_map([param], |row| {
+            Ok((row.get::<_, i64>(0)? as f64, row.get(1)?))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    options.unread = conn.query_row(
+        &format!("SELECT COUNT(*) FROM photos {filter} AND shot_read = 0 AND kind = 0"),
+        [param],
+        |row| row.get(0),
+    )?;
+    Ok(options)
 }
 
 /// What the filter menu can narrow a listing down to.
@@ -986,6 +1188,10 @@ impl Listing {
             Listing::Only { within, only } => {
                 let (filter, param) = within.filter();
                 (format!("{filter} AND {}", only.condition()), param)
+            }
+            Listing::Gear { within, gear } => {
+                let (filter, param) = within.filter();
+                (format!("{filter} AND {}", gear.condition()), param)
             }
         }
     }
@@ -1939,6 +2145,98 @@ mod tests {
     }
 
     #[test]
+    fn filters_by_camera_lens_aperture_and_focal_length() {
+        use crate::metadata::Shooting;
+        let mut conn = open_in_memory().unwrap();
+        let tx = conn.transaction().unwrap();
+        for (name, make, model) in [
+            ("a.jpg", "Canon", "EOS R6"),
+            ("b.jpg", "Canon", "EOS R6"),
+            ("c.jpg", "Apple", "iPhone 15"),
+        ] {
+            upsert(
+                &tx,
+                &PhotoRow {
+                    camera_make: Some(make.into()),
+                    camera_model: Some(model.into()),
+                    ..row(name, 1)
+                },
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+
+        let pending = pending_shooting(&conn, 10).unwrap();
+        assert_eq!(pending.len(), 3);
+        let id = |name: &str| pending.iter().find(|(_, p)| p == name).unwrap().0;
+        let shot = |lens: &str, focal: f64, aperture: f64| Shooting {
+            lens: Some(lens.into()),
+            focal_length: Some(focal),
+            aperture: Some(aperture),
+            ..Shooting::default()
+        };
+        set_shooting(
+            &mut conn,
+            &[
+                (id("a.jpg"), Some(shot("RF 24-105mm F4 L", 35.2, 2.83))),
+                (id("b.jpg"), Some(shot("RF 24-105mm F4 L", 105.0, 8.0))),
+                (id("c.jpg"), None),
+            ],
+        )
+        .unwrap();
+        assert!(pending_shooting(&conn, 10).unwrap().is_empty());
+
+        let options = gear_options(&conn, &Listing::Library).unwrap();
+        assert_eq!(
+            options.cameras[0],
+            (Some("Canon".into()), Some("EOS R6".into()), 2)
+        );
+        assert_eq!(options.lenses, vec![("RF 24-105mm F4 L".to_string(), 2)]);
+        assert_eq!(options.apertures, vec![(2.8, 1), (8.0, 1)]);
+        assert_eq!(options.focal_lengths, vec![(35.0, 1), (105.0, 1)]);
+        assert_eq!(options.unread, 0);
+
+        let names = |gear: Gear| -> Vec<String> {
+            let listing = Listing::Gear {
+                within: Box::new(Listing::Library),
+                gear,
+            };
+            photos_page_in(&conn, &listing, Order::NameAsc, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|photo| photo.rel_path)
+                .collect()
+        };
+        let aperture = Gear {
+            aperture: Some(2.8),
+            ..Gear::default()
+        };
+        assert_eq!(names(aperture), ["a.jpg"]);
+        let canon_105 = Gear {
+            camera_make: Some("Canon".into()),
+            camera_model: Some("EOS R6".into()),
+            focal_length: Some(105.0),
+            ..Gear::default()
+        };
+        assert_eq!(names(canon_105), ["b.jpg"]);
+        // A quote in a name is only text.
+        let tricky = Gear {
+            lens: Some("x' OR '1'='1".into()),
+            ..Gear::default()
+        };
+        assert!(names(tricky).is_empty());
+
+        // As the front end sends it: the gear next to "kind" and "within".
+        let listing: Listing = serde_json::from_str(
+            r#"{"kind":"gear","within":{"kind":"library"},"lens":"RF 24-105mm F4 L","aperture":8}"#,
+        )
+        .unwrap();
+        let page = photos_page_in(&conn, &listing, Order::NameAsc, 0, 10).unwrap();
+        assert_eq!(page[0].rel_path, "b.jpg");
+        assert_eq!(page.len(), 1);
+    }
+
+    #[test]
     fn timeline_and_pages_agree() {
         let mut conn = open_in_memory().unwrap();
         let tx = conn.transaction().unwrap();
@@ -2748,6 +3046,13 @@ mod tests {
                  ALTER TABLE photos DROP COLUMN place_search;
                  ALTER TABLE photos DROP COLUMN raw_file;
                  ALTER TABLE photos RENAME COLUMN part TO live_part;
+                 ALTER TABLE photos DROP COLUMN shot_read;
+                 ALTER TABLE photos DROP COLUMN lens;
+                 ALTER TABLE photos DROP COLUMN focal_length;
+                 ALTER TABLE photos DROP COLUMN focal_35mm;
+                 ALTER TABLE photos DROP COLUMN aperture;
+                 ALTER TABLE photos DROP COLUMN exposure;
+                 ALTER TABLE photos DROP COLUMN iso;
                  PRAGMA user_version = 5;",
             )
             .unwrap();

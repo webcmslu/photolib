@@ -471,6 +471,17 @@ const fr: Record<string, string> = {
   "Flash fired": "Flash déclenché",
   "Software": "Logiciel",
   "{mm} mm in 35 mm": "{mm} mm en 24×36",
+  "Camera and lens": "Appareil et objectif",
+  "The camera filter can't be shown right now.": "Le filtre par appareil ne peut pas être affiché pour le moment.",
+  "Loading…": "Chargement…",
+  "Any camera": "Tous les appareils",
+  "Any lens": "Tous les objectifs",
+  "Aperture": "Ouverture",
+  "Any": "Toutes",
+  "Focal length": "Focale",
+  "Lens and settings are still being read for {n} photos.": "L’objectif et les réglages sont encore en lecture pour {n} photos.",
+  "These photos don't say which camera took them.": "Ces photos n’indiquent pas l’appareil utilisé.",
+  "Show all": "Tout afficher",
 };
 
 export default fr;

@@ -457,8 +457,35 @@ export type Listing =
   | { kind: "search"; query: string }
   /** The photos taken inside a rectangle on the map. */
   | { kind: "area"; south: number; west: number; north: number; east: number }
+  /** Another listing narrowed down to a camera, a lens, an aperture or a focal length. */
+  | ({ kind: "gear"; within: Listing } & Gear)
   /** Another listing narrowed down by the filter menu. */
   | { kind: "only"; within: Listing; only: Only };
+
+/** What the camera filter narrows a listing down to (each optional). Mirrors `Gear` in db.rs. */
+export interface Gear {
+  cameraMake?: string | null;
+  cameraModel?: string | null;
+  lens?: string | null;
+  /** The f-number, to one decimal. */
+  aperture?: number | null;
+  /** The focal length in whole mm. */
+  focalLength?: number | null;
+}
+
+/** What the camera filter offers for a listing, with photo counts. */
+export interface GearOptions {
+  cameras: [string | null, string | null, number][];
+  lenses: [string, number][];
+  apertures: [number, number][];
+  focalLengths: [number, number][];
+  /** Photos whose lens and settings are not read yet. */
+  unread: number;
+}
+
+export function gearOptions(path: string, listing: Listing): Promise<GearOptions> {
+  return invoke("gear_options", { path, listing });
+}
 
 /** What the filter menu can narrow a listing down to. Mirrors `Only`. */
 export type Only =

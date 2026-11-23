@@ -282,9 +282,34 @@ pub fn scan_with(
         })?;
     }
 
+    // Lens and exposure of the new photos (and, once, of every photo indexed
+    // before they were kept), for the camera filter.
+    if !summary.cancelled {
+        fill_shooting(root, conn, cancel)?;
+    }
+
     summary.total = db::count(conn)?;
     summary.duration_ms = started.elapsed().as_millis() as u64;
     Ok(summary)
+}
+
+/// Reads the lens and exposure of the photos that don't have them yet,
+/// several at a time (over a network each read waits on the server), and
+/// saves them batch by batch, so a stopped scan picks up where it was.
+fn fill_shooting(root: &Path, conn: &mut Connection, cancel: &AtomicBool) -> rusqlite::Result<()> {
+    const BATCH: u32 = 400;
+    while !cancel.load(Ordering::Relaxed) {
+        let pending = db::pending_shooting(conn, BATCH)?;
+        if pending.is_empty() {
+            break;
+        }
+        let read: Vec<(i64, Option<crate::metadata::Shooting>)> = pending
+            .par_iter()
+            .map(|(id, rel_path)| (*id, crate::metadata::shooting(&root.join(rel_path))))
+            .collect();
+        db::set_shooting(conn, &read)?;
+    }
+    Ok(())
 }
 
 /// Folders listed at the same time. On a network share each listing waits
