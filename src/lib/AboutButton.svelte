@@ -45,7 +45,12 @@
     <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
     <div class="box" role="dialog" aria-modal="true" aria-label={t("About {name}", { name: about.name })} tabindex="-1" onclick={(event) => event.stopPropagation()}>
       <div class="top">
-        <span class="logo">{about.name.charAt(0)}</span>
+        <svg class="logo" viewBox="0 0 100 100" aria-hidden="true">
+          <path d="M20 32 V24 A4 4 0 0 1 24 20 H32 M68 20 H76 A4 4 0 0 1 80 24 V32 M80 68 V76 A4 4 0 0 1 76 80 H68 M32 80 H24 A4 4 0 0 1 20 76 V68" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" />
+          <circle cx="50" cy="50" r="24" fill="#f2b134" />
+          <polygon points="50,41 57.8,45.5 57.8,54.5 50,59 42.2,54.5 42.2,45.5" fill="#16213a" />
+          <path d="M50 41 L73.6 54.6 M57.8 45.5 L57.8 72.7 M57.8 54.5 L34.2 68.1 M50 59 L26.4 45.4 M42.2 54.5 L42.2 27.3 M42.2 45.5 L65.8 31.9" stroke="#16213a" stroke-width="2.2" stroke-linecap="round" />
+        </svg>
         <span class="name">{about.name}</span>
         {#if about.version}<span class="version">v{about.version}</span>{/if}
       </div>
@@ -143,14 +148,12 @@
     align-items: center;
     gap: 4px;
     padding: 24px 0 20px;
-    background: linear-gradient(135deg, #0a6cff, #3d8bff 55%, #19b5c9);
+    background: #16213a; /* the app icon's */
   }
 
   .logo {
-    color: #fff;
-    font-size: 28px;
-    font-weight: 700;
-    line-height: 1;
+    width: 72px;
+    height: 72px;
   }
 
   .name {
