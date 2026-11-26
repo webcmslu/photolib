@@ -11,7 +11,7 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBe
 
 use crate::org::{Event, Op};
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 const SCHEMA: &str = "
 CREATE TABLE photos (
@@ -70,7 +70,12 @@ CREATE TABLE photos (
     -- The f-number (2.8), the exposure time in seconds, the ISO.
     aperture      REAL,
     exposure      REAL,
-    iso           INTEGER
+    iso           INTEGER,
+    -- What kind of shot it is, read with the lens: the bits of
+    -- metadata::PORTRAIT, SLO_MO, TIME_LAPSE and SCREENSHOT.
+    media         INTEGER NOT NULL DEFAULT 0,
+    -- The burst the photo was shot in (Apple's burst UUID).
+    burst         TEXT
 );
 -- The order the timeline and the folder view list photos in. Partial, to match
 -- their WHERE clause, so skipping to a far offset reads only the index.
@@ -206,7 +211,15 @@ fn attach_faces(conn: &Connection, file: &str) -> rusqlite::Result<()> {
         // The statement answers with the new mode, hence a query.
         conn.query_row("PRAGMA faces.journal_mode = WAL", [], |_| Ok(()))?;
     }
-    conn.execute_batch(FACES_SCHEMA)
+    let new = !conn
+        .prepare("SELECT 1 FROM faces.sqlite_master WHERE name = 'face'")?
+        .exists([])?;
+    conn.execute_batch(FACES_SCHEMA)?;
+    if new {
+        // Nothing to group again.
+        set_grouping_version(conn, crate::people::GROUPING_VERSION)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -284,6 +297,21 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
              COMMIT;",
         )?;
         version = 10;
+    }
+    if version == 10 {
+        // Media types (Portrait, slow motion, bursts...): read again for the
+        // files that can be one, which are only videos and phone pictures.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE photos ADD COLUMN media INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE photos ADD COLUMN burst TEXT;
+             UPDATE photos SET shot_read = 0
+              WHERE kind = 1 OR camera_make LIKE 'apple%'
+                 OR lower(rel_path) LIKE '%.png' OR lower(rel_path) LIKE '%.hei_';
+             PRAGMA user_version = 11;
+             COMMIT;",
+        )?;
+        version = 11;
     }
     if version == SCHEMA_VERSION {
         return Ok(());
@@ -657,11 +685,12 @@ pub fn fill_places(
     Ok(pending.len())
 }
 
-/// Photos whose lens and exposure have not been read yet: (id, rel_path),
-/// at most `limit`. Videos are marked as read: they don't say.
+/// Files whose lens, exposure and media type have not been read yet:
+/// (id, rel_path), at most `limit`. Files that aren't pictures are marked
+/// as read.
 pub fn pending_shooting(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<(i64, String)>> {
     conn.execute(
-        "UPDATE photos SET shot_read = 1 WHERE shot_read = 0 AND (kind = 1 OR thumb_state = 2)",
+        "UPDATE photos SET shot_read = 1 WHERE shot_read = 0 AND kind = 0 AND thumb_state = 2",
         [],
     )?;
     conn.prepare_cached("SELECT id, rel_path FROM photos WHERE shot_read = 0 LIMIT ?1")?
@@ -672,16 +701,20 @@ pub fn pending_shooting(conn: &Connection, limit: u32) -> rusqlite::Result<Vec<(
 /// Saves what was read by [`pending_shooting`]'s caller (`None`: nothing).
 pub fn set_shooting(
     conn: &mut Connection,
-    read: &[(i64, Option<crate::metadata::Shooting>)],
+    read: &[(
+        i64,
+        Option<crate::metadata::Shooting>,
+        crate::metadata::Media,
+    )],
 ) -> rusqlite::Result<()> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     {
         let mut update = tx.prepare_cached(
             "UPDATE photos SET shot_read = 1, lens = ?2, focal_length = ?3, focal_35mm = ?4,
-                               aperture = ?5, exposure = ?6, iso = ?7
+                               aperture = ?5, exposure = ?6, iso = ?7, media = ?8, burst = ?9
              WHERE id = ?1",
         )?;
-        for (id, shot) in read {
+        for (id, shot, media) in read {
             let shot = shot.clone().unwrap_or_default();
             update.execute(params![
                 id,
@@ -690,7 +723,9 @@ pub fn set_shooting(
                 shot.focal_length_35mm,
                 shot.aperture,
                 shot.exposure,
-                shot.iso
+                shot.iso,
+                media.flags,
+                media.burst
             ])?;
         }
     }
@@ -1068,6 +1103,18 @@ pub enum Only {
     Videos,
     /// RAW files, on their own or behind a JPEG or HEIC of the same shot.
     Raw,
+    /// Taken with the front camera.
+    Selfies,
+    LivePhotos,
+    /// With depth data: an iPhone's Portrait mode.
+    Portraits,
+    /// Much wider (or taller) than a camera's picture.
+    Panoramas,
+    TimeLapses,
+    SloMos,
+    /// Shot in a burst, several a second.
+    Bursts,
+    Screenshots,
     NotInAlbum,
     /// Rated at least this many stars.
     Stars1,
@@ -1096,6 +1143,25 @@ impl Only {
             Only::Raw => format!(
                 "(raw_file IS NOT NULL OR {})",
                 crate::raw::is_raw_sql("rel_path")
+            ),
+            Only::Selfies => "(kind = 0 AND lens LIKE '%front%')".to_owned(),
+            Only::LivePhotos => "live_video IS NOT NULL".to_owned(),
+            Only::Portraits => format!("(media & {}) != 0", crate::metadata::PORTRAIT),
+            Only::Panoramas => format!(
+                "(kind = 0 AND camera_model IS NOT NULL AND width > 0 AND height > 0
+                  AND MAX(width, height) >= {PANORAMA_RATIO} * MIN(width, height))"
+            ),
+            Only::TimeLapses => format!("(media & {}) != 0", crate::metadata::TIME_LAPSE),
+            Only::SloMos => format!("(media & {}) != 0", crate::metadata::SLO_MO),
+            Only::Bursts => "burst IS NOT NULL".to_owned(),
+            // Marked by iOS, or named so by macOS, Windows and Android.
+            Only::Screenshots => format!(
+                "(kind = 0 AND ((media & {}) != 0
+                  OR (camera_model IS NULL AND (lower(rel_path) LIKE '%screenshot%'
+                      OR lower(rel_path) LIKE '%screen shot%'
+                      OR lower(rel_path) LIKE '%capture d%cran%'
+                      OR lower(rel_path) LIKE '%bildschirmfoto%'))))",
+                crate::metadata::SCREENSHOT
             ),
             Only::NotInAlbum => "fingerprint NOT IN (
                      SELECT m.photo FROM org_state m
@@ -1133,6 +1199,10 @@ impl Only {
         }
     }
 }
+
+/// A panorama is at least this many times longer than it is high (a camera's
+/// picture is 1.8 at most).
+const PANORAMA_RATIO: f64 = 2.5;
 
 const IS_HIDDEN: &str =
     "fingerprint IN (SELECT key FROM org_state WHERE kind = 'hide' AND value = '1')";
@@ -1756,6 +1826,140 @@ pub fn save_faces(
 /// A face's id, its group (if any) and its embedding.
 pub type StoredFace = (i64, Option<i64>, Vec<f32>);
 
+/// A face as the grouping sees it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GroupingFace {
+    pub id: i64,
+    /// `None` until grouped; 0 when grouped into nothing (see people.rs);
+    /// below zero when taken out by hand.
+    pub cluster: Option<i64>,
+    pub fingerprint: String,
+    /// Left, top, width, height as fractions of the upright photo.
+    pub bounds: [f64; 4],
+    pub score: f32,
+    /// How wide it is in the photo's preview (about 1024 px long), the
+    /// picture the faces were found in.
+    pub preview_px: f32,
+    pub embedding: Vec<f32>,
+}
+
+/// Every face, with what the grouping needs to know about it.
+pub fn grouping_faces(conn: &Connection) -> rusqlite::Result<Vec<GroupingFace>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.id, f.cluster, f.fingerprint, f.left, f.top, f.width, f.height, f.score,
+                p.width, p.height, f.embedding
+         FROM faces.face f
+         LEFT JOIN (SELECT fingerprint, MAX(width) AS width, MAX(height) AS height
+                    FROM photos GROUP BY fingerprint) p ON p.fingerprint = f.fingerprint
+         ORDER BY f.id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        let width: f64 = row.get(5)?;
+        let size: (Option<f64>, Option<f64>) = (row.get(8)?, row.get(9)?);
+        let preview_px = match size {
+            (Some(w), Some(h)) if w > 0.0 && h > 0.0 => width * w * (1024.0 / w.max(h)).min(1.0),
+            _ => width * 1024.0,
+        };
+        let bytes: Vec<u8> = row.get(10)?;
+        Ok(GroupingFace {
+            id: row.get(0)?,
+            cluster: row.get(1)?,
+            fingerprint: row.get(2)?,
+            bounds: [row.get(3)?, row.get(4)?, width, row.get(6)?],
+            score: row.get(7)?,
+            preview_px: preview_px as f32,
+            embedding: bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|chunk| f32::from_le_bytes(*chunk))
+                .collect(),
+        })
+    })?;
+    rows.collect()
+}
+
+/// The version of the grouping that made the face groups (see people.rs).
+pub fn grouping_version(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row("PRAGMA faces.user_version", [], |row| row.get(0))
+}
+
+pub fn set_grouping_version(conn: &Connection, version: i64) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!("PRAGMA faces.user_version = {version}"))
+}
+
+/// Takes every face out of its group, to group them all again, except the
+/// faces taken out by hand. Returns the group each face was in.
+pub fn ungroup_faces(conn: &mut Connection) -> rusqlite::Result<HashMap<i64, i64>> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let old: HashMap<i64, i64> = tx
+        .prepare("SELECT id, cluster FROM faces.face WHERE cluster > 0")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    tx.execute(
+        "UPDATE faces.face SET cluster = NULL WHERE cluster >= 0",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(old)
+}
+
+/// The groups each face is in now: (face, group), for grouped faces.
+pub fn face_clusters(conn: &Connection) -> rusqlite::Result<HashMap<i64, i64>> {
+    conn.prepare("SELECT id, cluster FROM faces.face WHERE cluster > 0")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
+/// Moves what was said about groups (hidden, not that person, kept apart)
+/// from old group ids to new ones; what has no new group is dropped.
+pub fn remap_face_groups(conn: &mut Connection, map: &HashMap<i64, i64>) -> rusqlite::Result<()> {
+    let hidden = hidden_face_groups(conn)?;
+    let refused = not_person(conn)?;
+    let apart = kept_apart(conn)?;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(
+        "DELETE FROM faces.hidden_group; DELETE FROM faces.not_person; DELETE FROM faces.kept_apart;",
+    )?;
+    for cluster in hidden.iter().filter_map(|c| map.get(c)) {
+        tx.execute(
+            "INSERT OR IGNORE INTO faces.hidden_group (cluster) VALUES (?1)",
+            [cluster],
+        )?;
+    }
+    for (cluster, name) in &refused {
+        if let Some(cluster) = map.get(cluster) {
+            tx.execute(
+                "INSERT OR IGNORE INTO faces.not_person (cluster, name) VALUES (?1, ?2)",
+                params![cluster, name],
+            )?;
+        }
+    }
+    for (a, b) in &apart {
+        if let (Some(a), Some(b)) = (map.get(a), map.get(b)) {
+            if a != b {
+                tx.execute(
+                    "INSERT OR IGNORE INTO faces.kept_apart (a, b) VALUES (?1, ?2)",
+                    [a.min(b), a.max(b)],
+                )?;
+            }
+        }
+    }
+    tx.commit()
+}
+
+/// Pairs of groups (a < b) that both have a face in the same photo: they
+/// are two people.
+pub fn groups_seen_together(conn: &Connection) -> rusqlite::Result<HashSet<(i64, i64)>> {
+    conn.prepare(
+        "SELECT DISTINCT a.cluster, b.cluster FROM faces.face a
+         JOIN faces.face b ON b.fingerprint = a.fingerprint AND b.cluster > a.cluster
+         WHERE a.cluster > 0",
+    )?
+    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+    .collect()
+}
+
 /// Every face, for grouping.
 pub fn face_embeddings(conn: &Connection) -> rusqlite::Result<Vec<StoredFace>> {
     let mut stmt = conn.prepare("SELECT id, cluster, embedding FROM faces.face ORDER BY id")?;
@@ -1847,6 +2051,67 @@ pub fn face_names(conn: &Connection) -> rusqlite::Result<Vec<(String, f64, f64, 
     Ok(names)
 }
 
+/// The key photos chosen for people, by lowercase name: the photo and a
+/// point of the face (fractions of the photo).
+pub fn face_keys(conn: &Connection) -> rusqlite::Result<HashMap<String, (String, f64, f64)>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM org_state WHERE kind = 'face_key'")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut keys = HashMap::new();
+    for row in rows {
+        let (name, value) = row?;
+        let mut parts = value.split(',');
+        let (Some(photo), Some(x), Some(y)) = (parts.next(), parts.next(), parts.next()) else {
+            continue;
+        };
+        if let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) {
+            keys.insert(name, (photo.to_owned(), x / 10_000.0, y / 10_000.0));
+        }
+    }
+    Ok(keys)
+}
+
+/// A photo's upright size when known, and a face's box in it.
+pub type FaceSpot = (Option<(u32, u32)>, [f64; 4]);
+
+/// A face of one of `clusters` in a listed photo: the photo's upright size
+/// when known, and the face's box. With a point (fractions of the photo),
+/// the face that contains it; without, the largest.
+pub fn face_of(
+    conn: &Connection,
+    fingerprint: &str,
+    clusters: &[i64],
+    point: Option<(f64, f64)>,
+) -> rusqlite::Result<Option<FaceSpot>> {
+    let list = clusters
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let (x, y) = point.unwrap_or((-1.0, -1.0));
+    conn.query_row(
+        &format!(
+            "SELECT p.width, p.height, f.left, f.top, f.width, f.height
+             FROM faces.face f JOIN photos p ON p.fingerprint = f.fingerprint
+             WHERE f.fingerprint = ?1 AND f.cluster IN ({list})
+               AND p.thumb_state != 2 AND p.part = 0 AND NOT p.{IS_HIDDEN}
+               AND (?2 < 0 OR (?2 BETWEEN f.left AND f.left + f.width
+                               AND ?3 BETWEEN f.top AND f.top + f.height))
+             ORDER BY f.width * f.height DESC LIMIT 1"
+        ),
+        params![fingerprint, x, y],
+        |row| {
+            let size: (Option<u32>, Option<u32>) = (row.get(0)?, row.get(1)?);
+            Ok((
+                size.0.zip(size.1),
+                [row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?],
+            ))
+        },
+    )
+    .optional()
+}
+
 /// The group of the face in `fingerprint` that contains the point (x, y),
 /// given as fractions of the photo.
 pub fn cluster_at(
@@ -1874,6 +2139,7 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
     let flag = |on: &bool| if *on { "1" } else { "0" };
     let edit_json: String;
     let face_point: String;
+    let face_key: (String, String);
     let rating: String;
     let (kind, key, photo, value) = match &event.op {
         Op::Fav { photo, on } => ("fav", photo.as_str(), "", flag(on)),
@@ -1891,6 +2157,10 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
                 face_point.as_str(),
                 name.trim(),
             )
+        }
+        Op::FaceKey { photo, x, y, name } => {
+            face_key = (name.trim().to_lowercase(), format!("{photo},{x},{y}"));
+            ("face_key", face_key.0.as_str(), "", face_key.1.as_str())
         }
         Op::Rating { photo, stars } => {
             rating = stars.to_string();
@@ -2193,7 +2463,7 @@ mod tests {
 
     #[test]
     fn filters_by_camera_lens_aperture_and_focal_length() {
-        use crate::metadata::Shooting;
+        use crate::metadata::{Media, Shooting};
         let mut conn = open_in_memory().unwrap();
         let tx = conn.transaction().unwrap();
         for (name, make, model) in [
@@ -2225,9 +2495,24 @@ mod tests {
         set_shooting(
             &mut conn,
             &[
-                (id("a.jpg"), Some(shot("RF 24-105mm F4 L", 35.2, 2.83))),
-                (id("b.jpg"), Some(shot("RF 24-105mm F4 L", 105.0, 8.0))),
-                (id("c.jpg"), None),
+                (
+                    id("a.jpg"),
+                    Some(shot("RF 24-105mm F4 L", 35.2, 2.83)),
+                    Media::default(),
+                ),
+                (
+                    id("b.jpg"),
+                    Some(shot("RF 24-105mm F4 L", 105.0, 8.0)),
+                    Media::default(),
+                ),
+                (
+                    id("c.jpg"),
+                    None,
+                    Media {
+                        flags: crate::metadata::PORTRAIT,
+                        burst: Some("8B005247".into()),
+                    },
+                ),
             ],
         )
         .unwrap();
@@ -2281,6 +2566,35 @@ mod tests {
         let page = photos_page_in(&conn, &listing, Order::NameAsc, 0, 10).unwrap();
         assert_eq!(page[0].rel_path, "b.jpg");
         assert_eq!(page.len(), 1);
+
+        // The media types the sidebar lists.
+        conn.execute(
+            "UPDATE photos SET lens = 'iPhone 15 front camera 2.69mm f/1.9' WHERE rel_path = 'c.jpg'",
+            [],
+        )
+        .unwrap();
+        let only = |only: Only| -> Vec<String> {
+            let listing = Listing::Only {
+                within: Box::new(Listing::Library),
+                only,
+            };
+            photos_page(&conn, &listing, 0, 10)
+                .unwrap()
+                .into_iter()
+                .map(|item| item.rel_path)
+                .collect()
+        };
+        for kind in [Only::Selfies, Only::Portraits, Only::Bursts] {
+            assert_eq!(only(kind), ["c.jpg"], "{kind:?}");
+        }
+        for kind in [
+            Only::SloMos,
+            Only::TimeLapses,
+            Only::Screenshots,
+            Only::Panoramas,
+        ] {
+            assert!(only(kind).is_empty(), "{kind:?}");
+        }
     }
 
     #[test]
@@ -3129,6 +3443,8 @@ mod tests {
                  ALTER TABLE photos DROP COLUMN aperture;
                  ALTER TABLE photos DROP COLUMN exposure;
                  ALTER TABLE photos DROP COLUMN iso;
+                 ALTER TABLE photos DROP COLUMN media;
+                 ALTER TABLE photos DROP COLUMN burst;
                  PRAGMA user_version = 5;",
             )
             .unwrap();

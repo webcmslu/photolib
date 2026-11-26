@@ -55,9 +55,13 @@
   const PREVIEW_PAGE = 60;
   let loadingMore = $state(false);
 
+  /** Why the photos of the group previewed could not be shown. */
+  let previewError = $state<string | null>(null);
+
   async function preview(suggestion: Person) {
     previewing = suggestion;
     previewPhotos = null;
+    previewError = null;
     previewFaces = new Map();
     allOut = false;
     flipped.clear();
@@ -67,10 +71,16 @@
         personFaces(libraryPath, suggestion.clusters),
       ]);
       if (previewing !== suggestion) return;
+      if (photos.length === 0) {
+        // The faces were grouped again since the suggestions were made.
+        previewError = t("This group has changed since. The suggestions are updated.");
+        reloads++;
+        return;
+      }
       previewFaces = new Map(faces.map((face) => [face.fingerprint, face.bounds]));
       previewPhotos = photos;
     } catch (e) {
-      error = errorText(e);
+      if (previewing === suggestion) previewError = errorText(e);
     }
   }
 
@@ -178,8 +188,11 @@
     }
   }
 
+  /** Bumped to ask for the suggestions again. */
+  let reloads = $state(0);
   $effect(() => {
     const [path, who, groups] = [libraryPath, name, clusters];
+    void reloads;
     personSuggestions(path, groups, who)
       .then((found) => (suggestions = found))
       .catch((e) => (error = errorText(e)));
@@ -291,7 +304,12 @@
       </div>
       <div class="scroll">
         <ul class="photos" class:many={total > 12}>
-          {#if previewPhotos === null}
+          {#if previewError !== null}
+            <li class="failed" role="alert">
+              <span>{previewError}</span>
+              <button class="answer" onclick={() => preview(shown)}>{t("Try again")}</button>
+            </li>
+          {:else if previewPhotos === null}
             {#each { length: Math.min(total, 12) } as _, i (i)}<li class="cell"></li>{/each}
           {:else}
             {#each previewPhotos as photo (photo.fingerprint)}
@@ -334,6 +352,7 @@
           </div>
         {/if}
       </div>
+      {#if error}<p class="error" role="alert">{error}</p>{/if}
       <footer>
         <button class="answer no-answer" onclick={() => answer(false)}>{t("No, this is someone else")}</button>
         <button
@@ -567,6 +586,17 @@
   .hint {
     margin: 0;
     font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .failed {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 48px 16px;
+    text-align: center;
     color: var(--text-dim);
   }
 

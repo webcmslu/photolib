@@ -80,6 +80,15 @@ pub enum Op {
         y: u16,
         name: String,
     },
+    /// Makes the face at a point of a photo the one the person `name`'s card
+    /// shows (their key photo). The latest one per name wins; it is used
+    /// while that face is still theirs.
+    FaceKey {
+        photo: String,
+        x: u16,
+        y: u16,
+        name: String,
+    },
     /// Sets how a photo is shown (rotation, crop, light and color), or
     /// with `edit: null` shows it as it is again. The file is never changed.
     Edit {
@@ -202,6 +211,13 @@ impl Op {
                 is_id(photo, 64)
                     && *x <= 10_000
                     && *y <= 10_000
+                    && name.chars().count() <= MAX_ALBUM_NAME_CHARS
+            }
+            Op::FaceKey { photo, x, y, name } => {
+                is_id(photo, 64)
+                    && *x <= 10_000
+                    && *y <= 10_000
+                    && !name.trim().is_empty()
                     && name.chars().count() <= MAX_ALBUM_NAME_CHARS
             }
             Op::Edit { photo, edit } => is_id(photo, 64) && edit.is_none_or(|edit| edit.is_valid()),

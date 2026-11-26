@@ -995,6 +995,31 @@ fn name_person(
     .map_err(|e| e.to_string())
 }
 
+/// Makes the photo `photo` (a fingerprint) the one the card of the person
+/// `name`, made of `clusters`, shows.
+#[tauri::command(async)]
+fn make_key_photo(
+    path: String,
+    clusters: Vec<i64>,
+    name: String,
+    photo: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let open = editable_library(&state, &path)?;
+    let mut conn = open_index(&state, &path)?;
+    let op = people::key_photo_op(&conn, &clusters, name.trim(), &photo)
+        .map_err(|e| e.to_string())?
+        .ok_or("This person's face isn't found in this photo.")?;
+    org::record(
+        &mut conn,
+        &state.org_paths(&path),
+        &state.device,
+        open.writable,
+        vec![op],
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// Unnamed groups of faces that might be the person `name`, made of `clusters`.
 #[tauri::command(async)]
 fn person_suggestions(
@@ -1564,6 +1589,7 @@ pub fn run() {
             enable_faces,
             disable_faces,
             person_suggestions,
+            make_key_photo,
             person_faces,
             reject_suggestion,
             set_person_hidden,

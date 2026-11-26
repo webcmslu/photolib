@@ -9,7 +9,13 @@
 //! moov
 //! ├─ mvhd            creation date (UTC), duration
 //! ├─ trak
-//! │  └─ tkhd         picture size and rotation (zero size for audio tracks)
+//! │  ├─ tkhd         picture size and rotation (zero size for audio tracks)
+//! │  └─ mdia
+//! │     ├─ mdhd      the track's time scale
+//! │     ├─ hdlr      what the track holds ("vide" for pictures)
+//! │     └─ minf
+//! │        └─ stbl
+//! │           └─ stts  how long each frame lasts: the frame rate
 //! ├─ meta            Apple's key/value metadata
 //! │  ├─ keys         the key names, numbered from 1
 //! │  └─ ilst         one atom per value, named by key number
@@ -24,7 +30,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Local, NaiveDateTime};
 
-use crate::metadata::PhotoMeta;
+use crate::metadata::{self, Media, PhotoMeta};
 
 /// Video file types the index picks up: the ones every webview can play.
 pub const EXTENSIONS: &[&str] = &["mp4", "mov", "m4v", "3gp"];
@@ -42,6 +48,20 @@ const KEY_LOCATION: &str = "com.apple.quicktime.location.ISO6709";
 const KEY_MAKE: &str = "com.apple.quicktime.make";
 const KEY_MODEL: &str = "com.apple.quicktime.model";
 const KEY_CONTENT_ID: &str = "com.apple.quicktime.content.identifier";
+/// "Time-lapse" on an iPhone time-lapse.
+const KEY_CAPTURE_MODE: &str = "com.apple.photos.captureMode";
+/// Videos filmed this fast are slow motion: an iPhone films them at 120 or
+/// 240 frames a second and plays them slowed down.
+const SLO_MO_FPS: f64 = 100.0;
+
+/// What kind of video the file at `path` is: slow motion, time-lapse.
+pub fn media(path: &Path) -> Media {
+    let parsed = File::open(path)
+        .ok()
+        .and_then(|file| parse(&mut BufReader::new(file)).ok())
+        .unwrap_or_default();
+    parsed.media()
+}
 
 /// Reads a video's metadata. A file that can't be parsed gives metadata with
 /// only `is_video` set: it is still listed, by file date.
@@ -78,9 +98,30 @@ struct Parsed {
     make: Option<String>,
     model: Option<String>,
     content_id: Option<String>,
+    capture_mode: Option<String>,
+    /// Frames a second of the first video track.
+    frame_rate: Option<f64>,
+    /// Of the track being read: its time scale, and whether it is a video.
+    track_scale: Option<u32>,
+    track_is_video: bool,
 }
 
 impl Parsed {
+    fn media(&self) -> Media {
+        let mode = self
+            .capture_mode
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mut flags = 0;
+        if mode.contains("lapse") {
+            flags |= metadata::TIME_LAPSE;
+        } else if mode.contains("slo") || self.frame_rate.is_some_and(|fps| fps >= SLO_MO_FPS) {
+            flags |= metadata::SLO_MO;
+        }
+        Media { flags, burst: None }
+    }
+
     fn into_meta(self, utc_to_wall_clock: impl Fn(i64) -> Option<i64>) -> PhotoMeta {
         let taken_at = self
             .apple_date
@@ -184,8 +225,26 @@ fn walk<R: Read + Seek>(
         match &atom.kind {
             b"mvhd" => read_mvhd(&read_leaf(reader, &atom)?, parsed),
             b"tkhd" => read_tkhd(&read_leaf(reader, &atom)?, parsed),
-            b"trak" | b"udta" if depth < 4 => {
+            b"trak" if depth < 4 => {
+                parsed.track_scale = None;
+                parsed.track_is_video = false;
                 walk(reader, atom.start, atom.end, parsed, depth + 1)?
+            }
+            b"udta" | b"mdia" | b"minf" | b"stbl" if depth < 6 => {
+                walk(reader, atom.start, atom.end, parsed, depth + 1)?
+            }
+            b"mdhd" => parsed.track_scale = read_mdhd(&read_leaf(reader, &atom)?),
+            // Also in `minf` of QuickTime files, naming how the data is found
+            // ("alis"): only the one in `mdia`, which comes first, counts.
+            b"hdlr" if parsed.track_scale.is_some() && !parsed.track_is_video => {
+                let data = read_leaf(reader, &atom)?;
+                parsed.track_is_video = data.get(8..12) == Some(b"vide");
+            }
+            b"stts" if parsed.track_is_video && parsed.frame_rate.is_none() => {
+                let data = read_leaf(reader, &atom)?;
+                parsed.frame_rate = parsed
+                    .track_scale
+                    .and_then(|scale| frame_rate(&data, scale));
             }
             b"meta" => {
                 // A problem in the optional metadata must not lose the rest.
@@ -206,6 +265,31 @@ fn walk<R: Read + Seek>(
         reader.seek(SeekFrom::Start(atom.end))?;
     }
     Ok(())
+}
+
+/// The media header's time scale: units of the track's durations a second.
+fn read_mdhd(data: &[u8]) -> Option<u32> {
+    let scale = match data.first()? {
+        0 => be32(data, 12)?,
+        1 => be32(data, 20)?,
+        _ => return None,
+    };
+    (scale > 0).then_some(scale)
+}
+
+/// Frames a second, from the sample table: (frame count, duration) runs.
+fn frame_rate(stts: &[u8], scale: u32) -> Option<f64> {
+    let runs = be32(stts, 4)? as usize;
+    let (mut frames, mut duration) = (0u64, 0u64);
+    for run in 0..runs {
+        let at = 8 + run * 8;
+        let (Some(count), Some(delta)) = (be32(stts, at), be32(stts, at + 4)) else {
+            break;
+        };
+        frames += u64::from(count);
+        duration += u64::from(count) * u64::from(delta);
+    }
+    (frames > 1 && duration > 0).then(|| frames as f64 * f64::from(scale) / duration as f64)
 }
 
 /// The 3GPP location atom: version and flags (4 bytes), language (2), a
@@ -362,6 +446,7 @@ fn read_meta<R: Read + Seek>(reader: &mut R, meta: &Atom, parsed: &mut Parsed) -
             KEY_MAKE => &mut parsed.make,
             KEY_MODEL => &mut parsed.model,
             KEY_CONTENT_ID => &mut parsed.content_id,
+            KEY_CAPTURE_MODE => &mut parsed.capture_mode,
             _ => continue,
         };
         *slot = Some(value.to_owned());
@@ -469,6 +554,56 @@ mod tests {
 
     fn parse_bytes(file: &[u8]) -> Parsed {
         parse(&mut Cursor::new(file)).unwrap()
+    }
+
+    /// A video track filmed at `fps`, timed in 2400ths of a second, after an
+    /// audio track at 30 "frames" a second that must not count.
+    fn tracks_at(fps: u32) -> Vec<u8> {
+        let track = |handler: &[u8; 4], fps: u32| {
+            let mut mdhd = vec![0u8; 24];
+            mdhd[12..16].copy_from_slice(&2400u32.to_be_bytes());
+            let mut hdlr = vec![0u8; 24];
+            hdlr[8..12].copy_from_slice(handler);
+            // QuickTime's data handler in `minf`, which is not the track's.
+            let mut data_hdlr = vec![0u8; 24];
+            data_hdlr[8..12].copy_from_slice(b"alis");
+            let mut stts = vec![0, 0, 0, 0, 0, 0, 0, 2];
+            for (count, delta) in [(fps * 2, 2400 / fps), (fps, 2400 / fps)] {
+                stts.extend_from_slice(&count.to_be_bytes());
+                stts.extend_from_slice(&delta.to_be_bytes());
+            }
+            let minf = [
+                atom(b"hdlr", &data_hdlr),
+                atom(b"stbl", &atom(b"stts", &stts)),
+            ]
+            .concat();
+            let mdia = [
+                atom(b"mdhd", &mdhd),
+                atom(b"hdlr", &hdlr),
+                atom(b"minf", &minf),
+            ]
+            .concat();
+            atom(b"trak", &atom(b"mdia", &mdia))
+        };
+        [track(b"soun", 30), track(b"vide", fps)].concat()
+    }
+
+    #[test]
+    fn tells_slow_motion_and_time_lapse() {
+        let slow = parse_bytes(&movie(&[mvhd(CREATED, 9000), tracks_at(240)]));
+        assert_eq!(slow.frame_rate, Some(240.0));
+        assert_eq!(slow.media().flags, metadata::SLO_MO);
+
+        let normal = parse_bytes(&movie(&[mvhd(CREATED, 9000), tracks_at(30)]));
+        assert_eq!(normal.frame_rate, Some(30.0));
+        assert_eq!(normal.media().flags, 0);
+
+        let lapse = parse_bytes(&movie(&[
+            mvhd(CREATED, 9000),
+            tracks_at(30),
+            meta(&[(KEY_CAPTURE_MODE, "Time-lapse")]),
+        ]));
+        assert_eq!(lapse.media().flags, metadata::TIME_LAPSE);
     }
 
     fn wall_clock(y: i32, mo: u32, d: u32, h: u32, mi: u32, s: u32) -> i64 {

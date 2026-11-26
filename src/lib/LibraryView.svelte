@@ -22,6 +22,7 @@
     onIndexEvent,
     pickPhotosLibrary,
     removeFromPerson,
+    makeKeyPhoto,
     splitPerson,
     rescanLibrary,
     setPersonHidden,
@@ -370,6 +371,7 @@
       ofSection("duplicates", t("Duplicates"), "duplicates"),
       ofSection("similar", t("Similar shots"), "similar"),
       ofListing("videos", mediaListing("videos"), t("Videos"), "video"),
+      ...MEDIA_KINDS.map(([only, name, icon]) => ofListing(only, mediaListing(only), name, icon)),
       ofListing("raw", mediaListing("raw"), t("RAW"), "raw"),
       ...albums.map((album) =>
         ofListing(`album:${album.id}`, { kind: "album", album: album.id }, album.name, "album", album.count),
@@ -377,7 +379,18 @@
     ];
     return new Map(items.map((item) => [item.id, item]));
   });
-  const MEDIA_TYPES = ["videos", "raw"];
+  /** The media types between Videos and RAW, in Apple Photos' order. */
+  const MEDIA_KINDS: [Only, string, Icon][] = [
+    ["selfies", t("Selfies"), "selfie"],
+    ["livePhotos", t("Live Photos"), "live"],
+    ["portraits", t("Portrait"), "portrait"],
+    ["panoramas", t("Panoramas"), "panorama"],
+    ["timeLapses", t("Time-lapse"), "timeLapse"],
+    ["sloMos", t("Slo-mo"), "sloMo"],
+    ["bursts", t("Bursts"), "burst"],
+    ["screenshots", t("Screenshots"), "screenshot"],
+  ];
+  const MEDIA_TYPES = ["videos", ...MEDIA_KINDS.map(([only]) => only), "raw"];
   const UTILITIES = ["favorites", "hidden", "map", "people", "duplicates", "similar"];
 
   /** The rows at the top of the sidebar, chosen with Pin and Unpin; kept per computer. */
@@ -620,6 +633,8 @@
   /** The filter's name, also for the stars and colours, which are not in FILTERS. */
   function filterName(value: Only): string {
     if (value === "raw") return t("RAW");
+    const kind = MEDIA_KINDS.find(([only]) => only === value);
+    if (kind) return kind[1];
     const listed = FILTERS.find(([choice]) => choice === value)?.[1];
     if (listed) return listed;
     const stars = /^stars([1-5])$/.exec(value);
@@ -1084,6 +1099,20 @@
     refreshAll();
   }
 
+  /** The one selected photo becomes the one the person's card shows. */
+  async function makeSelectionKeyPhoto() {
+    if (listing.kind !== "person" || personName === null || selected.size !== 1) return;
+    const clusters = listing.clusters;
+    const name = personName;
+    const photo = await pages.load([...selected][0]);
+    if (!photo) return;
+    try {
+      await makeKeyPhoto(library.path, clusters, name, photo.fingerprint);
+    } catch (e) {
+      error = errorText(e);
+    }
+  }
+
   /** The selected photos show someone else: they become a person of their own, opened to be named. */
   async function splitSelectionFromPerson() {
     if (listing.kind !== "person") return;
@@ -1285,6 +1314,9 @@
         { label: personName ? t("Not {name}", { name: personName }) : t("Not this person"), enabled: online || personName === null, action: removeSelectionFromPerson },
         { label: t("Someone else"), enabled: online || personName === null, action: splitSelectionFromPerson },
       );
+      if (personName !== null) {
+        entries.push({ label: t("Make Key Photo"), enabled: online && one, action: makeSelectionKeyPhoto });
+      }
     }
     entries.push(
       "-",

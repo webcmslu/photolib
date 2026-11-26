@@ -497,6 +497,16 @@ export type Only =
   | "videos"
   /** RAW files, alone or behind a JPEG or HEIC of the same shot. */
   | "raw"
+  /** Taken with the front camera. */
+  | "selfies"
+  | "livePhotos"
+  /** With depth data: an iPhone's Portrait mode. */
+  | "portraits"
+  | "panoramas"
+  | "timeLapses"
+  | "sloMos"
+  | "bursts"
+  | "screenshots"
   | "notInAlbum"
   /** Rated at least this many stars. */
   | "stars1"
@@ -727,6 +737,11 @@ export function splitPerson(
 }
 
 /** Names a person; an empty name removes it. The same name merges two people. */
+/** Makes the photo `fingerprint` the one the card of the person `name` shows. */
+export function makeKeyPhoto(path: string, clusters: number[], name: string, fingerprint: string): Promise<void> {
+  return invoke("make_key_photo", { path, clusters, name, photo: fingerprint });
+}
+
 export function namePerson(path: string, clusters: number[], name: string): Promise<void> {
   return invoke("name_person", { path, clusters, name });
 }

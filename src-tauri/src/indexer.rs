@@ -293,7 +293,7 @@ pub fn scan_with(
     Ok(summary)
 }
 
-/// Reads the lens and exposure of the photos that don't have them yet,
+/// Reads the lens, exposure and media type of the files that don't have them yet,
 /// several at a time (over a network each read waits on the server), and
 /// saves them batch by batch, so a stopped scan picks up where it was.
 fn fill_shooting(root: &Path, conn: &mut Connection, cancel: &AtomicBool) -> rusqlite::Result<()> {
@@ -303,9 +303,12 @@ fn fill_shooting(root: &Path, conn: &mut Connection, cancel: &AtomicBool) -> rus
         if pending.is_empty() {
             break;
         }
-        let read: Vec<(i64, Option<crate::metadata::Shooting>)> = pending
+        let read: Vec<_> = pending
             .par_iter()
-            .map(|(id, rel_path)| (*id, crate::metadata::shooting(&root.join(rel_path))))
+            .map(|(id, rel_path)| {
+                let (shooting, media) = crate::metadata::shot(&root.join(rel_path));
+                (*id, shooting, media)
+            })
             .collect();
         db::set_shooting(conn, &read)?;
     }

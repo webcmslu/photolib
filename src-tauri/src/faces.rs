@@ -42,7 +42,10 @@ const REFERENCE_POINTS: [(f32, f32); 5] = [
 
 struct ModelFile {
     name: &'static str,
-    url: &'static str,
+    /// Where it can be downloaded, tried in this order: the original, then
+    /// our own copies, in case the original goes away. Any copy is checked
+    /// against `hash`, so a mirror can only serve the very same file.
+    urls: &'static [&'static str],
     /// BLAKE3 hash of the file.
     hash: &'static str,
     size: u64,
@@ -50,14 +53,20 @@ struct ModelFile {
 
 const DETECTOR: ModelFile = ModelFile {
     name: "face_detection_yunet_2023mar.onnx",
-    url: "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx",
+    urls: &[
+        "https://huggingface.co/opencv/face_detection_yunet/resolve/main/face_detection_yunet_2023mar.onnx",
+        "https://github.com/webcmslu/phototek/releases/download/models/face_detection_yunet_2023mar.onnx",
+    ],
     hash: "3d5938c4cd5a02dc416f1cd1f7fc1f662a22adc370477112c871954587e63431",
     size: 232_589,
 };
 
 const RECOGNIZER: ModelFile = ModelFile {
     name: "face_recognition_sface_2021dec.onnx",
-    url: "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx",
+    urls: &[
+        "https://huggingface.co/opencv/face_recognition_sface/resolve/main/face_recognition_sface_2021dec.onnx",
+        "https://github.com/webcmslu/phototek/releases/download/models/face_recognition_sface_2021dec.onnx",
+    ],
     hash: "584d0f5792e9e776ab5e5bf3f559f2310ff8fdd3b39f94dd364751046592b512",
     size: 38_696_353,
 };
@@ -114,34 +123,57 @@ pub fn download_models(app_data_dir: &Path, on_progress: &dyn Fn(u64)) -> io::Re
             on_progress(done);
             continue;
         }
-        let response = ureq::get(model.url)
-            .timeout(std::time::Duration::from_secs(600))
-            .call()
-            .map_err(|e| io::Error::other(format!("download failed: {e}")))?;
-        let mut reader = response.into_reader().take(model.size + 1);
-        let mut bytes = Vec::with_capacity(model.size as usize);
-        let mut chunk = vec![0u8; 256 * 1024];
-        loop {
-            let read = reader.read(&mut chunk)?;
-            if read == 0 {
-                break;
+        let mut failures = Vec::new();
+        let mut found = None;
+        for url in model.urls {
+            match fetch(model, url, &|got| on_progress(done + got)) {
+                Ok(bytes) => {
+                    found = Some(bytes);
+                    break;
+                }
+                Err(e) => failures.push(format!("{url}: {e}")),
             }
-            bytes.extend_from_slice(&chunk[..read]);
-            on_progress(done + bytes.len() as u64);
         }
-        // Never run a file that is not exactly the one we expect.
-        if blake3::hash(&bytes).to_hex().as_str() != model.hash {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("{} is not the expected file", model.name),
-            ));
-        }
+        let Some(bytes) = found else {
+            return Err(io::Error::other(format!(
+                "download failed: {}",
+                failures.join("; ")
+            )));
+        };
         let tmp = target.with_extension("part");
         fs::write(&tmp, &bytes)?;
         fs::rename(&tmp, &target)?;
         done += model.size;
     }
     Ok(())
+}
+
+/// Downloads one copy of `model` from `url`; only the expected file is
+/// returned.
+fn fetch(model: &ModelFile, url: &str, on_progress: &dyn Fn(u64)) -> io::Result<Vec<u8>> {
+    let response = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(600))
+        .call()
+        .map_err(io::Error::other)?;
+    let mut reader = response.into_reader().take(model.size + 1);
+    let mut bytes = Vec::with_capacity(model.size as usize);
+    let mut chunk = vec![0u8; 256 * 1024];
+    loop {
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+        on_progress(bytes.len() as u64);
+    }
+    // Never run a file that is not exactly the one we expect.
+    if blake3::hash(&bytes).to_hex().as_str() != model.hash {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is not the expected file", model.name),
+        ));
+    }
+    Ok(bytes)
 }
 
 type Model = std::sync::Arc<TypedRunnableModel>;
