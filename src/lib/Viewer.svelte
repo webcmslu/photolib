@@ -71,7 +71,9 @@
   /** Don't fetch the full-size photo while the user is flipping through. */
   const FULL_SIZE_DELAY_MS = 200;
 
-  let photo = $state<PhotoItem | undefined>();
+  /** The photo as loaded; `photo` adds the heart, stars or label not saved yet. */
+  let loadedPhoto = $state<PhotoItem | undefined>();
+  const photo = $derived(pages.patched(loadedPhoto));
   let details = $state<PhotoDetails | null>(null);
   /** Lens, aperture, shutter speed…: read from the file, after the details. */
   let shooting = $state<Shooting | null>(null);
@@ -348,7 +350,7 @@
     void revision;
     pages.load(wanted).then((loaded) => {
       if (wanted !== index) return;
-      photo = loaded;
+      loadedPhoto = loaded;
       for (const neighbour of [wanted + 1, wanted - 1]) {
         pages.load(neighbour).then((item) => {
           if (item) new Image().src = thumbUrl(item.fingerprint, "preview");

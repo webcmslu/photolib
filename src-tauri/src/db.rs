@@ -573,6 +573,40 @@ pub fn add_not_person(conn: &Connection, cluster: i64, name: &str) -> rusqlite::
     Ok(())
 }
 
+/// Where a face of a person's groups is in a photo.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FaceBox {
+    pub fingerprint: String,
+    /// Left, top, width, height, as fractions of the upright photo.
+    pub bounds: [f64; 4],
+}
+
+/// The faces in `clusters`, one per photo (the most certain one).
+pub fn faces_in(conn: &Connection, clusters: &[i64]) -> rusqlite::Result<Vec<FaceBox>> {
+    let mut stmt = conn.prepare(
+        "SELECT fingerprint, left, top, width, height FROM faces.face
+         WHERE cluster = ?1 ORDER BY score DESC",
+    )?;
+    let mut seen = std::collections::HashSet::new();
+    let mut boxes = Vec::new();
+    for cluster in clusters {
+        let rows = stmt.query_map([cluster], |row| {
+            Ok(FaceBox {
+                fingerprint: row.get(0)?,
+                bounds: [row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?],
+            })
+        })?;
+        for face in rows {
+            let face = face?;
+            if seen.insert(face.fingerprint.clone()) {
+                boxes.push(face);
+            }
+        }
+    }
+    Ok(boxes)
+}
+
 /// Takes the faces of `clusters` in the given photos out of their group, for
 /// good. Returns how many faces were taken out.
 pub fn remove_faces(
@@ -1032,6 +1066,8 @@ pub enum Only {
     Edited,
     Photos,
     Videos,
+    /// RAW files, on their own or behind a JPEG or HEIC of the same shot.
+    Raw,
     NotInAlbum,
     /// Rated at least this many stars.
     Stars1,
@@ -1057,6 +1093,10 @@ impl Only {
                 .to_owned(),
             Only::Photos => "kind = 0".to_owned(),
             Only::Videos => "kind = 1".to_owned(),
+            Only::Raw => format!(
+                "(raw_file IS NOT NULL OR {})",
+                crate::raw::is_raw_sql("rel_path")
+            ),
             Only::NotInAlbum => "fingerprint NOT IN (
                      SELECT m.photo FROM org_state m
                      WHERE m.kind = 'member' AND m.value = '1'
@@ -1205,6 +1245,8 @@ pub struct DayGroup {
     /// listing is sorted by name: then one group holds every photo.
     pub day: Option<i64>,
     pub count: u32,
+    /// How many of `count` are videos.
+    pub videos: u32,
 }
 
 /// The order of a listing in the photo grid.
@@ -1254,15 +1296,19 @@ pub fn timeline_in(
 ) -> rusqlite::Result<Vec<DayGroup>> {
     let (filter, param) = listing.filter();
     if order.by_name() {
-        let count: u32 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM photos {filter}"),
+        let (count, videos): (u32, u32) = conn.query_row(
+            &format!("SELECT COUNT(*), COALESCE(SUM(kind = 1), 0) FROM photos {filter}"),
             [param],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         return Ok(if count == 0 {
             Vec::new()
         } else {
-            vec![DayGroup { day: None, count }]
+            vec![DayGroup {
+                day: None,
+                count,
+                videos,
+            }]
         });
     }
     let direction = if order == Order::DateAsc { "" } else { "DESC" };
@@ -1271,13 +1317,14 @@ pub fn timeline_in(
     let mut stmt = conn.prepare(&format!(
         "SELECT (sort_date - 86400000 * (sort_date < 0 AND sort_date % 86400000 != 0))
                     / 86400000 AS day,
-                COUNT(*)
+                COUNT(*), SUM(kind = 1)
          FROM photos {filter} GROUP BY day ORDER BY day {direction}"
     ))?;
     let rows = stmt.query_map([param], |row| {
         Ok(DayGroup {
             day: Some(row.get(0)?),
             count: row.get(1)?,
+            videos: row.get(2)?,
         })
     })?;
     rows.collect()
@@ -2468,6 +2515,28 @@ mod tests {
                 pair("other/IMG_2.jpg"),
             ]
         );
+
+        // The RAW filter keeps the pairs and the RAW files on their own.
+        let raw = Listing::Only {
+            within: Box::new(Listing::Library),
+            only: Only::Raw,
+        };
+        let mut raws: Vec<String> = photos_page(&conn, &raw, 0, 10)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.rel_path)
+            .collect();
+        raws.sort();
+        assert_eq!(
+            raws,
+            [
+                "match/IMG_1.JPG",
+                "match/IMG_2.NEF",
+                "match/IMG_3.cr2",
+                "match/IMG_3.dng",
+                "match/IMG_4.arw"
+            ]
+        );
         // The pair counts once (the count includes the undecodable JPEG),
         // and its RAW file needs no thumbnail of its own.
         assert_eq!(count(&conn).unwrap(), 7);
@@ -2968,6 +3037,13 @@ mod tests {
         };
         assert_eq!(listed(trip(), Only::Photos), ["in-album.jpg"]);
         assert_eq!(listed(trip(), Only::Videos), ["clip.mov"]);
+        // The timeline tells the videos apart, for "4 photos, 1 video".
+        let videos: u32 = timeline(&conn, &Listing::Library)
+            .unwrap()
+            .iter()
+            .map(|g| g.videos)
+            .sum();
+        assert_eq!(videos, 1);
     }
 
     #[test]

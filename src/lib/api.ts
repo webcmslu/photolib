@@ -380,6 +380,8 @@ export interface DayGroup {
   /** Days since 1970-01-01; null when sorted by name (one group for all). */
   day: number | null;
   count: number;
+  /** How many of `count` are videos. */
+  videos: number;
 }
 
 /** Mirrors `PhotoItem` in src-tauri/src/db.rs. */
@@ -493,6 +495,8 @@ export type Only =
   | "edited"
   | "photos"
   | "videos"
+  /** RAW files, alone or behind a JPEG or HEIC of the same shot. */
+  | "raw"
   | "notInAlbum"
   /** Rated at least this many stars. */
   | "stars1"
@@ -685,6 +689,18 @@ export function rejectSuggestion(path: string, cluster: number, name: string): P
 /** Hides a person from the People screen (on this computer), or shows them again. */
 export function setPersonHidden(path: string, clusters: number[], hidden: boolean): Promise<void> {
   return invoke("set_person_hidden", { path, clusters, hidden });
+}
+
+/** Where a face of a person's groups is in a photo. Mirrors `FaceBox` in db.rs. */
+export interface FaceBox {
+  fingerprint: string;
+  /** Left, top, width, height, as fractions of the upright photo. */
+  bounds: [number, number, number, number];
+}
+
+/** The faces of a person's groups, one per photo, to show where they are. */
+export function personFaces(path: string, clusters: number[]): Promise<FaceBox[]> {
+  return invoke("person_faces", { path, clusters });
 }
 
 /** Takes photos out of a person, whose face in them was someone else's. */

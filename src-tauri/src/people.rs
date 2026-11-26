@@ -949,6 +949,15 @@ mod tests {
         }
         group_faces(&mut conn).unwrap();
         let group = db::face_groups(&conn).unwrap()[0].clone();
+        // Each photo's face can be shown where it is.
+        let boxes = db::faces_in(&conn, &[group.cluster]).unwrap();
+        assert_eq!(boxes.len(), 4);
+        assert!(boxes.iter().all(|face| {
+            face.bounds
+                .iter()
+                .zip([0.1, 0.1, 0.2, 0.2])
+                .all(|(got, want)| (got - want).abs() < 1e-4)
+        }));
         let apply = |conn: &mut Connection, ops: Vec<Op>, ts: i64| {
             let tx = conn.transaction().unwrap();
             for (i, op) in ops.into_iter().enumerate() {

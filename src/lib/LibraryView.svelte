@@ -38,13 +38,14 @@
     type MonthSummary,
     type Only,
     type Op,
+    type PhotoItem,
     type ScanProgress,
     type ScanSummary,
     type ThumbSummary,
     type Gear,
   } from "./api";
   import GearPanel from "./GearPanel.svelte";
-  import { cameraName, formatDayRange, formatNumber, monthKey, photoCount } from "./format";
+  import { cameraName, formatDayRange, formatNumber, itemCount, monthKey, photoCount } from "./format";
   import MapView from "./MapView.svelte";
   import Overview from "./Overview.svelte";
   import PeopleView from "./PeopleView.svelte";
@@ -66,6 +67,7 @@
   import { sep } from "@tauri-apps/api/path";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { saveSettings, settings } from "./settings.svelte";
+  import { ICONS, type Icon } from "./icons";
 
   interface Props {
     library: LibraryInfo;
@@ -288,6 +290,121 @@
     }
   }
 
+  // --- Sidebar sections ---------------------------------------------------------
+
+  const readStored = <T,>(key: string, fallback: T): T => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored === null ? fallback : (JSON.parse(stored) as T);
+    } catch {
+      return fallback;
+    }
+  };
+  const store = (key: string, value: unknown) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Not remembered this time.
+    }
+  };
+
+  /** The tip on a person's page about taking photos out, until dismissed. */
+  let personHintSeen = $state(readStored("photolib.personHintSeen", false));
+  function dismissPersonHint() {
+    personHintSeen = true;
+    store("photolib.personHintSeen", true);
+  }
+
+  /** Which sidebar headings are open. Media Types and Folders start closed. */
+  type SidebarGroup = "pinned" | "albums" | "media" | "utilities" | "folders";
+  let openGroups = $state<Record<SidebarGroup, boolean>>({
+    pinned: true,
+    albums: true,
+    media: false,
+    utilities: true,
+    folders: false,
+    ...readStored<Partial<Record<SidebarGroup, boolean>>>("photolib.sidebarGroups", {}),
+  });
+  function toggleGroup(group: SidebarGroup) {
+    openGroups[group] = !openGroups[group];
+    store("photolib.sidebarGroups", openGroups);
+  }
+
+  const mediaListing = (only: Only): Listing => ({ kind: "only", within: { kind: "library" }, only });
+  const sameListing = (a: Listing, b: Listing) => JSON.stringify(a) === JSON.stringify(b);
+
+  /** A row of the sidebar that can be pinned: an album, a filter or a view. */
+  interface SidebarItem {
+    id: string;
+    label: string;
+    icon: Icon;
+    count: number | null;
+    selected: boolean;
+    open: () => void;
+  }
+  const sidebarItems = $derived.by(() => {
+    const ofListing = (id: string, target: Listing, label: string, icon: Icon, count: number | null = null) => ({
+      id,
+      label,
+      icon,
+      count,
+      selected: section === "photos" && sameListing(target, listing),
+      open: () => {
+        listing = target;
+        section = "photos";
+      },
+    });
+    const ofSection = (id: typeof section, label: string, icon: Icon, alsoSelected = false) => ({
+      id,
+      label,
+      icon,
+      count: null,
+      selected: section === id || alsoSelected,
+      open: () => (section = id),
+    });
+    const items: SidebarItem[] = [
+      ofListing("favorites", { kind: "favorites" }, t("Favorites"), "heart"),
+      ofListing("hidden", { kind: "hidden" }, t("Hidden"), "hidden"),
+      ofSection("map", t("Map"), "map", section === "photos" && listing.kind === "area"),
+      ofSection("people", t("People"), "person", section === "photos" && listing.kind === "person"),
+      ofSection("duplicates", t("Duplicates"), "duplicates"),
+      ofSection("similar", t("Similar shots"), "similar"),
+      ofListing("videos", mediaListing("videos"), t("Videos"), "video"),
+      ofListing("raw", mediaListing("raw"), t("RAW"), "raw"),
+      ...albums.map((album) =>
+        ofListing(`album:${album.id}`, { kind: "album", album: album.id }, album.name, "album", album.count),
+      ),
+    ];
+    return new Map(items.map((item) => [item.id, item]));
+  });
+  const MEDIA_TYPES = ["videos", "raw"];
+  const UTILITIES = ["favorites", "hidden", "map", "people", "duplicates", "similar"];
+
+  /** The rows at the top of the sidebar, chosen with Pin and Unpin; kept per computer. */
+  let pinned = $state<string[]>(readStored("photolib.pinned", ["favorites", "map", "people", "videos"]));
+  const pinnedItems = $derived(pinned.flatMap((id) => sidebarItems.get(id) ?? []));
+  /**
+   * A pinned row is in the sidebar twice. Only the copy that was clicked is
+   * shown selected: "pinned", or "home" for its own section (Utilities…).
+   */
+  let clickedIn = $state<"pinned" | "home">("pinned");
+  const showsSelected = (entry: SidebarItem, place: "pinned" | "home") =>
+    entry.selected &&
+    (place === (clickedIn === "pinned" && openGroups.pinned ? "pinned" : "home") || !pinned.includes(entry.id));
+  function togglePin(id: string) {
+    pinned = pinned.includes(id) ? pinned.filter((other) => other !== id) : [...pinned, id];
+    store("photolib.pinned", pinned);
+  }
+  const pinEntry = (id: string): MenuEntry => ({
+    label: pinned.includes(id) ? t("Unpin") : t("Pin to Sidebar"),
+    action: () => togglePin(id),
+  });
+  function itemMenu(event: MouseEvent, item: SidebarItem) {
+    const album = albums.find((candidate) => `album:${candidate.id}` === item.id);
+    if (album) return albumMenu(event, album);
+    showMenu(event, [{ label: t("Open"), action: item.open }, "-", pinEntry(item.id)]);
+  }
+
   /** Folders whose subfolders are shown in the sidebar, kept per library. */
   // svelte-ignore state_referenced_locally
   const openFoldersKey = `photolib.openFolders.${library.path}`;
@@ -389,6 +506,8 @@
         return personName ?? t("Unnamed person");
       case "search":
         return t("Search: {query}", { query: listing.query });
+      case "only":
+        return filterName(listing.only);
     }
   });
 
@@ -490,16 +609,17 @@
   let filter = $state.raw<{ listing: Listing; only: Only } | null>(null);
   const only = $derived(filter?.listing === listing ? filter.only : null);
   let filterMenuOpen = $state(false);
-  const FILTERS: [Only | null, string][] = [
-    [null, t("All Items")],
-    ["favorites", t("Favorites")],
-    ["edited", t("Edited")],
-    ["photos", t("Photos")],
-    ["videos", t("Videos")],
-    ["notInAlbum", t("Not in an Album")],
+  const FILTERS: [Only | null, string, Icon][] = [
+    [null, t("All Items"), "grid"],
+    ["favorites", t("Favorites"), "heart"],
+    ["edited", t("Edited"), "sliders"],
+    ["photos", t("Photos"), "photo"],
+    ["videos", t("Videos"), "video"],
+    ["notInAlbum", t("Not in an Album"), "albumOff"],
   ];
   /** The filter's name, also for the stars and colours, which are not in FILTERS. */
   function filterName(value: Only): string {
+    if (value === "raw") return t("RAW");
     const listed = FILTERS.find(([choice]) => choice === value)?.[1];
     if (listed) return listed;
     const stars = /^stars([1-5])$/.exec(value);
@@ -553,6 +673,7 @@
   /** False until the first timeline for the current listing has arrived. */
   let groupsLoaded = $state(false);
   const listedTotal = $derived(groups.reduce((sum, group) => sum + group.count, 0));
+  const listedVideos = $derived(groups.reduce((sum, group) => sum + group.videos, 0));
   /** Bumped whenever the listing is reloaded. */
   let revision = $state(0);
 
@@ -854,15 +975,77 @@
 
   /** Records changes, then reloads what is on screen. */
   /** Records `ops` and reloads; with no ops, only reloads (a file changed). */
+  /** Whether `op` takes its photo out of the listing on screen. */
+  function leavesListing(op: Op): op is Op & { photo: string } {
+    switch (op.op) {
+      case "hide":
+        // Hiding leaves every listing but Hidden; showing again leaves Hidden.
+        return op.on !== (listing.kind === "hidden");
+      case "album_member":
+        return !op.on && listing.kind === "album" && listing.album === op.album;
+      case "fav":
+        return !op.on && listing.kind === "favorites";
+      default:
+        return false;
+    }
+  }
+
+  /** Takes photos out of the grid before the change is saved. */
+  function takeOutLocally(fingerprints: Set<string>) {
+    const removed = pages.removeLocally(fingerprints);
+    if (removed.length === 0) return;
+    const next = groups.map((group) => ({ ...group }));
+    // `removed` is last first, so the earlier indexes are still right.
+    for (const { index, video } of removed) {
+      let start = 0;
+      for (const group of next) {
+        if (index < start + group.count) {
+          group.count--;
+          if (video) group.videos--;
+          break;
+        }
+        start += group.count;
+      }
+    }
+    groups = next.filter((group) => group.count > 0);
+    // Indexes moved: the selection no longer points at the same photos.
+    selected.clear();
+    selectionAnchor = null;
+    // The viewer shows what is at its index now: the next photo.
+    revision++;
+  }
+
+  /** The last save asked for; the next one waits for it. */
+  let saving: Promise<void> = Promise.resolve();
+
   async function apply(ops: Op[]) {
     if (ops.length === 0) {
       refreshAll();
       return;
     }
     error = null;
+    // Hearts, stars and labels show at once; saving (to a NAS, maybe) follows.
+    const patches = new Map<string, Partial<PhotoItem>>();
+    const add = (photo: string, patch: Partial<PhotoItem>) =>
+      patches.set(photo, { ...patches.get(photo), ...patch });
+    for (const op of ops) {
+      if (op.op === "fav") add(op.photo, { favorite: op.on });
+      else if (op.op === "rating") add(op.photo, { rating: op.stars });
+      else if (op.op === "label") add(op.photo, { label: op.color || null });
+    }
+    const shown = patches.size > 0 ? pages.optimistic(patches) : null;
+    // Photos that leave what is listed go at once too; if saving fails, the
+    // refresh below brings them back.
+    const leaving = new Set(ops.flatMap((op) => (leavesListing(op) ? [op.photo] : [])));
+    if (leaving.size > 0) takeOutLocally(leaving);
+    // One save at a time, in order: a quick second tap must win over the first.
+    const save = saving.then(() => applyOps(library.path, ops));
+    saving = save.catch(() => {});
     try {
-      await applyOps(library.path, ops);
+      await save;
+      shown?.settle();
     } catch (e) {
+      shown?.revert();
       error = errorText(e);
     }
     refreshAll();
@@ -889,18 +1072,16 @@
     const clusters = listing.clusters;
     const photos = await Promise.all([...selected].map((index) => target.load(index)));
     if (target !== pages) return;
+    const fingerprints = photos.flatMap((photo) => (photo ? [photo.fingerprint] : []));
+    // They leave the grid at once; the refresh brings them back if it failed.
+    takeOutLocally(new Set(fingerprints));
     try {
-      await removeFromPerson(
-        library.path,
-        clusters,
-        photos.flatMap((photo) => (photo ? [photo.fingerprint] : [])),
-        personName,
-      );
-      selected.clear();
-      refreshAll();
+      await removeFromPerson(library.path, clusters, fingerprints, personName);
     } catch (e) {
       error = errorText(e);
     }
+    selected.clear();
+    refreshAll();
   }
 
   /** The selected photos show someone else: they become a person of their own, opened to be named. */
@@ -1120,6 +1301,8 @@
       "-",
       { label: t("Rename…"), enabled: online, action: () => (open(), (renaming = album.name)) },
       { label: t("Delete Album…"), enabled: online, action: () => (open(), (confirmingDelete = true)) },
+      "-",
+      pinEntry(`album:${album.id}`),
     ]);
   }
 
@@ -1305,7 +1488,12 @@
 
   <div class="body">
     <nav aria-label={t("Library sections")} style:width="{sidebarWidth}px">
-      {#snippet row(target: Listing, label: string, count: number | null, depth = 0, enabled = true)}
+      {#snippet icon(name: Icon)}
+        <svg class="row-icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
+          {#each ICONS[name] as d, i (i)}<path {d} />{/each}
+        </svg>
+      {/snippet}
+      {#snippet row(target: Listing, label: string, count: number | null, kind: Icon, depth = 0, enabled = true)}
         <button
           class="row"
           class:selected={section === "photos" && JSON.stringify(target) === JSON.stringify(listing)}
@@ -1317,37 +1505,48 @@
           }}
           title={label}
         >
+          {@render icon(kind)}
           <span class="row-name">{label}</span>
           {#if count !== null && count > 0}<span class="row-count">{formatNumber(count)}</span>{/if}
         </button>
       {/snippet}
 
-      {@render row({ kind: "library" }, t("Library"), null)}
-      {@render row({ kind: "favorites" }, t("Favorites"), null)}
-      {@render row({ kind: "hidden" }, t("Hidden"), null)}
-      <button
-        class="row"
-        class:selected={section === "map" || (section === "photos" && listing.kind === "area")}
-        onclick={() => (section = "map")}
-      >
-        <span class="row-name">{t("Map")}</span>
-      </button>
-      <button
-        class="row"
-        class:selected={section === "people" || (section === "photos" && listing.kind === "person")}
-        onclick={() => (section = "people")}
-      >
-        <span class="row-name">{t("People")}</span>
-      </button>
-      <button class="row" class:selected={section === "duplicates"} onclick={() => (section = "duplicates")}>
-        <span class="row-name">{t("Duplicates")}</span>
-      </button>
-      <button class="row" class:selected={section === "similar"} onclick={() => (section = "similar")}>
-        <span class="row-name">{t("Similar shots")}</span>
-      </button>
+      {#snippet item(entry: SidebarItem, place: "pinned" | "home" = "home")}
+        <button
+          class="row"
+          class:selected={showsSelected(entry, place)}
+          onclick={() => {
+            clickedIn = place;
+            entry.open();
+          }}
+          oncontextmenu={(event) => itemMenu(event, entry)}
+          title={entry.label}
+        >
+          {@render icon(entry.icon)}
+          <span class="row-name">{entry.label}</span>
+          {#if entry.count !== null && entry.count > 0}<span class="row-count">{formatNumber(entry.count)}</span>{/if}
+        </button>
+      {/snippet}
+      {#snippet heading(group: SidebarGroup, label: string)}
+        <button class="heading-toggle" aria-expanded={openGroups[group]} onclick={() => toggleGroup(group)}>
+          {label}
+          <svg class:open={openGroups[group]} viewBox="0 0 10 10" width="10" height="10" aria-hidden="true">
+            <path d="M3.5 1.5 7 5l-3.5 3.5" />
+          </svg>
+        </button>
+      {/snippet}
+
+      {@render row({ kind: "library" }, t("Library"), null, "library")}
+
+      {#if pinnedItems.length > 0}
+        <h2>{@render heading("pinned", t("Pinned"))}</h2>
+        {#if openGroups.pinned}
+          {#each pinnedItems as entry (entry.id)}{@render item(entry, "pinned")}{/each}
+        {/if}
+      {/if}
 
       <h2>
-        {t("Albums")}
+        {@render heading("albums", t("Albums"))}
         <button
           class="add"
           onclick={() => (newAlbumName = "")}
@@ -1370,16 +1569,33 @@
           />
         </form>
       {/if}
-      {#each albums as album (album.id)}
-        <div class="menu-target" oncontextmenu={(event) => albumMenu(event, album)} role="presentation">
-          {@render row({ kind: "album", album: album.id }, album.name, album.count)}
-        </div>
-      {:else}
-        {#if newAlbumName === null}<p class="hint">{t("No albums yet")}</p>{/if}
-      {/each}
+      {#if openGroups.albums}
+        {#each albums as album (album.id)}
+          {@const entry = sidebarItems.get(`album:${album.id}`)}
+          {#if entry}{@render item(entry)}{/if}
+        {:else}
+          {#if newAlbumName === null}<p class="hint">{t("No albums yet")}</p>{/if}
+        {/each}
+      {/if}
 
-      <h2>{t("Folders")}</h2>
-      {#each folderTree.rows as folder (folder.path)}
+      <h2>{@render heading("media", t("Media Types"))}</h2>
+      {#if openGroups.media}
+        {#each MEDIA_TYPES as id (id)}
+          {@const entry = sidebarItems.get(id)}
+          {#if entry}{@render item(entry)}{/if}
+        {/each}
+      {/if}
+
+      <h2>{@render heading("utilities", t("Utilities"))}</h2>
+      {#if openGroups.utilities}
+        {#each UTILITIES as id (id)}
+          {@const entry = sidebarItems.get(id)}
+          {#if entry}{@render item(entry)}{/if}
+        {/each}
+      {/if}
+
+      <h2>{@render heading("folders", t("Folders"))}</h2>
+      {#each openGroups.folders ? folderTree.rows : [] as folder (folder.path)}
         <div class="tree-row" oncontextmenu={(event) => folderMenu(event, folder.path)} role="presentation">
           {#if folder.hasChildren}
             <button
@@ -1397,7 +1613,7 @@
               </svg>
             </button>
           {/if}
-          {@render row(folderListing(folder.path), folder.name, folder.count, folder.depth + 1)}
+          {@render row(folderListing(folder.path), folder.name, folder.count, "folder", folder.depth + 1)}
         </div>
       {/each}
     </nav>
@@ -1559,7 +1775,7 @@
           <span class="heading">
             <span class="heading-line">
               <strong class="title">{title}</strong>
-              {#if groupsLoaded}<span class="dim">{photoCount(listedTotal)}</span>{/if}
+              {#if groupsLoaded}<span class="dim">{itemCount(listedTotal, listedVideos)}</span>{/if}
             </span>
             <!-- Always there, with a fixed width, so that scrolling never
                  moves the rest of the toolbar. -->
@@ -1674,13 +1890,19 @@
             </button>
             {#if filterMenuOpen}
               <div class="menu" role="menu">
-                {#each FILTERS as [value, label] (label)}
+                {#each FILTERS as [value, label, kind] (label)}
                   <button
                     role="menuitemradio"
                     aria-checked={only === value}
                     onclick={() => chooseFilter(value)}
                   >
-                    <span class="mark">{only === value ? "✓" : ""}</span>{label}
+                    <span class="mark">{only === value ? "✓" : ""}</span><svg
+                      class="menu-icon"
+                      viewBox="0 0 20 20"
+                      width="16"
+                      height="16"
+                      aria-hidden="true">{#each ICONS[kind] as d, i (i)}<path {d} />{/each}</svg
+                    >{label}
                   </button>
                 {/each}
                 <hr />
@@ -1776,6 +1998,21 @@
         {/if}
       </div>
 
+      {#if listing.kind === "person" && !personHintSeen}
+        <p class="person-hint">
+          <span>
+            {personName
+              ? t("A photo that isn't {name}? Right-click it and choose “Not {name}”. To take out several, select them first ({key}-click).", {
+                  name: personName,
+                  key: IS_MAC ? "⌘" : "Ctrl",
+                })
+              : t("A photo that isn't this person? Right-click it and choose “Not this person”. To take out several, select them first ({key}-click).", {
+                  key: IS_MAC ? "⌘" : "Ctrl",
+                })}
+          </span>
+          <button class="link-button" onclick={dismissPersonHint}>{t("Got it")}</button>
+        </p>
+      {/if}
       {#if listing.kind === "person" && personName}
         <PersonSuggestions
           libraryPath={library.path}
@@ -2375,7 +2612,7 @@
 
   .row {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 8px;
     width: 100%;
     padding: 5px 12px;
@@ -2406,6 +2643,90 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .menu-icon {
+    flex: none;
+    margin-right: 8px;
+    vertical-align: -3px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .row-icon {
+    flex: none;
+    fill: none;
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .row.selected .row-icon {
+    stroke: currentColor;
+  }
+
+  .row:disabled .row-icon {
+    stroke: currentColor;
+  }
+
+  .person-hint {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin: 0;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .person-hint span {
+    flex: 1;
+  }
+
+  .link-button {
+    flex: none;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .heading-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .heading-toggle:hover {
+    color: var(--text);
+  }
+
+  .heading-toggle svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 0.12s;
+  }
+
+  .heading-toggle svg.open {
+    transform: rotate(90deg);
   }
 
   .row-count {

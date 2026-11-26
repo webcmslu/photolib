@@ -10,9 +10,10 @@
   several cells wide and two rows high, with the others flowing around it.
 -->
 <script lang="ts">
+  import { tick } from "svelte";
   import { t, tn } from "./i18n";
   import { thumbUrl, type DayGroup } from "./api";
-  import { formatDay, formatDuration, formatMonth, formatNumber, monthKey, rawPairLabel } from "./format";
+  import { formatDay, formatDuration, formatMonth, formatNumber, isRawPath, monthKey, rawPairLabel } from "./format";
   import EditedImage from "./EditedImage.svelte";
   import { labelCss } from "./labels";
   import type { PhotoPages } from "./pages.svelte";
@@ -468,17 +469,39 @@
     if (section) scroller.scrollTop = section.top;
   }
 
-  // Start at the day asked for, once there is a layout to scroll in.
-  let started = false;
+  // Start at the day asked for. The layout settles over several updates (the
+  // width is measured, the year rail appears and narrows the grid, the river's
+  // shapes arrive), and each one moves the days, so the day is scrolled to
+  // again after every change until the user scrolls on their own. Scrolling
+  // waits for the DOM to catch up: before that the canvas still has its old
+  // height and the browser would cut the scroll short.
+  // svelte-ignore state_referenced_locally
+  let pendingStart: number | null = startAt;
   $effect(() => {
-    if (started || startAt === null || clientWidth === 0 || layout.sections.length === 0) return;
-    started = true;
-    scrollToDay(startAt);
-    scrollTop = scroller.scrollTop;
+    const { sections, height } = layout;
+    if (pendingStart === null || clientWidth === 0 || sections.length === 0 || height === 0) return;
+    tick().then(() => {
+      if (pendingStart === null) return;
+      scrollToDay(pendingStart);
+      scrollTop = scroller.scrollTop;
+    });
+  });
+  // The user taking over the scrolling (wheel, scrollbar, rail, keys) lets go of it.
+  let frame: HTMLDivElement;
+  $effect(() => {
+    const letGo = () => (pendingStart = null);
+    const events = ["wheel", "pointerdown", "touchstart"] as const;
+    for (const name of events) frame.addEventListener(name, letGo, { passive: true });
+    // The grid's keys are handled at the window, so listen there.
+    window.addEventListener("keydown", letGo);
+    return () => {
+      for (const name of events) frame.removeEventListener(name, letGo);
+      window.removeEventListener("keydown", letGo);
+    };
   });
 </script>
 
-<div class="frame">
+<div class="frame" class:zoom-target={startAt !== null} bind:this={frame}>
 <div class="scroller" bind:this={scroller} bind:clientWidth bind:clientHeight {onscroll}>
   <div class="canvas" style:height="{layout.height}px">
     {#each visible.headers as section (section.day)}
@@ -548,8 +571,13 @@
         {:else if photo?.liveVideo}
           <span class="badge">LIVE</span>
         {:else if photo?.rawFile}
-          <!-- Short on small cells, so it leaves room for the heart. -->
-          <span class="badge">{cell.width < 190 ? "RAW" : rawPairLabel(photo.relPath)}</span>
+          <!-- Shorter on small cells, so it leaves room for the heart, but a
+               pair never reads "RAW" alone: that is a RAW file without a JPEG. -->
+          <span class="badge"
+            >{cell.width < 120 ? "+RAW" : rawPairLabel(photo.relPath, cell.width < 190)}</span
+          >
+        {:else if photo && isRawPath(photo.relPath)}
+          <span class="badge">RAW</span>
         {/if}
         {#if photo && (photo.favorite || photo.rating > 0 || photo.label)}
           <span class="marks">
@@ -660,6 +688,11 @@
   .frame {
     display: flex;
     height: 100%;
+  }
+
+  /* Opened from a day of the Months overview: that day's card grows into the grid. */
+  .frame.zoom-target {
+    view-transition-name: zoom-day;
   }
 
   .scroller {

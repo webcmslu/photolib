@@ -119,10 +119,26 @@ export function photoCount(count: number): string {
   return tn(count, "{n} photo", "{n} photos");
 }
 
+/** "57,604 photos, 1,556 videos": the photos and the videos counted apart. */
+export function itemCount(count: number, videos: number): string {
+  const photos = count - videos;
+  if (videos === 0) return photoCount(photos);
+  const clips = tn(videos, "{n} video", "{n} videos");
+  return photos === 0 ? clips : `${photoCount(photos)}, ${clips}`;
+}
+
 /** "JPEG + RAW", "HEIC + RAW"…: names a pair after the file that is shown. */
-export function rawPairLabel(relPath: string): string {
+export function rawPairLabel(relPath: string, compact = false): string {
   const extension = relPath.slice(relPath.lastIndexOf(".") + 1).toUpperCase();
-  return `${extension === "JPG" ? "JPEG" : extension} + RAW`;
+  return `${extension === "JPG" ? "JPEG" : extension}${compact ? "+" : " + "}RAW`;
+}
+
+/** The RAW extensions, as in src-tauri/src/raw.rs. */
+const RAW_EXTENSIONS = new Set(["cr2", "cr3", "nef", "nrw", "arw", "sr2", "dng", "raf", "orf", "rw2", "pef", "srw"]);
+
+/** Whether a file is a camera RAW file, by its extension. */
+export function isRawPath(relPath: string): boolean {
+  return RAW_EXTENSIONS.has(relPath.slice(relPath.lastIndexOf(".") + 1).toLowerCase());
 }
 
 /** Brands whose cameras write a company name rather than the brand. */

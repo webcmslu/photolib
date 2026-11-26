@@ -98,6 +98,24 @@
     });
   }
 
+  /**
+   * Opens the photo grid at a day, or at a month from its title. The day's
+   * card (or the month's cards) grow into the grid, which takes the same
+   * transition name while it starts at a day (see PhotoGrid).
+   */
+  function openDay(day: number, month: boolean, from: HTMLElement | null) {
+    if (reducedMotion || !from || !("startViewTransition" in document)) {
+      onday(day, month);
+      return;
+    }
+    from.style.viewTransitionName = "zoom-day";
+    document.startViewTransition(() => {
+      from.style.viewTransitionName = "";
+      onday(day, month);
+      flushSync();
+    });
+  }
+
   /** Scrolls the first month of `startYear` into view when it is rendered. */
   function scrollIfStart(node: HTMLElement, isStart: boolean) {
     if (isStart) node.scrollIntoView({ block: "start" });
@@ -123,7 +141,11 @@
       {@const isStart = entry.year === startYear && months[index - 1]?.year !== startYear}
       <section use:scrollIfStart={isStart} class:zoom-target={isStart}>
         <h2>
-          <button class="title" onclick={() => onday(lastDay(entry), true)}>{monthTitle(entry)}</button>
+          <button
+            class="title"
+            onclick={(event) =>
+              openDay(lastDay(entry), true, event.currentTarget.closest("section")?.querySelector(".days") ?? null)}
+            >{monthTitle(entry)}</button>
           <span class="count">{photoCount(entry.count)}</span>
           {#if onslideshow}
             <button
@@ -145,7 +167,7 @@
             <button
               class="card"
               class:large={position === 0 && entry.days.length > 2}
-              onclick={() => onday(day.day)}
+              onclick={(event) => openDay(day.day, false, event.currentTarget)}
               aria-label="{monthTitle(entry)} {dayOfMonth(day.day)}, {photoCount(day.count)}"
             >
               <img src={thumbUrl(day.cover, "preview")} alt="" loading="lazy" draggable="false" />
@@ -383,8 +405,9 @@
     }
   }
 
-  /* The zoom from a year into its months. */
-  :global(::view-transition-group(zoom)) {
+  /* The zoom from a year into its months, and from a day into the grid. */
+  :global(::view-transition-group(zoom)),
+  :global(::view-transition-group(zoom-day)) {
     animation-duration: 0.35s;
     animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1);
   }

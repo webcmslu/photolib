@@ -1,7 +1,9 @@
 <!--
-  The people found in the library's photos: one round picture per person.
-  Clicking a person lists their photos; clicking the name under it names
-  them. Giving two people the same name merges them.
+  The people found in the library's photos. Named people get a large card
+  with their name on it, as in Apple Photos; the others a smaller round
+  picture below, with "Add name". Clicking a person lists their photos;
+  clicking a name (or "Rename…" in the menu) names them. Giving two people
+  the same name merges them.
 
   Finding faces needs two model files that are downloaded once; until then
   this screen explains that and offers the download.
@@ -49,6 +51,49 @@
   let showHidden = $state(false);
   const hiddenCount = $derived(people?.filter((person) => person.hidden).length ?? 0);
   const listed = $derived(people?.filter((person) => showHidden || !person.hidden) ?? []);
+  const named = $derived(listed.filter((person) => person.name));
+  const unnamed = $derived(listed.filter((person) => !person.name));
+
+  /**
+   * A portrait crop (3:4) around a person's face for their card: wider than
+   * the face itself, so it shows the head and shoulders. Crops are in
+   * ten-thousandths of the picture's width and height.
+   */
+  function cardCrop(person: Person): [number, number, number, number] {
+    const [x, y, w, h] = person.coverCrop;
+    const width = person.coverWidth;
+    const height = person.coverHeight;
+    if (!width || !height) return person.coverCrop;
+    const centerX = ((x + w / 2) / 10_000) * width;
+    const centerY = ((y + h / 2) / 10_000) * height;
+    const face = Math.max((w / 10_000) * width, (h / 10_000) * height);
+    let cropHeight = Math.min(height, face * 2.2);
+    let cropWidth = (cropHeight * 3) / 4;
+    if (cropWidth > width) {
+      cropWidth = width;
+      cropHeight = Math.min(height, (cropWidth * 4) / 3);
+    }
+    // The face a little above the middle, as in a portrait.
+    const left = Math.min(Math.max(0, centerX - cropWidth / 2), width - cropWidth);
+    const top = Math.min(Math.max(0, centerY - cropHeight * 0.45), height - cropHeight);
+    return [
+      Math.round((left / width) * 10_000),
+      Math.round((top / height) * 10_000),
+      Math.round((cropWidth / width) * 10_000),
+      Math.round((cropHeight / height) * 10_000),
+    ];
+  }
+
+  const personMenu = (event: MouseEvent, person: Person) =>
+    showMenu(event, [
+      { label: t("Open"), action: () => onopen(person) },
+      "-",
+      { label: person.name ? t("Rename…") : t("Name…"), enabled: canEdit, action: () => startNaming(person) },
+      {
+        label: person.hidden ? t("Show in People") : t("Hide from People"),
+        action: () => setHidden(person, !person.hidden),
+      },
+    ]);
 
   async function setHidden(person: Person, hidden: boolean) {
     try {
@@ -148,71 +193,105 @@
           : t("No people found yet. A person shows up once they are in three photos.")}
       </p>
     {:else}
-      <ul>
-        {#each listed as person (person.clusters[0])}
-          <li class:hidden-person={person.hidden}>
-            <button
-              class="hide"
-              onclick={() => setHidden(person, !person.hidden)}
-              title={person.hidden ? t("Show this person again") : t("Hide this person (e.g. a stranger)")}
-              aria-label={person.hidden ? t("Show this person again") : t("Hide this person")}
-            >
-              {person.hidden ? t("Show") : t("Hide")}
-            </button>
-            <button
-              class="face"
-              onclick={() => onopen(person)}
-              oncontextmenu={(event) =>
-                showMenu(event, [
-                  { label: t("Open"), action: () => onopen(person) },
-                  "-",
-                  { label: person.name ? t("Rename…") : t("Name…"), enabled: canEdit, action: () => startNaming(person) },
-                  {
-                    label: person.hidden ? t("Show in People") : t("Hide from People"),
-                    action: () => setHidden(person, !person.hidden),
-                  },
-                ])}
-              aria-label={person.name ?? t("Unnamed person")}
-            >
-              <EditedImage
-                src={thumbUrl(person.cover, "preview")}
-                edit={{ ...NO_EDIT, crop: person.coverCrop }}
-                width={person.coverWidth}
-                height={person.coverHeight}
-                fit="cover"
-              />
-            </button>
-            {#if naming === person.clusters[0]}
-              <form
-                onsubmit={(event) => {
-                  event.preventDefault();
-                  saveName(person);
-                }}
-              >
-                <input
-                  bind:value={nameText}
-                  use:focus
-                  maxlength="200"
-                  placeholder={t("Name")}
-                  onblur={() => saveName(person)}
-                  onkeydown={(event) => event.key === "Escape" && (naming = null)}
-                />
-              </form>
-            {:else}
+      {#snippet hideButton(person: Person)}
+        <button
+          class="hide"
+          onclick={() => setHidden(person, !person.hidden)}
+          title={person.hidden ? t("Show this person again") : t("Hide this person (e.g. a stranger)")}
+          aria-label={person.hidden ? t("Show this person again") : t("Hide this person")}
+        >
+          {person.hidden ? t("Show") : t("Hide")}
+        </button>
+      {/snippet}
+      {#snippet nameField(person: Person)}
+        <form
+          onsubmit={(event) => {
+            event.preventDefault();
+            saveName(person);
+          }}
+        >
+          <input
+            bind:value={nameText}
+            use:focus
+            maxlength="200"
+            placeholder={t("Name")}
+            onblur={() => saveName(person)}
+            onkeydown={(event) => event.key === "Escape" && (naming = null)}
+          />
+        </form>
+      {/snippet}
+
+      {#if named.length > 0}
+        <h2>{t("People")}</h2>
+        <ul class="cards">
+          {#each named as person (person.clusters[0])}
+            <li class:hidden-person={person.hidden}>
+              {@render hideButton(person)}
               <button
-                class="name"
-                class:unnamed={!person.name}
-                disabled={!canEdit}
-                onclick={() => startNaming(person)}
-                title={t("Click to name. The same name for two people merges them.")}
+                class="card"
+                onclick={() => onopen(person)}
+                oncontextmenu={(event) => personMenu(event, person)}
+                aria-label="{person.name}, {formatNumber(person.photos)}"
               >
-                {person.name ?? t("Add name")}
+                <EditedImage
+                  src={thumbUrl(person.cover, "preview")}
+                  edit={{ ...NO_EDIT, crop: cardCrop(person) }}
+                  width={person.coverWidth}
+                  height={person.coverHeight}
+                  fit="cover"
+                />
+                {#if naming !== person.clusters[0]}
+                  <span class="card-label">
+                    <span class="card-name">{person.name}</span>
+                    <span class="card-count">{formatNumber(person.photos)}</span>
+                  </span>
+                {/if}
               </button>
-            {/if}
-            <span class="count">{formatNumber(person.photos)}</span>
-          </li>
-        {/each}
-      </ul>
+              {#if naming === person.clusters[0]}
+                <div class="card-naming">{@render nameField(person)}</div>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+      {/if}
+
+      {#if unnamed.length > 0}
+        {#if named.length > 0}<h2>{t("Not named yet")}</h2>{/if}
+        <ul class="faces">
+          {#each unnamed as person (person.clusters[0])}
+            <li class:hidden-person={person.hidden}>
+              {@render hideButton(person)}
+              <button
+                class="face"
+                onclick={() => onopen(person)}
+                oncontextmenu={(event) => personMenu(event, person)}
+                aria-label={t("Unnamed person")}
+              >
+                <EditedImage
+                  src={thumbUrl(person.cover, "preview")}
+                  edit={{ ...NO_EDIT, crop: person.coverCrop }}
+                  width={person.coverWidth}
+                  height={person.coverHeight}
+                  fit="cover"
+                />
+              </button>
+              {#if naming === person.clusters[0]}
+                {@render nameField(person)}
+              {:else}
+                <button
+                  class="name unnamed"
+                  disabled={!canEdit}
+                  onclick={() => startNaming(person)}
+                  title={t("Click to name. The same name for two people merges them.")}
+                >
+                  {t("Add name")}
+                </button>
+              {/if}
+              <span class="count">{formatNumber(person.photos)}</span>
+            </li>
+          {/each}
+        </ul>
+      {/if}
       {#if hiddenCount > 0}
         <p class="hidden-toggle">
           <button class="link" onclick={() => (showHidden = !showHidden)}>
@@ -270,13 +349,86 @@
     color: var(--danger);
   }
 
+  h2 {
+    margin: 4px 0 14px;
+    font-size: 20px;
+    font-weight: 700;
+  }
+
   ul {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
-    gap: 24px 16px;
     margin: 0;
     padding: 0;
     list-style: none;
+  }
+
+  ul + h2 {
+    margin-top: 32px;
+  }
+
+  .cards {
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 14px;
+  }
+
+  .faces {
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+    gap: 20px 12px;
+  }
+
+  /* A named person: a portrait card with the name written on it. */
+  .card {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 3 / 4;
+    padding: 0;
+    border: none;
+    border-radius: 14px;
+    background: var(--surface-hover);
+    overflow: hidden;
+    cursor: pointer;
+  }
+
+  .card:hover {
+    outline: 3px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .card-label {
+    position: absolute;
+    inset: auto 0 0;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 28px 12px 10px;
+    background: linear-gradient(transparent, rgb(0 0 0 / 0.6));
+    color: #fff;
+    text-align: left;
+  }
+
+  .card-name {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 15px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .card-count {
+    flex: none;
+    font-size: 12px;
+    opacity: 0.85;
+  }
+
+  .card-naming {
+    position: absolute;
+    inset: auto 8px 10px;
+  }
+
+  .card-naming input {
+    width: 100%;
   }
 
   li {
@@ -288,14 +440,15 @@
     min-width: 0;
   }
 
-  .hidden-person .face {
+  .hidden-person .face,
+  .hidden-person .card {
     opacity: 0.45;
   }
 
   .hide {
     position: absolute;
-    top: 0;
-    right: calc(50% - 64px);
+    top: 6px;
+    right: 6px;
     z-index: 1;
     padding: 2px 7px;
     border: 1px solid var(--border);
@@ -333,8 +486,8 @@
 
   .face {
     position: relative;
-    width: 120px;
-    height: 120px;
+    width: 96px;
+    height: 96px;
     padding: 0;
     border: none;
     border-radius: 50%;
@@ -371,7 +524,7 @@
   }
 
   input {
-    width: 120px;
+    width: 104px;
     padding: 2px 6px;
     border: 1px solid var(--accent);
     border-radius: 4px;

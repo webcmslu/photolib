@@ -1006,6 +1006,16 @@ fn person_suggestions(
     people::suggestions(&open_index(&state, &path)?, &clusters, &name).map_err(|e| e.to_string())
 }
 
+/// Where the faces of a person's groups are in their photos, to show them.
+#[tauri::command(async)]
+fn person_faces(
+    path: String,
+    clusters: Vec<i64>,
+    state: State<'_, AppState>,
+) -> Result<Vec<db::FaceBox>, String> {
+    db::faces_in(&open_index(&state, &path)?, &clusters).map_err(|e| e.to_string())
+}
+
 /// Records that the group `cluster` is not the person `name`: it is no longer
 /// suggested for them.
 #[tauri::command(async)]
@@ -1554,6 +1564,7 @@ pub fn run() {
             enable_faces,
             disable_faces,
             person_suggestions,
+            person_faces,
             reject_suggestion,
             set_person_hidden,
             remove_from_person,
