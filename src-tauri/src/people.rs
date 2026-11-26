@@ -51,9 +51,17 @@ const NEAREST: usize = 3;
 const EXEMPLARS: usize = 50;
 /// How alike to a group's average a weak face must be to join it.
 const WEAK_JOINS: f32 = 0.65;
+/// How alike to a group's average a named face must be to join it. Lower:
+/// the user said who it is. A named face must not start a group of its own
+/// when it can join one: names were often given to so-so faces, and a group
+/// grown around one of those leaves the person's other faces out.
+const NAME_JOINS: f32 = 0.45;
+/// How much a named face prefers a larger group: this much more alike per
+/// tenfold more photos (+0.15 for 1,000 photos over 1).
+const NAME_SIZE_PULL: f32 = 0.05;
 /// Changed when the grouping changes so much that existing groups are
 /// made again from scratch (names and corrections are kept).
-pub const GROUPING_VERSION: i64 = 2;
+pub const GROUPING_VERSION: i64 = 3;
 /// A group nobody named is shown once it appears in this many photos;
 /// smaller ones are mostly strangers in the background.
 const MIN_PHOTOS_UNNAMED: u32 = 3;
@@ -208,23 +216,28 @@ pub fn group_faces(conn: &mut Connection) -> rusqlite::Result<usize> {
     Ok(assigned.len() + merged)
 }
 
-/// The faces that carry a name: they are always grouped.
-fn named_faces(conn: &Connection, faces: &[db::GroupingFace]) -> rusqlite::Result<HashSet<i64>> {
-    let mut points: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
-    for (fingerprint, x, y, _) in db::face_names(conn)? {
-        points.entry(fingerprint).or_default().push((x, y));
+/// The faces that carry a name, with the name (lowercase): they are always
+/// grouped.
+fn named_faces(
+    conn: &Connection,
+    faces: &[db::GroupingFace],
+) -> rusqlite::Result<HashMap<i64, String>> {
+    let mut points: HashMap<String, Vec<(f64, f64, String)>> = HashMap::new();
+    for (fingerprint, x, y, name) in db::face_names(conn)? {
+        points
+            .entry(fingerprint)
+            .or_default()
+            .push((x, y, name.trim().to_lowercase()));
     }
     Ok(faces
         .iter()
-        .filter(|face| {
+        .filter_map(|face| {
             let [left, top, width, height] = face.bounds;
-            points.get(&face.fingerprint).is_some_and(|points| {
-                points.iter().any(|(x, y)| {
-                    (left..=left + width).contains(x) && (top..=top + height).contains(y)
-                })
-            })
+            let (_, _, name) = points.get(&face.fingerprint)?.iter().find(|(x, y, _)| {
+                (left..=left + width).contains(x) && (top..=top + height).contains(y)
+            })?;
+            Some((face.id, name.clone()))
         })
-        .map(|face| face.id)
         .collect())
 }
 
@@ -493,11 +506,12 @@ fn person_of(group: &db::FaceGroup, name: Option<String>) -> Person {
 /// none (0 for a weak face that joins no group), and for each weak face
 /// left out before that now joins one.
 ///
-/// Strong faces (and named ones) are taken best first: each joins the
-/// group it is most alike to (see [`SAME_PERSON`] and [`SAME_AS_MEMBERS`])
-/// that has no other face of the same photo, or starts a new group. Weak
-/// faces then only join a group they are very close to.
-fn assign_groups(faces: &[db::GroupingFace], named: &HashSet<i64>) -> Vec<(i64, i64)> {
+/// Strong faces are taken best first: each joins the group it is most alike
+/// to (see [`SAME_PERSON`] and [`SAME_AS_MEMBERS`]) that has no other face
+/// of the same photo, or starts a new group. Then each named face joins the
+/// group it is most alike to ([`NAME_JOINS`]) that has no other name, or
+/// starts one. Weak faces last only join a group they are very close to.
+fn assign_groups(faces: &[db::GroupingFace], named: &HashMap<i64, String>) -> Vec<(i64, i64)> {
     /// A group is summed up by the sum of its strong faces' embeddings,
     /// which points to the "average face" of the group.
     struct Group<'a> {
@@ -514,7 +528,7 @@ fn assign_groups(faces: &[db::GroupingFace], named: &HashSet<i64>) -> Vec<(i64, 
         }
         group.length = group.sum.iter().map(|v| v * v).sum::<f32>().sqrt();
     }
-    let strong = |face: &db::GroupingFace| named.contains(&face.id) || is_strong(face);
+    let strong = |face: &db::GroupingFace| named.contains_key(&face.id) || is_strong(face);
     let dimensions = faces.first().map_or(0, |face| face.embedding.len());
 
     // The existing groups, from their faces, best first.
@@ -557,13 +571,13 @@ fn assign_groups(faces: &[db::GroupingFace], named: &HashSet<i64>) -> Vec<(i64, 
     let pending = |face: &db::GroupingFace| matches!(face.cluster, None | Some(0));
     let mut assigned = Vec::new();
 
-    // Named faces first, so that each name starts its own group.
-    let mut first: Vec<usize> = order
+    let first: Vec<usize> = order
         .iter()
         .copied()
-        .filter(|i| pending(&faces[*i]) && strong(&faces[*i]))
+        .filter(|i| {
+            pending(&faces[*i]) && is_strong(&faces[*i]) && !named.contains_key(&faces[*i].id)
+        })
         .collect();
-    first.sort_by_key(|i| !named.contains(&faces[*i].id));
     for i in first {
         let face = &faces[i];
         let mut candidates: Vec<(usize, f32)> = groups
@@ -614,17 +628,97 @@ fn assign_groups(faces: &[db::GroupingFace], named: &HashSet<i64>) -> Vec<(i64, 
         assigned.push((face.id, group.id));
     }
 
-    // Then the weak faces: only into a group they are very close to.
-    let units: Vec<Vec<f32>> = groups
+    // Then the named faces, into the group most like them that has no other
+    // name. The names already in groups come from their named faces.
+    let unit_of = |group: &Group| -> Vec<f32> {
+        group
+            .sum
+            .iter()
+            .map(|v| v / group.length.max(f32::EPSILON))
+            .collect()
+    };
+    let mut name_of: HashMap<usize, String> = HashMap::new();
+    for face in faces {
+        if let (Some(cluster), Some(name)) = (face.cluster.filter(|c| *c > 0), named.get(&face.id))
+        {
+            if let Some(index) = index_of.get(&cluster) {
+                name_of.entry(*index).or_insert_with(|| name.clone());
+            }
+        }
+    }
+    // Each group goes to the name whose face is most like it: the closest
+    // (face, group) pairs are settled first, so a relative's name can't
+    // take a group from the person it belongs to.
+    let named_pending: Vec<usize> = order
         .iter()
-        .map(|group| {
-            group
-                .sum
+        .copied()
+        .filter(|i| pending(&faces[*i]) && named.contains_key(&faces[*i].id))
+        .collect();
+    let units: Vec<Vec<f32>> = groups.iter().map(unit_of).collect();
+    let mut pairs: Vec<(f32, usize, usize)> = named_pending
+        .iter()
+        .flat_map(|&i| {
+            let face = &faces[i];
+            groups
                 .iter()
-                .map(|v| v / group.length.max(f32::EPSILON))
-                .collect()
+                .enumerate()
+                .filter(|(_, group)| {
+                    group.length > 0.0 && !group.photos.contains(face.fingerprint.as_str())
+                })
+                .map(|(index, _)| (similarity(&units[index], &face.embedding), i, index))
+                .filter(|(alike, _, _)| *alike >= NAME_JOINS)
+                // About as alike, the larger group wins: a person's own
+                // group over a handful of shots that happen to be close.
+                .map(|(alike, i, index)| {
+                    let photos = groups[index].photos.len().max(1) as f32;
+                    (alike + NAME_SIZE_PULL * photos.log10(), i, index)
+                })
+                .collect::<Vec<_>>()
         })
         .collect();
+    pairs.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let mut placed: HashMap<usize, usize> = HashMap::new();
+    // A group takes one face per photo, named ones included.
+    let mut taken: HashSet<(usize, &str)> = HashSet::new();
+    for (_, i, index) in pairs {
+        let face = &faces[i];
+        let name = &named[&face.id];
+        if placed.contains_key(&i)
+            || name_of.get(&index).is_some_and(|other| other != name)
+            || !taken.insert((index, face.fingerprint.as_str()))
+        {
+            continue;
+        }
+        name_of.insert(index, name.clone());
+        placed.insert(i, index);
+    }
+    for i in named_pending {
+        let face = &faces[i];
+        let index = match placed.get(&i) {
+            Some(&index) => index,
+            None => {
+                groups.push(Group {
+                    id: next_id,
+                    sum: vec![0.0; dimensions],
+                    length: 0.0,
+                    photos: HashSet::new(),
+                    exemplars: Vec::new(),
+                });
+                next_id += 1;
+                groups.len() - 1
+            }
+        };
+        let group = &mut groups[index];
+        add(group, &face.embedding);
+        group.photos.insert(&face.fingerprint);
+        if group.exemplars.len() < EXEMPLARS {
+            group.exemplars.push(i);
+        }
+        assigned.push((face.id, group.id));
+    }
+
+    // Then the weak faces: only into a group they are very close to.
+    let units: Vec<Vec<f32>> = groups.iter().map(unit_of).collect();
     let weak: Vec<usize> = (0..faces.len())
         .filter(|i| pending(&faces[*i]) && !strong(&faces[*i]))
         .collect();
@@ -971,7 +1065,7 @@ mod tests {
             f(10, Some(0), "i", face_of(5, 0.1), true),
             f(11, Some(0), "j", face_of(6, 0.0), true),
         ];
-        let assigned = assign_groups(&faces, &HashSet::new());
+        let assigned = assign_groups(&faces, &HashMap::new());
         // 2 and 5 join the existing group 7; 3 and 4 form a new one; 7 is
         // a second face of photo "a": someone else. Weak 8 and 10 join the
         // groups they are close to, 9 and 11 none (11 was already out).
@@ -989,12 +1083,35 @@ mod tests {
                 (10, 9)
             ]
         );
-        assert!(assign_groups(&[], &HashSet::new()).is_empty());
+        assert!(assign_groups(&[], &HashMap::new()).is_empty());
+
+        // A so-so named face joins the person's group instead of starting
+        // its own, which would leave their clear faces unnamed.
+        let mut seen = vec![
+            f(1, None, "a", face_of(3, 0.0), false),
+            f(2, None, "b", face_of(3, 0.1), false),
+            f(3, None, "c", face_of(3, -0.1), false),
+            f(4, None, "d", face_of(3, 0.6), true),
+        ];
+        let named = HashMap::from([(4, "bob".to_string())]);
+        assert_eq!(
+            assign_groups(&seen, &named),
+            [(1, 1), (2, 1), (3, 1), (4, 1)]
+        );
+        // Unless the group already has another name.
+        seen[0].cluster = Some(1);
+        seen[1].cluster = Some(1);
+        seen[2].cluster = Some(1);
+        let named = HashMap::from([(1, "ann".to_string()), (4, "bob".to_string())]);
+        assert_eq!(assign_groups(&seen[..], &named), [(4, 2)]);
 
         // A named face is grouped even when weak.
         let lone = [f(1, None, "a", face_of(3, 0.0), true)];
-        assert_eq!(assign_groups(&lone, &HashSet::from([1])), [(1, 1)]);
-        assert_eq!(assign_groups(&lone, &HashSet::new()), [(1, 0)]);
+        assert_eq!(
+            assign_groups(&lone, &HashMap::from([(1, "alice".to_string())])),
+            [(1, 1)]
+        );
+        assert_eq!(assign_groups(&lone, &HashMap::new()), [(1, 0)]);
     }
 
     #[test]

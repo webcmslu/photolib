@@ -1713,6 +1713,9 @@
       <div class="toolbar">
         {#if selected.size > 0}
           <strong>{t("{n} selected", { n: selected.size })}</strong>
+          <button class="secondary deselect" onclick={() => selected.clear()} title={t("Deselect all (Esc)")}>
+            ✕ {t("Deselect all")}
+          </button>
           <span class="spacer"></span>
           <button
             class="secondary"
@@ -1786,7 +1789,6 @@
           >
             {t("Export…")}
           </button>
-          <button class="secondary" onclick={() => selected.clear()}>{t("Clear")}</button>
         {:else if renaming !== null}
           <form onsubmit={submitRename}>
             <input

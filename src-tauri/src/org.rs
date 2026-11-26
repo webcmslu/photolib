@@ -501,20 +501,32 @@ pub fn sync(
                 .map(|(device, path)| (format!("local:{device}"), device, path)),
         );
 
-    let mut read = 0;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // The logs are read first, without holding the database: on a NAS that
+    // is waking up a read can take seconds, and a change the user makes
+    // meanwhile must not fail with "database is locked". Another sync may
+    // apply the same events in between; applying an event twice changes
+    // nothing (the greatest (ts, device) wins).
+    let mut fresh = Vec::new();
     for (source, log_device, path) in sources {
-        let offset = db::log_offset(&tx, &source)?;
+        let offset = db::log_offset(conn, &source)?;
         // An unreadable log is skipped this time and picked up on a later sync.
         let Ok((events, next_offset)) = read_from(&path, offset) else {
             continue;
         };
-        for event in &events {
-            db::apply_event(&tx, &log_device, event)?;
-        }
         if next_offset != offset {
-            db::set_log_offset(&tx, &source, next_offset)?;
+            fresh.push((source, log_device, events, next_offset));
         }
+    }
+    if fresh.is_empty() {
+        return Ok(0);
+    }
+    let mut read = 0;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    for (source, log_device, events, next_offset) in &fresh {
+        for event in events {
+            db::apply_event(&tx, log_device, event)?;
+        }
+        db::set_log_offset(&tx, source, *next_offset)?;
         read += events.len();
     }
     tx.commit()?;

@@ -155,7 +155,8 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    // Writes are kept short (see org::sync); this is a margin for a slow disk.
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
     migrate(&conn)?;
     attach_faces(&conn, &path.with_file_name("faces.db").to_string_lossy())?;
     Ok(conn)
