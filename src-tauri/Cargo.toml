@@ -25,6 +25,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 # The folders each system keeps app data in (see rename.rs).
 dirs = "6"
 tauri-plugin-dialog = "2"
+percent-encoding = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

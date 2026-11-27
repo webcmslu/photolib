@@ -552,6 +552,22 @@ const fr: Record<string, string> = {
   "Over the Years": "Au fil des ans",
   "Together": "Ensemble",
   "Year in review": "L’année en images",
+  // Memory videos
+  "1080p, for the TV and the computer.": "1080p, pour la télé et l’ordinateur.",
+  "720p, for messages and email.": "720p, pour les messages et les e-mails.",
+  "Best quality": "Meilleure qualité",
+  "Making the video… {percent}%": "Création de la vidéo… {percent} %",
+  "Save “{title}” as a Video": "Enregistrer « {title} » en vidéo",
+  "Save as a Video": "Enregistrer en vidéo",
+  "Save as a Video…": "Enregistrer en vidéo…",
+  "Save…": "Enregistrer…",
+  "Show the video": "Afficher la vidéo",
+  "Smaller": "Plus légère",
+  "The photos play through once, so it takes a little while.": "Les photos défilent une fois, cela prend donc un petit moment.",
+  "The video is ready to share.": "La vidéo est prête à être partagée.",
+  "This computer can't make videos.": "Cet ordinateur ne peut pas créer de vidéos.",
+  "Video": "Vidéo",
+  "With the music, the title and the photos as the memory plays them.": "Avec la musique, le titre et les photos, comme dans le souvenir.",
 };
 
 export default fr;

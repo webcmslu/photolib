@@ -51,6 +51,7 @@
   } from "./api";
   import CollectionsView, { type PinnedTile } from "./CollectionsView.svelte";
   import MemoryPlayer from "./MemoryPlayer.svelte";
+  import MemoryExport from "./MemoryExport.svelte";
   import { memoryTitle, unlockAudio } from "./memories";
   import GearPanel from "./GearPanel.svelte";
   import { cameraName, formatDayRange, formatNumber, itemCount, monthKey, photoCount } from "./format";
@@ -287,6 +288,8 @@
   let fromCollections = $state(false);
   /** The memory playing full screen. */
   let playing = $state<Memory | null>(null);
+  /** The memory being saved as a video. */
+  let exportingMemory = $state<Memory | null>(null);
 
   /** A photo to open in the viewer once the listing opened from Collections is loaded. */
   let openingPhoto: string | null = null;
@@ -1884,6 +1887,7 @@
               openFromCollections({ kind: "person", clusters: person.clusters }, person.name ?? "");
             }}
             {favoritePeople}
+            onexport={(memory) => (exportingMemory = memory)}
             onplay={(memory) => {
               // Straight from the click, so the memory's music may play.
               unlockAudio();
@@ -2363,7 +2367,14 @@
       playing = null;
       openFromCollections(memory.listing, memoryTitle(memory));
     }}
+    onexport={() => {
+      playing = null;
+      exportingMemory = memory;
+    }}
   />
+{/if}
+{#if exportingMemory}
+  <MemoryExport libraryPath={library.path} memory={exportingMemory} onclose={() => (exportingMemory = null)} />
 {/if}
 
 {#if slideshow}

@@ -931,3 +931,8 @@ export function todayDay(): number {
 export function listingPlace(path: string, listing: Listing): Promise<string | null> {
   return invoke("listing_place", { path, listing });
 }
+
+/** Writes a memory's video to `path` (an .mp4 chosen in the save dialog). */
+export function saveVideo(path: string, bytes: Uint8Array): Promise<void> {
+  return invoke("save_video", bytes, { headers: { path: encodeURIComponent(path) } });
+}

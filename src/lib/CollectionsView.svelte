@@ -58,8 +58,10 @@
     onplay: (memory: Memory) => void;
     /** The names of the favourite people, shown first. */
     favoritePeople: string[];
+    /** Saves a memory as a video. */
+    onexport: (memory: Memory) => void;
   }
-  let { libraryPath, revision, albums, pinned, onlisting, onsection, onperson, onplay, favoritePeople }: Props =
+  let { libraryPath, revision, albums, pinned, onlisting, onsection, onperson, onplay, favoritePeople, onexport }: Props =
     $props();
 
   /** The whole page, or all the memories, or all the trips. */
@@ -153,6 +155,7 @@
     showMenu(event, [
       { label: t("Play Memory"), action: () => onplay(memory) },
       { label: t("Show the Photos"), action: () => onlisting(memory.listing, memoryTitle(memory)) },
+      { label: t("Save as a Video…"), action: () => onexport(memory) },
     ]);
   const tripListing = (trip: Trip): Listing => ({ kind: "days", from: trip.fromDay, to: trip.toDay });
   const tripMemory = (trip: Trip) => data?.memories.find((memory) => memory.id === trip.id);

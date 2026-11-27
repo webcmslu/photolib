@@ -18,7 +18,8 @@
     "@tauri-apps/plugin-process": "~2.4.0",
     "@tauri-apps/plugin-updater": "~2.14.1",
     "@types/leaflet": "1.9",
-    "leaflet": "^1.9.4"
+    "leaflet": "^1.9.4",
+    "mp4-muxer": "5.2.2"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

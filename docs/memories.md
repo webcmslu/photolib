@@ -178,7 +178,50 @@ people in them.
   The app's web view keeps sound paused unless it starts from a click, so
   the audio is woken by the click that opens a memory (`unlockAudio`).
 
-## 7. Tuning
+## 7. Saving a memory as a video
+
+"Save as a Video…" is in the player's controls, on its end card and in a
+memory's menu in Collections. It writes an MP4 to share:
+- **Best quality:** 1080p at 8 Mbit/s.
+- **Smaller:** 720p at 3.5 Mbit/s, for messages.
+
+Code: `src/lib/memoryVideo.ts`, `src/lib/MemoryExport.svelte` and the
+`save_video` command.
+
+**How it's made.** Everything is done in the web view, with no ffmpeg:
+- **Frames:** each frame is drawn on a canvas with the player's timings
+  (title card, drifts, cross-fades, end card).
+- **Video:** frames are encoded with WebCodecs, as H.264 High profile at
+  30 frames per second.
+- **Sound:** the music is rendered with an `OfflineAudioContext` from the
+  same composer as the player (`renderMusic`), then encoded as AAC (Opus
+  where AAC is missing).
+- **File:** `mp4-muxer` puts video and sound together. The bytes go to Rust
+  as a raw IPC body and are written to the path chosen in the save dialog
+  (`.mp4` only).
+
+A 35-second memory took 19 seconds to make in WKWebView on a Mac.
+
+**Things that matter:**
+- **WebKit:** it accepts the canvas `filter` property and then draws without
+  it. So the blurs (three box blurs on small copies), the darkening and the
+  photo edits (brightness, contrast, saturation, applied to the pixels once
+  per photo) are done by hand. The magic wand's curves are not applied in
+  videos.
+- **Safari's AAC encoder:** it describes its sound with a whole MPEG-4
+  descriptor. Only the AudioSpecificConfig inside it must go into the file,
+  or the sound doesn't play (`plainAudioConfig`).
+- **WebKit's video encoder:** it has the `ondequeue` property but never fires
+  the event. The encoder queue is waited on with `MessageChannel` ticks.
+- **Hidden windows:** WebKit pauses pages in hidden windows, so the window
+  has `"backgroundThrottling": "disabled"` (tauri.conf.json). Otherwise a
+  video stops when someone switches to another app.
+- **Loading photos:** they are loaded with `fetch` and `createImageBitmap`,
+  which needs the `thumb:` and `photo:` protocols in the CSP's `connect-src`
+  and `Access-Control-Allow-Origin` on their responses (a canvas drawn from
+  another origin can't be encoded).
+
+## 8. Tuning
 
 The thresholds are constants at the top of `collections.rs`. To try changes
 on a real library without the app, run:
@@ -195,7 +238,7 @@ the JSON file, together with people and albums.
 
 ## Ideas for later
 
-- Memories with video clips.
+- Memories with video clips (also in the saved videos).
 - Music chosen by the user.
 - Choosing home by hand.
 - Trips before GPS, from folder names that are place names.

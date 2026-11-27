@@ -444,6 +444,8 @@ fn thumb_response(app: &AppHandle, uri_path: &str) -> Response<Vec<u8>> {
     match bytes {
         Ok(bytes) => Response::builder()
             .header(header::CONTENT_TYPE, "image/jpeg")
+            // Readable by a canvas: a memory is drawn on one to make its video.
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             // The URL names the content, so the webview may cache it forever.
             .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
             .body(bytes)
@@ -543,6 +545,7 @@ fn photo_response(app: &AppHandle, uri_path: &str, range: Option<&str>) -> Respo
     match result {
         Ok((mime, bytes)) => Response::builder()
             .header(header::CONTENT_TYPE, mime)
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
             .header(header::CACHE_CONTROL, "private, max-age=3600")
             .body(bytes)
             .expect("static response"),
@@ -774,6 +777,34 @@ fn gear_options(
     state: State<'_, AppState>,
 ) -> Result<db::GearOptions, String> {
     db::gear_options(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
+}
+
+/// Writes a memory's video, sent as the request's body, to the file chosen
+/// in the save dialog (its path in the `path` header, percent-encoded).
+/// Only `.mp4` files: nothing else is written this way.
+#[tauri::command]
+fn save_video(request: tauri::ipc::Request<'_>) -> Result<(), String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("No video was sent".into());
+    };
+    let path = request
+        .headers()
+        .get("path")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            percent_encoding::percent_decode_str(value)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+        .ok_or("No file was chosen")?;
+    let path = std::path::PathBuf::from(path);
+    let is_mp4 = path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("mp4"));
+    if !is_mp4 || !path.is_absolute() {
+        return Err("Videos are saved as .mp4 files".into());
+    }
+    fs::write(&path, bytes).map_err(|e| e.to_string())
 }
 
 /// The town most of a listing's photos were taken in, to name a pinned place.
@@ -1614,6 +1645,7 @@ pub fn run() {
             library_stats,
             timeline,
             listing_place,
+            save_video,
             photos_page,
             shapes,
             release_asset_suffix,

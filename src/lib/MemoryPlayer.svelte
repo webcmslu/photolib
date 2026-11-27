@@ -22,8 +22,10 @@
     onclose: () => void;
     /** Shows every photo of the memory in the grid. */
     onshowall: () => void;
+    /** Saves the memory as a video. */
+    onexport: () => void;
   }
-  let { libraryPath, memory, onclose, onshowall }: Props = $props();
+  let { libraryPath, memory, onclose, onshowall, onexport }: Props = $props();
 
   const TITLE_MS = 4200;
   const SLIDE_MS = 4600;
@@ -257,6 +259,7 @@
           <button onclick={onshowall}>
             {tn(memory.count, "See the photo", "See all {n} photos")}
           </button>
+          <button onclick={onexport}>{t("Save as a Video…")}</button>
         </div>
       </div>
     </div>
@@ -321,6 +324,11 @@
     <span class="spacer"></span>
     <span class="caption">{title}</span>
     <span class="spacer"></span>
+    <button onclick={onexport} aria-label={t("Save as a Video…")} title={t("Save as a Video…")}>
+      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true">
+        <path d="M10 3v9M6.5 6.5 10 3l3.5 3.5M4.5 10v5.5a1.5 1.5 0 0 0 1.5 1.5h8a1.5 1.5 0 0 0 1.5-1.5V10" />
+      </svg>
+    </button>
     <button onclick={onshowall} title={t("See all the photos of this memory")}>
       {tn(memory.count, "{n} photo", "{n} photos")}
     </button>

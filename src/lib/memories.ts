@@ -5,9 +5,18 @@ import { formatDayRange } from "./format";
 import { locale, t, tn } from "./i18n";
 
 const DAY_MS = 86_400_000;
-const capitalized = (text: string) => text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
-const monthYear = new Intl.DateTimeFormat(locale, { month: "short", year: "numeric", timeZone: "UTC" });
-const dayMonth = new Intl.DateTimeFormat(locale, { day: "numeric", month: "long", timeZone: "UTC" });
+const capitalized = (text: string) =>
+  text.charAt(0).toLocaleUpperCase(locale) + text.slice(1);
+const monthYear = new Intl.DateTimeFormat(locale, {
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+const dayMonth = new Intl.DateTimeFormat(locale, {
+  day: "numeric",
+  month: "long",
+  timeZone: "UTC",
+});
 const yearOf = (day: number) => new Date(day * DAY_MS).getUTCFullYear();
 const monthOf = (day: number) => new Date(day * DAY_MS).getUTCMonth();
 
@@ -54,12 +63,16 @@ export function memorySubtitle(memory: Memory, today: number): string {
     case "trip":
       return t("{date} Trip", { date: months(memory.fromDay, memory.toDay) });
     case "event":
-      return memory.title ? formatDayRange(memory.fromDay, memory.toDay) : memory.people.join(", ");
+      return memory.title
+        ? formatDayRange(memory.fromDay, memory.toDay)
+        : memory.people.join(", ");
     case "onThisDay": {
       const date = dayMonth.format(today * DAY_MS);
       if (memory.years.length === 1) {
         const ago = yearOf(today) - memory.years[0];
-        return tn(ago, "{date}, {n} year ago", "{date}, {n} years ago", { date });
+        return tn(ago, "{date}, {n} year ago", "{date}, {n} years ago", {
+          date,
+        });
       }
       return t("{date}, over the years", { date });
     }
@@ -98,7 +111,8 @@ export function setMusicWanted(on: boolean) {
  * keeps sound started any later paused, and the memory then plays silently.
  */
 let shared: AudioContext | null = null;
-let impulse: AudioBuffer | null = null;
+/** The reverb's echo, made once per sample rate. */
+const impulses = new Map<number, AudioBuffer>();
 /** Each style's loudness, measured to peak at about half of full scale. */
 const PADS_VOLUME = 1.5;
 const LIGHT_VOLUME = 2.4;
@@ -114,43 +128,47 @@ export function unlockAudio() {
 }
 
 export type MusicStyle = "pads" | "light";
+export const randomStyle = (): MusicStyle =>
+  Math.random() < 0.5 ? "pads" : "light";
+
+/** A reverb's echo: decaying noise. */
+function impulseFor(context: BaseAudioContext): AudioBuffer {
+  let impulse = impulses.get(context.sampleRate);
+  if (!impulse) {
+    const length = context.sampleRate * 3;
+    impulse = context.createBuffer(2, length, context.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const data = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i++)
+        data[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 3;
+    }
+    impulses.set(context.sampleRate, impulse);
+  }
+  return impulse;
+}
 
 /**
- * Plays a piece made up as it goes (nothing to license or to download), in
- * one of two styles picked at random each time: slow dark pad chords with a
- * few bells, or a light arpeggio, as on a soft piano. Each memory keeps its
- * own chords (and tempo), picked from its id.
+ * Sets up a piece made up as it goes (nothing to license or to download),
+ * in one of two styles: slow dark pad chords with a few bells, or a light
+ * arpeggio, as on a soft piano. Each memory keeps its own chords (and
+ * tempo), picked from its id. The music goes into `master` (silent until
+ * its gain is raised to `volume`), through a limiter to the speakers;
+ * `writeUntil` writes the notes up to a time.
  */
-export function playMusic(
-  seed: string,
-  style: MusicStyle = Math.random() < 0.5 ? "pads" : "light",
-): { stop: () => void; setVolume: (on: boolean) => void } {
-  unlockAudio();
-  if (!shared) throw new Error("no sound");
-  const context = shared;
+function compose(context: BaseAudioContext, seed: string, style: MusicStyle) {
   // Background level: about half of full scale at its loudest, with a
   // limiter so that chords and bells together never crackle.
-  const VOLUME = style === "pads" ? PADS_VOLUME : LIGHT_VOLUME;
+  const volume = style === "pads" ? PADS_VOLUME : LIGHT_VOLUME;
   const master = context.createGain();
   master.gain.setValueAtTime(0, context.currentTime);
-  master.gain.linearRampToValueAtTime(VOLUME, context.currentTime + 2.5);
   const limiter = context.createDynamicsCompressor();
   limiter.threshold.value = -10;
   limiter.knee.value = 6;
   limiter.ratio.value = 8;
   master.connect(limiter).connect(context.destination);
 
-  // A reverb made of decaying noise, made once.
-  if (!impulse) {
-    const length = context.sampleRate * 3;
-    impulse = context.createBuffer(2, length, context.sampleRate);
-    for (let channel = 0; channel < 2; channel++) {
-      const data = impulse.getChannelData(channel);
-      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 3;
-    }
-  }
   const reverb = context.createConvolver();
-  reverb.buffer = impulse;
+  reverb.buffer = impulseFor(context);
   const wet = context.createGain();
   wet.gain.value = style === "pads" ? 0.6 : 0.45;
   reverb.connect(wet).connect(master);
@@ -167,7 +185,14 @@ export function playMusic(
   for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
   const frequency = (note: number) => 440 * 2 ** ((note - 69) / 12);
 
-  function voice(type: OscillatorType, note: number, start: number, peak: number, decay: number, to: AudioNode) {
+  function voice(
+    type: OscillatorType,
+    note: number,
+    start: number,
+    peak: number,
+    decay: number,
+    to: AudioNode,
+  ) {
     const oscillator = context.createOscillator();
     oscillator.type = type;
     oscillator.frequency.value = frequency(note);
@@ -182,7 +207,13 @@ export function playMusic(
     return gain;
   }
   /** A chord held for `length` seconds, swelling in and fading out. */
-  function pad(notes: number[], start: number, length: number, level: number, detunes: number[]) {
+  function pad(
+    notes: number[],
+    start: number,
+    length: number,
+    level: number,
+    detunes: number[],
+  ) {
     for (const note of notes) {
       for (const detune of detunes) {
         const oscillator = context.createOscillator();
@@ -207,11 +238,26 @@ export function playMusic(
     // Four-note chords, low and slow (MIDI notes).
     const progressions = [
       // I – vi – IV – V
-      [[48, 55, 64, 71], [45, 52, 60, 67], [41, 48, 57, 64], [43, 50, 59, 66]],
+      [
+        [48, 55, 64, 71],
+        [45, 52, 60, 67],
+        [41, 48, 57, 64],
+        [43, 50, 59, 66],
+      ],
       // vi – IV – I – V
-      [[45, 52, 60, 64], [41, 48, 57, 60], [48, 55, 64, 67], [43, 50, 59, 62]],
+      [
+        [45, 52, 60, 64],
+        [41, 48, 57, 60],
+        [48, 55, 64, 67],
+        [43, 50, 59, 62],
+      ],
       // I – iii – IV – iv
-      [[48, 55, 64, 67], [52, 59, 67, 71], [53, 60, 69, 72], [53, 60, 68, 72]],
+      [
+        [48, 55, 64, 67],
+        [52, 59, 67, 71],
+        [53, 60, 69, 72],
+        [53, 60, 68, 72],
+      ],
     ];
     const chords = progressions[hash % progressions.length];
     const CHORD_S = 4.8;
@@ -222,7 +268,14 @@ export function playMusic(
       for (let beat = 0; beat < 4; beat++) {
         if (Math.random() < 0.55) {
           const note = notes[1 + Math.floor(Math.random() * 3)] + 12;
-          const bell = voice("sine", note, start + beat * (CHORD_S / 4) + Math.random() * 0.08, 0.07, 2.4, reverb);
+          const bell = voice(
+            "sine",
+            note,
+            start + beat * (CHORD_S / 4) + Math.random() * 0.08,
+            0.07,
+            2.4,
+            reverb,
+          );
           bell.connect(dry);
         }
       }
@@ -232,13 +285,33 @@ export function playMusic(
     // Three-note chords around middle C.
     const progressions = [
       // C – G – Am – F
-      [[60, 64, 67], [55, 59, 62], [57, 60, 64], [53, 57, 60]],
+      [
+        [60, 64, 67],
+        [55, 59, 62],
+        [57, 60, 64],
+        [53, 57, 60],
+      ],
       // F – C – G – Am
-      [[53, 57, 60], [60, 64, 67], [55, 59, 62], [57, 60, 64]],
+      [
+        [53, 57, 60],
+        [60, 64, 67],
+        [55, 59, 62],
+        [57, 60, 64],
+      ],
       // C – Am – F – G
-      [[60, 64, 67], [57, 60, 64], [53, 57, 60], [55, 59, 62]],
+      [
+        [60, 64, 67],
+        [57, 60, 64],
+        [53, 57, 60],
+        [55, 59, 62],
+      ],
       // D – A – Bm – G
-      [[62, 66, 69], [57, 61, 64], [59, 62, 66], [55, 59, 62]],
+      [
+        [62, 66, 69],
+        [57, 61, 64],
+        [59, 62, 66],
+        [55, 59, 62],
+      ],
     ];
     const chords = progressions[hash % progressions.length];
     // Arpeggio shapes over the chord's notes (3, 4 and 5 are an octave up).
@@ -266,19 +339,40 @@ export function playMusic(
         voice("triangle", note + 12, at, 0.025 * loud, 0.6, tone);
       }
       // Now and then, a high bell.
-      if (step > 0 && Math.random() < 0.5) voice("sine", notes[2] + 36, start + STEP_S * 8, 0.03, 2.5, reverb);
+      if (step > 0 && Math.random() < 0.5)
+        voice("sine", notes[2] + 36, start + STEP_S * 8, 0.03, 2.5, reverb);
       return CHORD_S;
     };
   }
 
   let step = 0;
   let next = context.currentTime + 0.15;
-  // Writes the music a little ahead, chord by chord.
-  function schedule() {
-    while (next < context.currentTime + 8) next += chord(step++, next);
-  }
-  schedule();
-  const timer = setInterval(schedule, 500);
+  return {
+    master,
+    limiter,
+    volume,
+    /** Writes the music, chord by chord, until at least `time`. */
+    writeUntil(time: number) {
+      while (next < time) next += chord(step++, next);
+    },
+  };
+}
+
+/** Plays a memory's music, in a style picked at random unless given. */
+export function playMusic(
+  seed: string,
+  style: MusicStyle = randomStyle(),
+): { stop: () => void; setVolume: (on: boolean) => void } {
+  unlockAudio();
+  if (!shared) throw new Error("no sound");
+  const context = shared;
+  const music = compose(context, seed, style);
+  const { master, limiter, volume } = music;
+  master.gain.linearRampToValueAtTime(volume, context.currentTime + 2.5);
+  // Writes the music a little ahead.
+  const write = () => music.writeUntil(context.currentTime + 8);
+  write();
+  const timer = setInterval(write, 500);
 
   function fadeTo(value: number, seconds: number) {
     const now = context.currentTime;
@@ -289,7 +383,7 @@ export function playMusic(
   return {
     setVolume(on: boolean) {
       unlockAudio();
-      fadeTo(on ? VOLUME : 0, 0.6);
+      fadeTo(on ? volume : 0, 0.6);
     },
     stop() {
       clearInterval(timer);
@@ -300,4 +394,21 @@ export function playMusic(
       }, 1400);
     },
   };
+}
+
+/** Renders `seconds` of a memory's music, fading in and out, for its video (48 kHz stereo). */
+export function renderMusic(
+  seed: string,
+  seconds: number,
+  style: MusicStyle = randomStyle(),
+): Promise<AudioBuffer> {
+  const RATE = 48_000;
+  const context = new OfflineAudioContext(2, Math.ceil(seconds * RATE), RATE);
+  const music = compose(context, seed, style);
+  const gain = music.master.gain;
+  gain.linearRampToValueAtTime(music.volume, 2.5);
+  gain.setValueAtTime(music.volume, Math.max(2.5, seconds - 3));
+  gain.linearRampToValueAtTime(0, seconds);
+  music.writeUntil(seconds);
+  return context.startRendering();
 }
