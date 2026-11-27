@@ -922,7 +922,7 @@ fn folder_of(rel_path: &str) -> &str {
 }
 
 /// What a photo listing shows.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Listing {
     /// Every photo that is not hidden.
@@ -955,6 +955,16 @@ pub enum Listing {
         west: f64,
         north: f64,
         east: f64,
+    },
+    /// The photos taken from the day `from` to the day `to`, both included
+    /// (days since 1970-01-01, wall-clock): a trip, a season, a recent day.
+    Days {
+        from: i64,
+        to: i64,
+    },
+    /// A chosen set of photos: a memory, the featured photos.
+    Picked {
+        fingerprints: Vec<String>,
     },
     /// Another listing narrowed down by the filter menu.
     Only {
@@ -1095,7 +1105,7 @@ pub fn gear_options(conn: &Connection, listing: &Listing) -> rusqlite::Result<Ge
 }
 
 /// What the filter menu can narrow a listing down to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Only {
     Favorites,
@@ -1201,6 +1211,9 @@ impl Only {
     }
 }
 
+/// A day in milliseconds, the unit of `sort_date`.
+pub const DAY_MS: i64 = 86_400_000;
+
 /// A panorama is at least this many times longer than it is high (a camera's
 /// picture is 1.8 at most).
 const PANORAMA_RATIO: f64 = 2.5;
@@ -1293,6 +1306,27 @@ impl Listing {
                     )
                 } else {
                     "0".to_owned()
+                };
+                (format!("WHERE {visible} AND {inside} AND ?1 IS NULL"), None)
+            }
+            Listing::Days { from, to } => (
+                format!(
+                    "WHERE {visible} AND sort_date >= {} AND sort_date < {} AND ?1 IS NULL",
+                    from.saturating_mul(DAY_MS),
+                    to.saturating_add(1).saturating_mul(DAY_MS)
+                ),
+                None,
+            ),
+            Listing::Picked { fingerprints } => {
+                let picked: Vec<String> = fingerprints
+                    .iter()
+                    .filter(|fingerprint| crate::thumbs::is_fingerprint(fingerprint))
+                    .map(|fingerprint| sql_text(fingerprint))
+                    .collect();
+                let inside = if picked.is_empty() {
+                    "0".to_owned()
+                } else {
+                    format!("fingerprint IN ({})", picked.join(", "))
                 };
                 (format!("WHERE {visible} AND {inside} AND ?1 IS NULL"), None)
             }
@@ -2240,6 +2274,8 @@ pub struct Album {
     pub name: String,
     /// Photos of the album that are in the index and not hidden.
     pub count: u32,
+    /// Its latest photo, to show it with.
+    pub cover: Option<String>,
 }
 
 /// The albums that have not been deleted, by name.
@@ -2249,7 +2285,12 @@ pub fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
                 (SELECT COUNT(*) FROM photos
                  WHERE {IS_LISTED} AND NOT {IS_HIDDEN}
                    AND fingerprint IN (SELECT photo FROM org_state
-                                       WHERE kind = 'member' AND key = a.key AND value = '1'))
+                                       WHERE kind = 'member' AND key = a.key AND value = '1')),
+                (SELECT fingerprint FROM photos
+                 WHERE {IS_LISTED} AND NOT {IS_HIDDEN}
+                   AND fingerprint IN (SELECT photo FROM org_state
+                                       WHERE kind = 'member' AND key = a.key AND value = '1')
+                 ORDER BY sort_date DESC LIMIT 1)
          FROM org_state a
          WHERE a.kind = 'album_name'
            AND NOT EXISTS (SELECT 1 FROM org_state d
@@ -2261,9 +2302,57 @@ pub fn albums(conn: &Connection) -> rusqlite::Result<Vec<Album>> {
             id: row.get(0)?,
             name: row.get(1)?,
             count: row.get(2)?,
+            cover: row.get(3)?,
         })
     })?;
     rows.collect()
+}
+
+/// The condition a photo meets to be shown in the library (not hidden), for
+/// queries outside this file.
+pub fn visible_condition() -> String {
+    format!("{IS_LISTED} AND NOT {IS_HIDDEN}")
+}
+
+/// How many photos of the library each filter keeps: the counts of the
+/// Collections page's Media Types and Utilities.
+pub fn only_counts(conn: &Connection, kinds: &[Only]) -> rusqlite::Result<HashMap<Only, u32>> {
+    if kinds.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let sums: Vec<String> = kinds
+        .iter()
+        .map(|only| format!("COALESCE(SUM({}), 0)", only.condition()))
+        .collect();
+    let sql = format!(
+        "SELECT {} FROM photos WHERE {IS_LISTED} AND NOT {IS_HIDDEN}",
+        sums.join(", ")
+    );
+    conn.query_row(&sql, [], |row| {
+        kinds
+            .iter()
+            .enumerate()
+            .map(|(column, only)| Ok((*only, row.get::<_, i64>(column)? as u32)))
+            .collect()
+    })
+}
+
+/// How many hidden photos there are, and how many are stored more than once.
+pub fn hidden_and_duplicates(conn: &Connection) -> rusqlite::Result<(u32, u32)> {
+    let hidden = conn.query_row(
+        &format!("SELECT COUNT(*) FROM photos WHERE {IS_LISTED} AND {IS_HIDDEN}"),
+        [],
+        |row| row.get(0),
+    )?;
+    let duplicates = conn.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM photos WHERE {IS_LISTED} AND NOT {IS_HIDDEN}
+                 GROUP BY fingerprint HAVING COUNT(*) > 1)"
+        ),
+        [],
+        |row| row.get(0),
+    )?;
+    Ok((hidden, duplicates))
 }
 
 /// How many photos and videos are indexed. A Live Photo counts once.

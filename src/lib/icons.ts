@@ -24,7 +24,9 @@ export type Icon =
   | "timeLapse"
   | "sloMo"
   | "burst"
-  | "screenshot";
+  | "screenshot"
+  | "collections"
+  | "memories";
 
 /** The paths of each icon. */
 export const ICONS: Record<Icon, string[]> = {
@@ -168,5 +170,17 @@ export const ICONS: Record<Icon, string[]> = {
     "M13 3h2.5A1.5 1.5 0 0 1 17 4.5V7",
     "M17 13v2.5a1.5 1.5 0 0 1-1.5 1.5H13",
     "M7 17H4.5A1.5 1.5 0 0 1 3 15.5V13",
+  ],
+  // Four tiles of different sizes, as in Apple Photos' Collections.
+  collections: [
+    "M4.5 3h4A1.5 1.5 0 0 1 10 4.5v6A1.5 1.5 0 0 1 8.5 12h-4A1.5 1.5 0 0 1 3 10.5v-6A1.5 1.5 0 0 1 4.5 3z",
+    "M13.5 3h2A1.5 1.5 0 0 1 17 4.5v2A1.5 1.5 0 0 1 15.5 8h-2A1.5 1.5 0 0 1 12 6.5v-2A1.5 1.5 0 0 1 13.5 3z",
+    "M13.5 10h2a1.5 1.5 0 0 1 1.5 1.5v4a1.5 1.5 0 0 1-1.5 1.5h-2a1.5 1.5 0 0 1-1.5-1.5v-4a1.5 1.5 0 0 1 1.5-1.5z",
+    "M4.5 14h4a1.5 1.5 0 0 1 1.5 1.5v0A1.5 1.5 0 0 1 8.5 17h-4A1.5 1.5 0 0 1 3 15.5v0A1.5 1.5 0 0 1 4.5 14z",
+  ],
+  // A photo with a play button: a memory plays.
+  memories: [
+    "M4.5 3.5h11A1.5 1.5 0 0 1 17 5v10a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 15V5a1.5 1.5 0 0 1 1.5-1.5z",
+    "M8.5 7.2v5.6l4.6-2.8z",
   ],
 };

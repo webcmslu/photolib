@@ -459,6 +459,10 @@ export type Listing =
   | { kind: "search"; query: string }
   /** The photos taken inside a rectangle on the map. */
   | { kind: "area"; south: number; west: number; north: number; east: number }
+  /** The photos taken from the day `from` to the day `to` (days since 1970), both included. */
+  | { kind: "days"; from: number; to: number }
+  /** A chosen set of photos: a memory, the featured photos. */
+  | { kind: "picked"; fingerprints: string[] }
   /** Another listing narrowed down to a camera, a lens, an aperture or a focal length. */
   | ({ kind: "gear"; within: Listing } & Gear)
   /** Another listing narrowed down by the filter menu. */
@@ -786,6 +790,8 @@ export interface Album {
   name: string;
   /** Photos of the album that are indexed and not hidden. */
   count: number;
+  /** Its latest photo. */
+  cover: string | null;
 }
 
 export function listAlbums(path: string): Promise<Album[]> {
@@ -848,4 +854,75 @@ export function autoEnhance(fingerprint: string): Promise<Enhance> {
 
 export function similarGroups(path: string): Promise<SimilarGroup[]> {
   return invoke("similar_groups", { path });
+}
+
+// --- Collections -----------------------------------------------------------------
+
+/** Mirrors `MemoryKind` in src-tauri/src/collections.rs. */
+export type MemoryKind = "trip" | "event" | "onThisDay" | "person" | "together" | "season" | "year";
+
+/** Mirrors `Memory` in src-tauri/src/collections.rs. */
+export interface Memory {
+  id: string;
+  kind: MemoryKind;
+  /** A place, a folder's name or a person's name; the page words the rest. */
+  title: string | null;
+  /** The people it is about (together), or who is in it most. */
+  people: string[];
+  /** Its first and last day, in days since 1970. */
+  fromDay: number;
+  toDay: number;
+  /** For "On This Day": the earlier years it has photos from. */
+  years: number[];
+  cover: string;
+  /** The photos it plays, in date order. */
+  photos: string[];
+  /** All its photos, which `listing` shows. */
+  count: number;
+  listing: Listing;
+}
+
+export interface Trip {
+  /** The same as its memory's. */
+  id: string;
+  title: string;
+  fromDay: number;
+  toDay: number;
+  count: number;
+  cover: string;
+}
+
+export interface RecentDay {
+  day: number;
+  count: number;
+  cover: string;
+}
+
+/** Mirrors `Collections` in src-tauri/src/collections.rs. */
+export interface Collections {
+  /** Every memory, newest first. */
+  memories: Memory[];
+  /** Today's memories: positions in `memories`. */
+  today: number[];
+  trips: Trip[];
+  featured: string[];
+  recentDays: RecentDay[];
+  /** Photos per media type, for the types that have some. */
+  media: Partial<Record<Only, number>>;
+  favorites: number;
+  hidden: number;
+  duplicates: number;
+  /** The town home is in, these days. */
+  home: string | null;
+}
+
+/** The Collections page's rows. `today` is the viewer's date in days since 1970. */
+export function collections(path: string, today: number): Promise<Collections> {
+  return invoke("collections", { path, today });
+}
+
+/** Today's date as the photos' days count it: wall-clock days since 1970. */
+export function todayDay(): number {
+  const now = new Date();
+  return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000);
 }

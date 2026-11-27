@@ -152,7 +152,7 @@ pub fn lookup(latitude: f64, longitude: f64) -> Option<Place> {
 }
 
 /// Great-circle distance (haversine formula).
-fn distance_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+pub(crate) fn distance_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let (lat1, lat2) = (lat1.to_radians(), lat2.to_radians());
     let half_lat = (lat2 - lat1) / 2.0;
     let half_lon = (lon2 - lon1).to_radians() / 2.0;

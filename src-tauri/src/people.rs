@@ -280,7 +280,7 @@ fn unit(vector: &[f32]) -> Vec<f32> {
 }
 
 /// The (lowercased) name of each named group.
-fn group_names(conn: &Connection) -> rusqlite::Result<HashMap<i64, String>> {
+pub(crate) fn group_names(conn: &Connection) -> rusqlite::Result<HashMap<i64, String>> {
     let mut name_of: HashMap<i64, String> = HashMap::new();
     for (fingerprint, x, y, name) in db::face_names(conn)? {
         if let Some(cluster) = db::cluster_at(conn, &fingerprint, x, y)? {

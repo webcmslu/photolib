@@ -19,6 +19,9 @@ cc = "1"
 
 [dependencies]
 tauri = { version = "2", features = [] }
+# The runtime Tauri runs commands on, with more workers than its default
+# (see `run` in lib.rs).
+tokio = { version = "1", features = ["rt-multi-thread"] }
 # The folders each system keeps app data in (see rename.rs).
 dirs = "6"
 tauri-plugin-dialog = "2"

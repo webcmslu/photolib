@@ -3,6 +3,7 @@ mod apple;
 mod camera_macos;
 #[cfg(windows)]
 mod camera_windows;
+mod collections;
 /// Phones and cameras connected by USB, where the system has a way to read them.
 #[cfg(target_os = "macos")]
 use camera_macos as camera;
@@ -906,6 +907,17 @@ fn albums(path: String, state: State<'_, AppState>) -> Result<Vec<db::Album>, St
     db::albums(&open_index(&state, &path)?).map_err(|e| e.to_string())
 }
 
+/// Memories, trips, featured photos and the other rows of the Collections
+/// page. `today` is the viewer's date, in days since 1970.
+#[tauri::command(async)]
+fn collections(
+    path: String,
+    today: i64,
+    state: State<'_, AppState>,
+) -> Result<collections::Collections, String> {
+    collections::collections(&open_index(&state, &path)?, today).map_err(|e| e.to_string())
+}
+
 /// The open library, if it is `path` and can take changes right now.
 fn editable_library(state: &AppState, path: &str) -> Result<OpenLibrary, String> {
     let open = state.open_library.lock().unwrap().clone();
@@ -1472,9 +1484,24 @@ fn sync_library(path: String, state: State<'_, AppState>) -> Result<bool, String
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Workers for commands: enough that slow ones never take them all.
+const COMMAND_WORKERS: usize = 32;
+
 pub fn run() {
     // Before anything reads them: the folders the app kept as Photolib.
     rename::move_old_data();
+    // Commands run their database queries right on the runtime's workers. The
+    // default, one worker per core, let a few slow ones (people, suggestions,
+    // a sync over the network) hold up the quick ones the user waits for,
+    // such as the photos of the "Is it …?" dialog.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(COMMAND_WORKERS)
+        .enable_all()
+        .build()
+        .expect("the command runtime");
+    tauri::async_runtime::set(runtime.handle().clone());
+    // It lives as long as the app.
+    std::mem::forget(runtime);
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1580,6 +1607,7 @@ pub fn run() {
             shapes,
             release_asset_suffix,
             folders,
+            collections,
             photo_details,
             photo_shooting,
             gear_options,

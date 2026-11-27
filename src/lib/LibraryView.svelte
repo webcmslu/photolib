@@ -44,7 +44,11 @@
     type ScanSummary,
     type ThumbSummary,
     type Gear,
+    type Memory,
   } from "./api";
+  import CollectionsView, { type PinnedTile } from "./CollectionsView.svelte";
+  import MemoryPlayer from "./MemoryPlayer.svelte";
+  import { memoryTitle } from "./memories";
   import GearPanel from "./GearPanel.svelte";
   import { cameraName, formatDayRange, formatNumber, itemCount, monthKey, photoCount } from "./format";
   import MapView from "./MapView.svelte";
@@ -273,7 +277,21 @@
   // Raw (not a deep proxy): it is passed to the backend as is.
   let listing = $state.raw<Listing>({ kind: "library" });
   /** What the main area shows: a photo grid, the map or the people. */
-  let section = $state<"photos" | "map" | "people" | "duplicates" | "similar">("photos");
+  let section = $state<"photos" | "collections" | "map" | "people" | "duplicates" | "similar">("photos");
+  /** The title of a listing opened from Collections (a trip, a day…). */
+  let listingTitle = $state<string | null>(null);
+  /** The listing was opened from Collections, which its back button returns to. */
+  let fromCollections = $state(false);
+  /** The memory playing full screen. */
+  let playing = $state<Memory | null>(null);
+
+  /** Opens a listing from the Collections page. */
+  function openFromCollections(target: Listing, name: string) {
+    listing = target;
+    listingTitle = name;
+    section = "photos";
+    fromCollections = true;
+  }
   /** The name of the person whose photos are listed. */
   let personName = $state<string | null>(null);
   let personHidden = $state(false);
@@ -341,6 +359,8 @@
     icon: Icon;
     count: number | null;
     selected: boolean;
+    /** What it lists, if it is a listing. */
+    target: Listing | null;
     open: () => void;
   }
   const sidebarItems = $derived.by(() => {
@@ -350,6 +370,7 @@
       icon,
       count,
       selected: section === "photos" && sameListing(target, listing),
+      target,
       open: () => {
         listing = target;
         section = "photos";
@@ -361,6 +382,7 @@
       icon,
       count: null,
       selected: section === id || alsoSelected,
+      target: null,
       open: () => (section = id),
     });
     const items: SidebarItem[] = [
@@ -521,6 +543,10 @@
         return t("Search: {query}", { query: listing.query });
       case "only":
         return filterName(listing.only);
+      case "days":
+        return listingTitle ?? formatDayRange(listing.from, listing.to);
+      case "picked":
+        return listingTitle ?? t("Photos");
     }
   });
 
@@ -802,6 +828,7 @@
 
   /** The grid's keys, the "?" panel, and Ctrl/Cmd with + or - to zoom like in a browser. */
   function onkeydown(event: KeyboardEvent) {
+    if (playing) return;
     if (event.key === "?" && !typing(event.target) && !slideshow) {
       event.preventDefault();
       showShortcuts = true;
@@ -1534,6 +1561,7 @@
           onclick={() => {
             listing = target;
             section = "photos";
+            fromCollections = false;
           }}
           title={label}
         >
@@ -1549,6 +1577,7 @@
           class:selected={showsSelected(entry, place)}
           onclick={() => {
             clickedIn = place;
+            fromCollections = false;
             entry.open();
           }}
           oncontextmenu={(event) => itemMenu(event, entry)}
@@ -1569,6 +1598,18 @@
       {/snippet}
 
       {@render row({ kind: "library" }, t("Library"), null, "library")}
+      <button
+        class="row"
+        class:selected={section === "collections"}
+        onclick={() => {
+          section = "collections";
+          fromCollections = false;
+        }}
+        title={t("Collections")}
+      >
+        {@render icon("collections")}
+        <span class="row-name">{t("Collections")}</span>
+      </button>
 
       {#if pinnedItems.length > 0}
         <h2>{@render heading("pinned", t("Pinned"))}</h2>
@@ -1677,6 +1718,34 @@
               listing = area;
               section = "photos";
             }}
+          />
+        </div>
+      {:else if section === "collections"}
+        <div class="map">
+          <CollectionsView
+            libraryPath={library.path}
+            {revision}
+            {albums}
+            pinned={pinnedItems.map(
+              (entry): PinnedTile => ({
+                id: entry.id,
+                label: entry.label,
+                icon: entry.icon,
+                target: entry.target,
+                open: () => {
+                  fromCollections = entry.target !== null;
+                  entry.open();
+                },
+              }),
+            )}
+            onlisting={openFromCollections}
+            onsection={(id) => (section = id)}
+            onperson={(person) => {
+              personName = person.name;
+              personHidden = person.hidden;
+              openFromCollections({ kind: "person", clusters: person.clusters }, person.name ?? "");
+            }}
+            onplay={(memory) => (playing = memory)}
           />
         </div>
       {:else if section === "people"}
@@ -1800,7 +1869,9 @@
             />
           </form>
         {:else}
-          {#if listing.kind === "person"}
+          {#if fromCollections}
+            <button class="secondary" onclick={() => (section = "collections")}>‹ {t("Collections")}</button>
+          {:else if listing.kind === "person"}
             <button class="secondary" onclick={() => (section = "people")}>‹ {t("People")}</button>
           {/if}
           {#if listing.kind === "area"}
@@ -2111,6 +2182,19 @@
       deviceImport = null;
     }}
     onimported={() => rescan()}
+  />
+{/if}
+
+{#if playing}
+  {@const memory = playing}
+  <MemoryPlayer
+    libraryPath={library.path}
+    {memory}
+    onclose={() => (playing = null)}
+    onshowall={() => {
+      playing = null;
+      openFromCollections(memory.listing, memoryTitle(memory));
+    }}
   />
 {/if}
 

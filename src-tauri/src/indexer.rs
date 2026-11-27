@@ -208,11 +208,21 @@ pub fn scan_with(
         let mut last_commit = Instant::now();
         let mut last_progress = Instant::now();
         let mut reported_walk_end = false;
-        let mut tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // The write lock is taken only once a row has come in, and given back
+        // at each commit: a walk over a slow NAS that finds nothing new must
+        // not keep the user's own changes (a name, a heart) waiting.
+        let mut tx: Option<rusqlite::Transaction<'_>> = None;
         loop {
             match row_rx.recv_timeout(PROGRESS_INTERVAL) {
                 Ok((is_new, Some(row))) => {
-                    db::upsert(&tx, &row)?;
+                    if tx.is_none() {
+                        tx = Some(rusqlite::Transaction::new_unchecked(
+                            conn,
+                            TransactionBehavior::Immediate,
+                        )?);
+                        last_commit = Instant::now();
+                    }
+                    db::upsert(tx.as_ref().expect("just opened"), &row)?;
                     if is_new {
                         summary.added += 1;
                     } else {
@@ -229,8 +239,9 @@ pub fn scan_with(
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
             if pending >= WRITE_BATCH || (pending > 0 && last_commit.elapsed() >= COMMIT_INTERVAL) {
-                tx.commit()?;
-                tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                if let Some(tx) = tx.take() {
+                    tx.commit()?;
+                }
                 pending = 0;
                 last_commit = Instant::now();
             }
@@ -252,7 +263,9 @@ pub fn scan_with(
                 });
             }
         }
-        tx.commit()?;
+        if let Some(tx) = tx {
+            tx.commit()?;
+        }
         walker.join().expect("the folder walk panicked")
     })?;
 
