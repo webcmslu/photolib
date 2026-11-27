@@ -25,6 +25,7 @@
 //! into the library's shared logs (`.photolib/devices/`), as any device's,
 //! so the desktop apps see them; the photo files are never changed.
 
+mod access;
 mod commands;
 mod library;
 mod media;
@@ -33,13 +34,11 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Request, State};
-use axum::http::{header, HeaderValue, StatusCode};
-use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::http::{header, Method};
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
-use base64::Engine;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 
 use library::Library;
@@ -75,17 +74,28 @@ async fn main() {
     };
     library::start_scans(library.clone(), scan_every);
 
+    let access = Arc::new(access::Access::new(password, library.data_dir()));
     let index = web_dir.join("index.html");
     let app = Router::new()
         .route("/api/{command}", post(commands::handle))
         .route("/thumb/{size}/{fingerprint}", get(media::thumb))
         .route("/photo/{fingerprint}", get(media::photo))
         .fallback_service(ServeDir::new(&web_dir).not_found_service(ServeFile::new(index)))
-        .layer(middleware::from_fn_with_state(
-            Arc::new(password),
-            require_password,
-        ))
-        .with_state(library.clone());
+        .with_state(library.clone())
+        .merge(
+            Router::new()
+                .route("/api/login", post(access::login))
+                .with_state(access.clone()),
+        )
+        .layer(middleware::from_fn_with_state(access, access::require))
+        // The apps (desktop, mobile) call from their own origin; outside the
+        // password check, which preflight requests can't pass.
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST])
+                .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE, header::RANGE]),
+        );
 
     let address = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = match tokio::net::TcpListener::bind(address).await {
@@ -109,39 +119,4 @@ async fn main() {
     {
         eprintln!("phototek-server: {e}");
     }
-}
-
-/// With `PHOTOTEK_PASSWORD` set, the browser asks for it (any user name).
-async fn require_password(
-    State(password): State<Arc<Option<String>>>,
-    request: Request,
-    next: Next,
-) -> Response {
-    let Some(password) = password.as_deref() else {
-        return next.run(request).await;
-    };
-    let given = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Basic "))
-        .and_then(|encoded| {
-            base64::engine::general_purpose::STANDARD
-                .decode(encoded)
-                .ok()
-        })
-        .and_then(|decoded| String::from_utf8(decoded).ok())
-        .and_then(|pair| pair.split_once(':').map(|(_, given)| given.to_owned()));
-    // Compared through hashes, so the time taken says nothing about the password.
-    let matches = given
-        .is_some_and(|given| blake3::hash(given.as_bytes()) == blake3::hash(password.as_bytes()));
-    if matches {
-        return next.run(request).await;
-    }
-    let mut response = StatusCode::UNAUTHORIZED.into_response();
-    response.headers_mut().insert(
-        header::WWW_AUTHENTICATE,
-        HeaderValue::from_static("Basic realm=\"Phototek\", charset=\"UTF-8\""),
-    );
-    response
 }

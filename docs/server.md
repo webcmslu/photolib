@@ -71,6 +71,28 @@ Don't open port 8080 on the router. Use ASUSTOR's **EZ-Connect** or a VPN
 (e.g. Tailscale, which has an ASUSTOR app), so that only your devices can
 reach it.
 
+## From the desktop app
+
+On the welcome screen, **Connect to a Phototek server…** asks for the
+address (e.g. `nas.local:8080`) and the password, if there is one. The app
+then shows the server's library. It is remembered under **Phototek
+servers**, and "‹ Libraries" goes back to the computer's own libraries.
+
+This is also how several computers share one library: each one opens it
+through the server instead of indexing it again. The mobile apps will
+connect the same way.
+
+**How access works** (`server/src/access.rs`):
+- **Browsers** get the password prompt (HTTP Basic).
+- **Apps** call `POST /api/login` once and get a token. They send it as
+  `Authorization: Bearer …`, or as `?t=…` on photo URLs, since an `<img>`
+  can't send headers.
+- **Tokens** survive restarts. Only their hashes are stored, in
+  `<data>/sessions.json`, and a new password cancels them all.
+- **CORS** lets the apps (`tauri://localhost` and the like) call the
+  server. WebKit allows these `http://` requests from the app's page once
+  the server answers with CORS (tested in WKWebView).
+
 ## Running it on a computer (development)
 
 ```sh

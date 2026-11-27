@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org thumb: http://thumb.localhost importthumb: http://importthumb.localhost photo: http://photo.localhost; media-src 'self' photo: http://photo.localhost http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://api.github.com thumb: http://thumb.localhost photo: http://photo.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: blob: http: https: https://tile.openstreetmap.org thumb: http://thumb.localhost importthumb: http://importthumb.localhost photo: http://photo.localhost; media-src 'self' http: https: photo: http://photo.localhost http://127.0.0.1:*; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost https://api.github.com http: https: thumb: http://thumb.localhost photo: http://photo.localhost"
     }
   },
   "bundle": {

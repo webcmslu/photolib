@@ -568,6 +568,16 @@ const de: Record<string, string> = {
   "This computer can't make videos.": "Dieser Computer kann keine Videos erstellen.",
   "Video": "Video",
   "With the music, the title and the photos as the memory plays them.": "Mit Musik, Titel und Fotos, wie im Rückblick.",
+  // Phototek server
+  "Wrong password.": "Falsches Passwort.",
+  "The server asks for its password again.": "Der Server fragt erneut nach seinem Passwort.",
+  "Can't reach the Phototek server at {address}: {message}": "Der Phototek-Server unter {address} ist nicht erreichbar: {message}",
+  "Server address": "Serveradresse",
+  "Password, if it has one": "Passwort, falls vorhanden",
+  "Connecting…": "Verbinden …",
+  "Connect": "Verbinden",
+  "Connect to a Phototek server…": "Mit einem Phototek-Server verbinden …",
+  "Phototek servers": "Phototek-Server",
 };
 
 export default de;

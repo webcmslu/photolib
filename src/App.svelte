@@ -14,12 +14,54 @@
   import SettingsButton from "./lib/SettingsButton.svelte";
   import { suppressDefaultMenu } from "./lib/contextMenu";
   import { errorText, locale, t } from "./lib/i18n";
-  import { inBrowser } from "./lib/platform";
+  import {
+    forgetServer,
+    inBrowser,
+    logIn,
+    savedServers,
+    saveServer,
+    serverUrl,
+    useServer,
+    type Server,
+  } from "./lib/platform";
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
   let error = $state<string | null>(null);
   let busy = $state(false);
+
+  /** The Phototek servers connected to before (NAS), and the form to add one. */
+  let servers = $state<Server[]>(savedServers());
+  let connecting = $state<{ address: string; password: string } | null>(null);
+
+  /** Opens a server's library; with a password, logs in first. */
+  async function connect(address: string, password: string | null, known?: Server) {
+    busy = true;
+    error = null;
+    const url = known?.url ?? serverUrl(address);
+    try {
+      const token = password === null ? (known?.token ?? null) : await logIn(url, password);
+      useServer({ url, token });
+      const opened = await openLibrary("");
+      saveServer({ url, token, name: opened.name });
+      servers = savedServers();
+      connecting = null;
+      library = opened;
+    } catch (e) {
+      useServer(null);
+      const message = e instanceof Error ? e.message : errorText(e);
+      error =
+        message === "wrong password"
+          ? t("Wrong password.")
+          : known && /401|Unauthorized/i.test(message)
+            ? t("The server asks for its password again.")
+            : t("Can't reach the Phototek server at {address}: {message}", { address: url, message });
+      // A saved server whose password changed: ask for it.
+      if (known && /401|Unauthorized/i.test(message)) connecting = { address: url, password: "" };
+    } finally {
+      busy = false;
+    }
+  }
 
   /** True while a folder is dragged over the welcome screen. */
   let dropping = $state(false);
@@ -97,6 +139,8 @@
 
   function closeLibrary() {
     library = null;
+    // Back to this computer's own libraries.
+    useServer(null);
     refreshRecents();
   }
 
@@ -127,6 +171,70 @@
 
     {#if error}
       <p class="error" role="alert">{error}</p>
+    {/if}
+
+    <!-- A library served by a Phototek server, e.g. on the NAS. -->
+    {#if connecting}
+      <form
+        class="connect"
+        onsubmit={(event) => {
+          event.preventDefault();
+          if (connecting) connect(connecting.address, connecting.password);
+        }}
+      >
+        <label>
+          <span>{t("Server address")}</span>
+          <!-- svelte-ignore a11y_autofocus -->
+          <input
+            bind:value={connecting.address}
+            placeholder="nas.local:8080"
+            autocomplete="url"
+            autocapitalize="off"
+            spellcheck="false"
+            autofocus
+            required
+          />
+        </label>
+        <label>
+          <span>{t("Password, if it has one")}</span>
+          <input type="password" bind:value={connecting.password} autocomplete="current-password" />
+        </label>
+        <div class="connect-buttons">
+          <button type="button" class="link" onclick={() => (connecting = null)}>{t("Cancel")}</button>
+          <button type="submit" class="primary" disabled={busy}>{busy ? t("Connecting…") : t("Connect")}</button>
+        </div>
+      </form>
+    {:else}
+      <button class="link connect-link" onclick={() => (connecting = { address: "", password: "" })}>
+        {t("Connect to a Phototek server…")}
+      </button>
+    {/if}
+
+    {#if servers.length > 0}
+      <section>
+        <h2>{t("Phototek servers")}</h2>
+        <ul>
+          {#each servers as entry (entry.url)}
+            <li>
+              <button class="recent" onclick={() => connect(entry.url, null, entry)} disabled={busy} title={entry.url}>
+                <span class="name">{entry.name ?? entry.url}</span>
+                <span class="path">{entry.url}</span>
+              </button>
+              <button
+                class="forget"
+                onclick={() => {
+                  forgetServer(entry.url);
+                  servers = savedServers();
+                }}
+                aria-label={t("Remove {name} from recent libraries", { name: entry.name ?? entry.url })}
+                title={t("Remove from list")}
+              >
+                ×
+              </button>
+            </li>
+          {/each}
+        </ul>
+      </section>
     {/if}
 
     {#if recents.length > 0}
@@ -306,6 +414,54 @@
 
   .offline .meta {
     color: var(--warn);
+  }
+
+  .link {
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
+  }
+
+  .connect-link {
+    margin-top: 14px;
+    font-size: 13px;
+  }
+
+  .connect {
+    display: grid;
+    gap: 10px;
+    margin-top: 18px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    text-align: left;
+  }
+
+  .connect label {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .connect input {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+  }
+
+  .connect-buttons {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 4px;
   }
 
   .forget {

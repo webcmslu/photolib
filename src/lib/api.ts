@@ -10,16 +10,20 @@ import type { Edit, Enhance } from "./edit";
 import type { LabelColor } from "./labels";
 import { listen as tauriListen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { inBrowser } from "./platform";
+import { server } from "./platform";
 
-// In the desktop app, commands are Tauri commands. In a browser, served by
-// the Phototek server, they are `POST /api/<command>` with the same
-// arguments and results (see src-tauri/server/src/commands.rs).
+// In the desktop app, commands are Tauri commands. With a Phototek server
+// (in a browser it served, or chosen in the app), they are
+// `POST /api/<command>` with the same arguments and results (see
+// src-tauri/server/src/commands.rs).
 async function invoke<T>(command: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
-  if (!inBrowser) return tauriInvoke<T>(command, args, options);
-  const response = await fetch(`/api/${command}`, {
+  const remote = server();
+  if (!remote) return tauriInvoke<T>(command, args, options);
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (remote.token) headers.Authorization = `Bearer ${remote.token}`;
+  const response = await fetch(`${remote.url}/api/${command}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(args ?? {}),
   });
   const body = await response.json().catch(() => null);
@@ -27,14 +31,16 @@ async function invoke<T>(command: string, args?: InvokeArgs, options?: InvokeOpt
   return body as T;
 }
 
-/** The URL of a thumbnail or a photo: a Tauri protocol, or the server's. */
+/** The URL of a thumbnail or a photo: a Tauri protocol, or the server's (with the token: an `<img>` can't send headers). */
 function convertFileSrc(path: string, protocol: string): string {
-  return inBrowser ? `/${protocol}/${path}` : tauriFileSrc(path, protocol);
+  const remote = server();
+  if (!remote) return tauriFileSrc(path, protocol);
+  return `${remote.url}/${protocol}/${path}${remote.token ? `?t=${remote.token}` : ""}`;
 }
 
-/** Events from the app; in a browser, none arrive yet. */
+/** Events from the app; from a server, none arrive yet. */
 function listen<T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> {
-  return inBrowser ? Promise.resolve(() => {}) : tauriListen<T>(event, handler);
+  return server() ? Promise.resolve(() => {}) : tauriListen<T>(event, handler);
 }
 
 /** An opened library folder. Mirrors `LibraryInfo` in Rust. */
@@ -790,7 +796,7 @@ invoke<string | null>("media_base")
 
 /** URL a `<video>` element can play the video file from. */
 export function videoUrl(fingerprint: string): string {
-  return mediaBase ? `${mediaBase}/${fingerprint}` : photoUrl(fingerprint);
+  return mediaBase && !server() ? `${mediaBase}/${fingerprint}` : photoUrl(fingerprint);
 }
 
 // --- Organization: favorites, hidden photos, albums ---------------------------
