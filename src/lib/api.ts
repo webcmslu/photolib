@@ -38,10 +38,38 @@ function convertFileSrc(path: string, protocol: string): string {
   return `${remote.url}/${protocol}/${path}${remote.token ? `?t=${remote.token}` : ""}`;
 }
 
-/** Events from the app; from a server, none arrive yet. */
+/**
+ * Events: from the app (Tauri), or from the server's `/api/events` stream,
+ * one connection shared by all the listeners and closed with the last one.
+ */
 function listen<T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> {
-  return server() ? Promise.resolve(() => {}) : tauriListen<T>(event, handler);
+  const remote = server();
+  if (!remote) return tauriListen<T>(event, handler);
+  const key = `${remote.url}|${remote.token ?? ""}`;
+  if (!events || events.key !== key) {
+    events?.source.close();
+    const query = remote.token ? `?t=${remote.token}` : "";
+    events = { key, source: new EventSource(`${remote.url}/api/events${query}`), listeners: 0 };
+  }
+  const shared = events;
+  const onMessage = (message: MessageEvent<string>) => {
+    try {
+      handler({ event, id: 0, payload: JSON.parse(message.data) as T } as Parameters<EventCallback<T>>[0]);
+    } catch {
+      // A malformed event is skipped.
+    }
+  };
+  shared.source.addEventListener(event, onMessage);
+  shared.listeners++;
+  return Promise.resolve(() => {
+    shared.source.removeEventListener(event, onMessage);
+    if (--shared.listeners === 0) {
+      shared.source.close();
+      if (events === shared) events = null;
+    }
+  });
 }
+let events: { key: string; source: EventSource; listeners: number } | null = null;
 
 /** An opened library folder. Mirrors `LibraryInfo` in Rust. */
 export interface LibraryInfo {

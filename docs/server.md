@@ -27,6 +27,8 @@ The desktop apps (Mac, Windows, Linux) don't change and don't need it.
 | `src-tauri/server/src/main.rs` | Settings, routes and the password check |
 | `src-tauri/server/src/library.rs` | The library and its background scans |
 | `src-tauri/server/src/commands.rs` | `POST /api/<command>`: the desktop app's commands, same arguments and results |
+| `src-tauri/server/src/access.rs` | Password, app tokens (`POST /api/login`) |
+| `GET /api/events` | The app's events (scan progress, new photos, changes from other devices) as server-sent events |
 | `src-tauri/server/src/media.rs` | `/thumb/<grid\|preview>/<fingerprint>` and `/photo/<fingerprint>` (with ranges, for videos) |
 | `src/lib/platform.ts` | Browser mode: where the interface notices it isn't in Tauri |
 | `src/lib/api.ts` | `invoke` goes to `/api/…` in a browser |
@@ -106,8 +108,6 @@ Then open http://localhost:8080.
 
 ## Next
 
-- **Live updates:** server-sent events in place of the app's Tauri events
-  (scan progress, new photos).
 - **A published image:** a multi-architecture image on a registry, so the
   install is just the stack (needs your OK to publish).
 - **Mobile apps** (Tauri 2 for iOS and Android) and **TV apps** (webOS,

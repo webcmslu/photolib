@@ -4,7 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+use tokio::sync::broadcast;
 
 use phototek_core::org::OrgPaths;
 use phototek_core::thumbs::ThumbCache;
@@ -24,6 +27,9 @@ pub struct Library {
     wanted: (Mutex<bool>, Condvar),
     /// Limits on-demand image decoding (thumbnails and converted originals).
     on_demand: Limiter,
+    /// The events the interface hears (as the desktop app's Tauri events),
+    /// sent to every open `/api/events` stream: `(event name, payload)`.
+    events: broadcast::Sender<(String, Value)>,
 }
 
 impl Library {
@@ -52,6 +58,7 @@ impl Library {
             on_demand: Limiter::new(
                 std::thread::available_parallelism().map_or(2, |n| n.get().div_ceil(2)),
             ),
+            events: broadcast::channel(64).0,
         };
         // Makes the index if there is none yet.
         library.index()?;
@@ -135,6 +142,19 @@ impl Library {
             .map_err(|e| e.to_string())
     }
 
+    /// Listens to the events, for one `/api/events` stream.
+    pub fn subscribe(&self) -> broadcast::Receiver<(String, Value)> {
+        self.events.subscribe()
+    }
+
+    /// Sends a scan event, as the desktop app's `index-event`.
+    fn index_event(&self, state: &str, mut fields: Value) {
+        fields["state"] = json!(state);
+        fields["libraryPath"] = json!(self.root.to_string_lossy());
+        // Nobody listening is fine.
+        let _ = self.events.send(("index-event".into(), fields));
+    }
+
     /// Lets at most a few decodings run at a time.
     pub fn decoding(&self) -> Permit<'_> {
         self.on_demand.acquire()
@@ -163,25 +183,46 @@ impl Library {
     /// thumbnails, then finds similar shots and (if switched on) faces.
     fn scan(&self) -> Result<(), indexer::ScanError> {
         let cancel = AtomicBool::new(false);
-        let quiet = |_| {};
+        // Progress, a few times a second at most.
+        let last = Mutex::new(Instant::now() - Duration::from_secs(1));
+        let progress = |progress: indexer::Progress| {
+            let mut last = last.lock().unwrap();
+            if last.elapsed() >= Duration::from_millis(300) {
+                *last = Instant::now();
+                self.index_event("running", json!({ "progress": progress }));
+            }
+        };
         let mut conn = db::open(&self.index_path())?;
-        org::sync(&mut conn, &self.org_paths(), &self.device, self.writable())?;
+        let writable = self.writable();
+        self.index_event("online", json!({ "writable": writable }));
+        if org::sync(&mut conn, &self.org_paths(), &self.device, writable)? > 0 {
+            self.index_event("synced", json!({}));
+        }
         let summary = indexer::scan_with(
             &self.root,
             &mut conn,
             indexer::Mode::Changes,
             &cancel,
-            &quiet,
+            &progress,
         )?;
-        let made = thumbs::generate_missing(&self.root, &mut conn, &self.thumbs, &cancel, &quiet)?;
+        self.index_event("indexed", json!({ "summary": summary }));
+        let made =
+            thumbs::generate_missing(&self.root, &mut conn, &self.thumbs, &cancel, &progress)?;
         if made.undecodable > 0 {
             db::pair_parts(&mut conn)?;
         }
-        similar::hash_pending(&mut conn, &self.thumbs, &cancel, &quiet)?;
+        similar::hash_pending(&mut conn, &self.thumbs, &cancel, &progress)?;
         if let Some(finder) = self.face_finder() {
-            people::find_faces(&mut conn, &self.thumbs, &finder, &cancel, &quiet)?;
-            people::group_faces(&mut conn)?;
+            let searched =
+                people::find_faces(&mut conn, &self.thumbs, &finder, &cancel, &progress)?;
+            if people::group_faces(&mut conn)? > 0 || searched > 0 {
+                self.index_event("synced", json!({}));
+            }
         }
+        self.index_event(
+            "finished",
+            json!({ "summary": summary, "thumbnails": made }),
+        );
         println!(
             "Scan done: {} photos ({} new, {} changed, {} removed).",
             db::count(&conn).unwrap_or(0),
@@ -217,6 +258,7 @@ pub fn start_scans(library: Arc<Library>, minutes: Option<u64>) {
         library.scanning.store(true, Ordering::Relaxed);
         if let Err(e) = library.scan() {
             eprintln!("Scan failed: {e}");
+            library.index_event("failed", json!({ "message": e.to_string() }));
         }
         library.scanning.store(false, Ordering::Relaxed);
     });

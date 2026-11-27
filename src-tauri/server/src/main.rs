@@ -77,6 +77,7 @@ async fn main() {
     let access = Arc::new(access::Access::new(password, library.data_dir()));
     let index = web_dir.join("index.html");
     let app = Router::new()
+        .route("/api/events", get(events))
         .route("/api/{command}", post(commands::handle))
         .route("/thumb/{size}/{fingerprint}", get(media::thumb))
         .route("/photo/{fingerprint}", get(media::photo))
@@ -119,4 +120,23 @@ async fn main() {
     {
         eprintln!("phototek-server: {e}");
     }
+}
+
+/// `GET /api/events`: the events the desktop app gets from Tauri (scan
+/// progress, new photos, changes from other devices), as server-sent events
+/// named like the Tauri events, with the payload as JSON.
+async fn events(
+    axum::extract::State(library): axum::extract::State<Arc<Library>>,
+) -> axum::response::sse::Sse<
+    impl tokio_stream::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>,
+> {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::StreamExt;
+    let stream =
+        tokio_stream::wrappers::BroadcastStream::new(library.subscribe()).filter_map(|message| {
+            // A listener too slow to keep up just misses some progress.
+            let (name, payload) = message.ok()?;
+            Some(Ok(Event::default().event(name).data(payload.to_string())))
+        });
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
