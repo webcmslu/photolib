@@ -48,7 +48,7 @@
   } from "./api";
   import CollectionsView, { type PinnedTile } from "./CollectionsView.svelte";
   import MemoryPlayer from "./MemoryPlayer.svelte";
-  import { memoryTitle } from "./memories";
+  import { memoryTitle, unlockAudio } from "./memories";
   import GearPanel from "./GearPanel.svelte";
   import { cameraName, formatDayRange, formatNumber, itemCount, monthKey, photoCount } from "./format";
   import MapView from "./MapView.svelte";
@@ -285,12 +285,16 @@
   /** The memory playing full screen. */
   let playing = $state<Memory | null>(null);
 
-  /** Opens a listing from the Collections page. */
-  function openFromCollections(target: Listing, name: string) {
+  /** A photo to open in the viewer once the listing opened from Collections is loaded. */
+  let openingPhoto: string | null = null;
+
+  /** Opens a listing from the Collections page, on one of its photos when `photo` is given. */
+  function openFromCollections(target: Listing, name: string, photo?: string) {
     listing = target;
     listingTitle = name;
     section = "photos";
     fromCollections = true;
+    openingPhoto = photo ?? null;
   }
   /** The name of the person whose photos are listed. */
   let personName = $state<string | null>(null);
@@ -990,8 +994,23 @@
       if (target !== pages) return; // something else is listed by now
       groups = loaded;
       groupsLoaded = true;
+      if (openingPhoto !== null) await openOn(target, openingPhoto);
     } catch (e) {
       error = errorText(e);
+    }
+  }
+
+  /** Opens the viewer on the photo `fingerprint` of the listing (looked for among its first photos). */
+  async function openOn(target: PhotoPages, fingerprint: string) {
+    openingPhoto = null;
+    const total = Math.min(listedTotal, 1000);
+    for (let index = 0; index < total; index++) {
+      const photo = await target.load(index);
+      if (target !== pages) return;
+      if (photo?.fingerprint === fingerprint) {
+        viewerIndex = index;
+        return;
+      }
     }
   }
 
@@ -1745,7 +1764,11 @@
               personHidden = person.hidden;
               openFromCollections({ kind: "person", clusters: person.clusters }, person.name ?? "");
             }}
-            onplay={(memory) => (playing = memory)}
+            onplay={(memory) => {
+              // Straight from the click, so the memory's music may play.
+              unlockAudio();
+              playing = memory;
+            }}
           />
         </div>
       {:else if section === "people"}

@@ -94,123 +94,210 @@ export function setMusicWanted(on: boolean) {
 }
 
 /**
- * Plays a slow, soft piece made up as it goes (nothing to license or to
- * download): pad chords that change every few seconds, with a few bell
- * notes over them, through a little reverb. Returns a function that fades
- * it out and stops it.
+ * The one audio context, made (or woken) from a click: the Mac's web view
+ * keeps sound started any later paused, and the memory then plays silently.
  */
-export function playMusic(seed: string): { stop: () => void; setVolume: (on: boolean) => void } {
-  const context = new AudioContext();
-  const master = context.createGain();
-  master.gain.value = 0;
-  master.gain.linearRampToValueAtTime(0.16, context.currentTime + 3);
-  master.connect(context.destination);
+let shared: AudioContext | null = null;
+let impulse: AudioBuffer | null = null;
+/** Each style's loudness, measured to peak at about half of full scale. */
+const PADS_VOLUME = 1.5;
+const LIGHT_VOLUME = 2.4;
 
-  // A reverb made of decaying noise.
-  const reverb = context.createConvolver();
-  const length = context.sampleRate * 3;
-  const impulse = context.createBuffer(2, length, context.sampleRate);
-  for (let channel = 0; channel < 2; channel++) {
-    const data = impulse.getChannelData(channel);
-    for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 3;
+/** Lets sound play: call it straight from the click or key that starts a memory. */
+export function unlockAudio() {
+  try {
+    shared ??= new AudioContext();
+    if (shared.state !== "running") void shared.resume().catch(() => {});
+  } catch {
+    // No sound on this computer: memories play silently.
   }
+}
+
+export type MusicStyle = "pads" | "light";
+
+/**
+ * Plays a piece made up as it goes (nothing to license or to download), in
+ * one of two styles picked at random each time: slow dark pad chords with a
+ * few bells, or a light arpeggio, as on a soft piano. Each memory keeps its
+ * own chords (and tempo), picked from its id.
+ */
+export function playMusic(
+  seed: string,
+  style: MusicStyle = Math.random() < 0.5 ? "pads" : "light",
+): { stop: () => void; setVolume: (on: boolean) => void } {
+  unlockAudio();
+  if (!shared) throw new Error("no sound");
+  const context = shared;
+  // Background level: about half of full scale at its loudest, with a
+  // limiter so that chords and bells together never crackle.
+  const VOLUME = style === "pads" ? PADS_VOLUME : LIGHT_VOLUME;
+  const master = context.createGain();
+  master.gain.setValueAtTime(0, context.currentTime);
+  master.gain.linearRampToValueAtTime(VOLUME, context.currentTime + 2.5);
+  const limiter = context.createDynamicsCompressor();
+  limiter.threshold.value = -10;
+  limiter.knee.value = 6;
+  limiter.ratio.value = 8;
+  master.connect(limiter).connect(context.destination);
+
+  // A reverb made of decaying noise, made once.
+  if (!impulse) {
+    const length = context.sampleRate * 3;
+    impulse = context.createBuffer(2, length, context.sampleRate);
+    for (let channel = 0; channel < 2; channel++) {
+      const data = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / length) ** 3;
+    }
+  }
+  const reverb = context.createConvolver();
   reverb.buffer = impulse;
   const wet = context.createGain();
-  wet.gain.value = 0.6;
+  wet.gain.value = style === "pads" ? 0.6 : 0.45;
   reverb.connect(wet).connect(master);
   const dry = context.createGain();
-  dry.gain.value = 0.5;
+  dry.gain.value = style === "pads" ? 0.5 : 0.7;
   dry.connect(master);
-  const lowpass = context.createBiquadFilter();
-  lowpass.type = "lowpass";
-  lowpass.frequency.value = 1400;
-  lowpass.connect(dry);
-  lowpass.connect(reverb);
+  const tone = context.createBiquadFilter();
+  tone.type = "lowpass";
+  tone.frequency.value = style === "pads" ? 1400 : 3200;
+  tone.connect(dry);
+  tone.connect(reverb);
 
-  // A progression picked from the memory, so each one has its own.
-  const progressions = [
-    // I – vi – IV – V, in MIDI notes
-    [[48, 55, 64, 71], [45, 52, 60, 67], [41, 48, 57, 64], [43, 50, 59, 66]],
-    // vi – IV – I – V
-    [[45, 52, 60, 64], [41, 48, 57, 60], [48, 55, 64, 67], [43, 50, 59, 62]],
-    // I – iii – IV – iv
-    [[48, 55, 64, 67], [52, 59, 67, 71], [53, 60, 69, 72], [53, 60, 68, 72]],
-  ];
   let hash = 0;
   for (const char of seed) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  const chords = progressions[hash % progressions.length];
   const frequency = (note: number) => 440 * 2 ** ((note - 69) / 12);
-  const CHORD_S = 4.8;
 
-  const sources: OscillatorNode[] = [];
-  function pad(notes: number[], start: number) {
+  function voice(type: OscillatorType, note: number, start: number, peak: number, decay: number, to: AudioNode) {
+    const oscillator = context.createOscillator();
+    oscillator.type = type;
+    oscillator.frequency.value = frequency(note);
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0, start);
+    gain.gain.linearRampToValueAtTime(peak, start + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + decay);
+    oscillator.connect(gain);
+    gain.connect(to);
+    oscillator.start(start);
+    oscillator.stop(start + decay + 0.05);
+    return gain;
+  }
+  /** A chord held for `length` seconds, swelling in and fading out. */
+  function pad(notes: number[], start: number, length: number, level: number, detunes: number[]) {
     for (const note of notes) {
-      for (const detune of [-6, 6]) {
+      for (const detune of detunes) {
         const oscillator = context.createOscillator();
         oscillator.type = "triangle";
         oscillator.frequency.value = frequency(note);
         oscillator.detune.value = detune;
         const gain = context.createGain();
         gain.gain.setValueAtTime(0, start);
-        gain.gain.linearRampToValueAtTime(0.05, start + 1.6);
-        gain.gain.linearRampToValueAtTime(0.04, start + CHORD_S);
-        gain.gain.linearRampToValueAtTime(0, start + CHORD_S + 1.5);
-        oscillator.connect(gain).connect(lowpass);
+        gain.gain.linearRampToValueAtTime(level, start + 1.4);
+        gain.gain.linearRampToValueAtTime(level * 0.8, start + length);
+        gain.gain.linearRampToValueAtTime(0, start + length + 1.2);
+        oscillator.connect(gain).connect(tone);
         oscillator.start(start);
-        oscillator.stop(start + CHORD_S + 1.6);
-        sources.push(oscillator);
+        oscillator.stop(start + length + 1.3);
       }
     }
   }
-  function bell(note: number, start: number) {
-    const oscillator = context.createOscillator();
-    oscillator.type = "sine";
-    oscillator.frequency.value = frequency(note);
-    const gain = context.createGain();
-    gain.gain.setValueAtTime(0, start);
-    gain.gain.linearRampToValueAtTime(0.07, start + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 2.4);
-    oscillator.connect(gain);
-    gain.connect(reverb);
-    gain.connect(dry);
-    oscillator.start(start);
-    oscillator.stop(start + 2.5);
-    sources.push(oscillator);
+
+  /** Writes one chord's worth of music at `start`, and says how long it lasts. */
+  let chord: (step: number, start: number) => number;
+  if (style === "pads") {
+    // Four-note chords, low and slow (MIDI notes).
+    const progressions = [
+      // I – vi – IV – V
+      [[48, 55, 64, 71], [45, 52, 60, 67], [41, 48, 57, 64], [43, 50, 59, 66]],
+      // vi – IV – I – V
+      [[45, 52, 60, 64], [41, 48, 57, 60], [48, 55, 64, 67], [43, 50, 59, 62]],
+      // I – iii – IV – iv
+      [[48, 55, 64, 67], [52, 59, 67, 71], [53, 60, 69, 72], [53, 60, 68, 72]],
+    ];
+    const chords = progressions[hash % progressions.length];
+    const CHORD_S = 4.8;
+    chord = (step, start) => {
+      const notes = chords[step % chords.length];
+      pad(notes, start, CHORD_S, 0.05, [-6, 6]);
+      // A few notes of the chord, an octave up, as bells on random beats.
+      for (let beat = 0; beat < 4; beat++) {
+        if (Math.random() < 0.55) {
+          const note = notes[1 + Math.floor(Math.random() * 3)] + 12;
+          const bell = voice("sine", note, start + beat * (CHORD_S / 4) + Math.random() * 0.08, 0.07, 2.4, reverb);
+          bell.connect(dry);
+        }
+      }
+      return CHORD_S;
+    };
+  } else {
+    // Three-note chords around middle C.
+    const progressions = [
+      // C – G – Am – F
+      [[60, 64, 67], [55, 59, 62], [57, 60, 64], [53, 57, 60]],
+      // F – C – G – Am
+      [[53, 57, 60], [60, 64, 67], [55, 59, 62], [57, 60, 64]],
+      // C – Am – F – G
+      [[60, 64, 67], [57, 60, 64], [53, 57, 60], [55, 59, 62]],
+      // D – A – Bm – G
+      [[62, 66, 69], [57, 61, 64], [59, 62, 66], [55, 59, 62]],
+    ];
+    const chords = progressions[hash % progressions.length];
+    // Arpeggio shapes over the chord's notes (3, 4 and 5 are an octave up).
+    const patterns = [
+      [0, 1, 2, 3, 2, 1, 2, 1],
+      [0, 2, 1, 3, 2, 4, 3, 2],
+      [0, 1, 2, 1, 3, 2, 4, 2],
+    ];
+    const pattern = patterns[(hash >>> 4) % patterns.length];
+    const STEP_S = [0.34, 0.37, 0.4][(hash >>> 8) % 3];
+    const CHORD_S = STEP_S * 16; // two turns of the arpeggio per chord
+    chord = (step, start) => {
+      const notes = chords[step % chords.length];
+      const tones = [...notes, ...notes.map((note) => note + 12)];
+      pad(notes, start, CHORD_S, 0.018, [0]);
+      // The low note, held under the chord.
+      voice("sine", notes[0] - 24, start, 0.12, CHORD_S, tone);
+      for (let i = 0; i < 16; i++) {
+        const note = tones[pattern[i % pattern.length]] + 12;
+        // The first chord comes in gently; each bar leans on its first note.
+        const loud = (step === 0 ? 0.6 : 1) * (i % 8 === 0 ? 1 : 0.7);
+        // A plucked note: a sine with a touch of its octave, like a soft piano.
+        const at = start + i * STEP_S + Math.random() * 0.012;
+        voice("sine", note, at, 0.09 * loud, 1.6, tone);
+        voice("triangle", note + 12, at, 0.025 * loud, 0.6, tone);
+      }
+      // Now and then, a high bell.
+      if (step > 0 && Math.random() < 0.5) voice("sine", notes[2] + 36, start + STEP_S * 8, 0.03, 2.5, reverb);
+      return CHORD_S;
+    };
   }
 
   let step = 0;
-  let next = context.currentTime + 0.1;
-  // Schedules a little ahead, chord by chord.
-  const timer = setInterval(() => {
-    while (next < context.currentTime + CHORD_S * 2) {
-      const chord = chords[step % chords.length];
-      pad(chord, next);
-      // Two or three notes of the chord, an octave up, at random beats.
-      for (let beat = 0; beat < 4; beat++) {
-        if (Math.random() < 0.55) {
-          const note = chord[1 + Math.floor(Math.random() * 3)] + 12;
-          bell(note, next + beat * (CHORD_S / 4) + Math.random() * 0.08);
-        }
-      }
-      step++;
-      next += CHORD_S;
-    }
-    // Forget the notes that are over.
-    sources.splice(0, Math.max(0, sources.length - 64));
-  }, 1000);
+  let next = context.currentTime + 0.15;
+  // Writes the music a little ahead, chord by chord.
+  function schedule() {
+    while (next < context.currentTime + 8) next += chord(step++, next);
+  }
+  schedule();
+  const timer = setInterval(schedule, 500);
 
+  function fadeTo(value: number, seconds: number) {
+    const now = context.currentTime;
+    master.gain.cancelScheduledValues(now);
+    master.gain.setValueAtTime(master.gain.value, now);
+    master.gain.linearRampToValueAtTime(value, now + seconds);
+  }
   return {
     setVolume(on: boolean) {
-      master.gain.cancelScheduledValues(context.currentTime);
-      master.gain.setValueAtTime(master.gain.value, context.currentTime);
-      master.gain.linearRampToValueAtTime(on ? 0.16 : 0, context.currentTime + 0.6);
+      unlockAudio();
+      fadeTo(on ? VOLUME : 0, 0.6);
     },
     stop() {
       clearInterval(timer);
-      master.gain.cancelScheduledValues(context.currentTime);
-      master.gain.setValueAtTime(master.gain.value, context.currentTime);
-      master.gain.linearRampToValueAtTime(0, context.currentTime + 1.2);
-      setTimeout(() => context.close().catch(() => {}), 1400);
+      fadeTo(0, 1.2);
+      setTimeout(() => {
+        master.disconnect();
+        limiter.disconnect();
+      }, 1400);
     },
   };
 }

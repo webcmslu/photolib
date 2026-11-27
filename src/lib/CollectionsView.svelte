@@ -51,8 +51,8 @@
     revision: number;
     albums: Album[];
     pinned: PinnedTile[];
-    /** Opens a photo listing, with the title to show over it. */
-    onlisting: (listing: Listing, title: string) => void;
+    /** Opens a photo listing, with the title to show over it (and opened on `photo`, a fingerprint). */
+    onlisting: (listing: Listing, title: string, photo?: string) => void;
     onsection: (section: "people" | "map" | "duplicates" | "similar") => void;
     onperson: (person: Person) => void;
     onplay: (memory: Memory) => void;
@@ -342,7 +342,7 @@
         <div class="row-wrap">
           <div class="row">
             {#each data.featured.slice(0, 16) as fingerprint (fingerprint)}
-              <button class="featured" onclick={() => onlisting(featured, t("Featured Photos"))}>
+              <button class="featured" onclick={() => onlisting(featured, t("Featured Photos"), fingerprint)}>
                 <img src={thumbUrl(fingerprint, "preview")} alt="" loading="lazy" draggable="false" />
               </button>
             {/each}
