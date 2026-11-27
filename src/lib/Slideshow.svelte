@@ -8,7 +8,7 @@
 -->
 <script lang="ts">
   import { t } from "./i18n";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { appWindow as getCurrentWindow } from "./platform";
   import { onMount } from "svelte";
   import { photoUrl, thumbUrl, type PhotoItem } from "./api";
   import EditedImage from "./EditedImage.svelte";

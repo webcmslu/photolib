@@ -8,8 +8,8 @@ rust-version = "1.90"
 publish = false
 
 [workspace]
-# The library code is in `core`, shared with the NAS server.
-members = ["core"]
+# The library code is in `core`, shared with the NAS server (`server`).
+members = ["core", "server"]
 
 [workspace.package]
 # The one version of the app, the core and the server.

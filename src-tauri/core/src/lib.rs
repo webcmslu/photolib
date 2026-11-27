@@ -14,6 +14,7 @@ pub mod geo;
 #[cfg(target_os = "macos")]
 pub mod heic_macos;
 pub mod indexer;
+pub mod media_server;
 pub mod metadata;
 pub mod org;
 pub mod original;

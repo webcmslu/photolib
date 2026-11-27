@@ -14,6 +14,7 @@
   import SettingsButton from "./lib/SettingsButton.svelte";
   import { suppressDefaultMenu } from "./lib/contextMenu";
   import { errorText, locale, t } from "./lib/i18n";
+  import { inBrowser } from "./lib/platform";
 
   let library = $state<LibraryInfo | null>(null);
   let recents = $state<RecentLibrary[]>([]);
@@ -24,6 +25,11 @@
   let dropping = $state(false);
 
   onMount(() => {
+    // In a browser, the server has one library: open it straight away.
+    if (inBrowser) {
+      void open("");
+      return;
+    }
     refreshRecents();
     // A folder dropped on the window opens as a library, on the welcome
     // screen only: in a library the window has other things to do.

@@ -11,7 +11,7 @@
 -->
 <script lang="ts">
   import { errorText, t, tn } from "./i18n";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { appWindow as getCurrentWindow } from "./platform";
   import {
     applyEditToOriginal,
     autoEnhance,

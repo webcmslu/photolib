@@ -1,10 +1,41 @@
 // Typed wrappers around the Rust commands in src-tauri/src/lib.rs.
 import { t } from "./i18n";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import {
+  convertFileSrc as tauriFileSrc,
+  invoke as tauriInvoke,
+  type InvokeArgs,
+  type InvokeOptions,
+} from "@tauri-apps/api/core";
 import type { Edit, Enhance } from "./edit";
 import type { LabelColor } from "./labels";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { listen as tauriListen, type EventCallback, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { inBrowser } from "./platform";
+
+// In the desktop app, commands are Tauri commands. In a browser, served by
+// the Phototek server, they are `POST /api/<command>` with the same
+// arguments and results (see src-tauri/server/src/commands.rs).
+async function invoke<T>(command: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> {
+  if (!inBrowser) return tauriInvoke<T>(command, args, options);
+  const response = await fetch(`/api/${command}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args ?? {}),
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) throw body ?? response.statusText;
+  return body as T;
+}
+
+/** The URL of a thumbnail or a photo: a Tauri protocol, or the server's. */
+function convertFileSrc(path: string, protocol: string): string {
+  return inBrowser ? `/${protocol}/${path}` : tauriFileSrc(path, protocol);
+}
+
+/** Events from the app; in a browser, none arrive yet. */
+function listen<T>(event: string, handler: EventCallback<T>): Promise<UnlistenFn> {
+  return inBrowser ? Promise.resolve(() => {}) : tauriListen<T>(event, handler);
+}
 
 /** An opened library folder. Mirrors `LibraryInfo` in Rust. */
 export interface LibraryInfo {

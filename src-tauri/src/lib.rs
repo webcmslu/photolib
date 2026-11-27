@@ -1,7 +1,7 @@
 // The library code, shared with the NAS server (core/).
 use phototek_core::{
-    collections, db, duplicates, enhance, export, faces, fingerprint, geo, indexer, metadata, org,
-    original, people, similar, thumbs,
+    collections, db, duplicates, enhance, export, faces, fingerprint, geo, indexer, media_server,
+    metadata, org, original, people, similar, thumbs,
 };
 
 mod apple;
@@ -15,7 +15,6 @@ use camera_macos as camera;
 #[cfg(windows)]
 use camera_windows as camera;
 mod importer;
-mod media_server;
 mod recents;
 mod rename;
 

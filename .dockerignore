@@ -1,0 +1,8 @@
+# Only what src-tauri/server/Dockerfile copies is needed.
+node_modules
+dist
+src-tauri/target
+src-tauri/gen
+.git
+*.photoslibrary
+HANDOVER.md

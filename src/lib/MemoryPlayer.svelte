@@ -12,7 +12,7 @@
 -->
 <script lang="ts">
   import { t, tn } from "./i18n";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { appWindow as getCurrentWindow } from "./platform";
   import { onMount } from "svelte";
   import { photosPage, photoUrl, thumbUrl, todayDay, videoUrl, type Memory, type PhotoItem } from "./api";
   import { NO_EDIT } from "./edit";

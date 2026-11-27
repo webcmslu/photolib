@@ -1,0 +1,21 @@
+# Phototek server, for Docker Compose or a Portainer "stack".
+# Change the two folders on the left of the ":" to your own (see docs/server.md).
+services:
+  phototek:
+    image: phototek-server
+    container_name: phototek
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Your photos. ":ro" lets the server read them only.
+      - /volume1/Photos:/photos:ro
+      # The index, thumbnails and face models (a few GB for a large library).
+      - /volume1/Docker/phototek:/data
+    environment:
+      # The browser asks for it (any user name). Leave empty for no password.
+      PHOTOTEK_PASSWORD: ""
+      # Minutes between checks for new photos.
+      PHOTOTEK_SCAN_EVERY: "30"
+      # "1" to find and group the people in the photos.
+      PHOTOTEK_FACES: "1"
