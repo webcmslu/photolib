@@ -289,6 +289,8 @@
   let fromCollections = $state(false);
   /** The memory playing full screen. */
   let playing = $state<Memory | null>(null);
+  /** On a phone: the sidebar, shown as a drawer. */
+  let drawerOpen = $state(false);
   /** The memory being saved as a video. */
   let exportingMemory = $state<Memory | null>(null);
 
@@ -855,7 +857,10 @@
   const CELL_MIN = 70;
   const CELL_MAX = 360;
   /** The width the grid's cells aim for: the zoom level. */
-  let cellSize = $state(remembered("photolib.cellSize", 150, CELL_MIN, CELL_MAX));
+  // About four photos across on a phone, as in the Photos app.
+  let cellSize = $state(
+    remembered("photolib.cellSize", innerWidth <= 700 ? Math.max(CELL_MIN, Math.floor(innerWidth / 4.5)) : 150, CELL_MIN, CELL_MAX),
+  );
   $effect(() => localStorage.setItem("photolib.cellSize", String(cellSize)));
   /** The days on screen in the grid, shown under the title. */
   let shownRange = $state<{ oldest: number; newest: number } | null>(null);
@@ -1539,6 +1544,15 @@
 
 <div class="library">
   <header>
+    <!-- On a phone, the sidebar is a drawer behind this button. -->
+    <button
+      class="drawer-button"
+      onclick={() => (drawerOpen = !drawerOpen)}
+      aria-expanded={drawerOpen}
+      aria-label={t("Library sections")}
+    >
+      <svg viewBox="0 0 20 20" width="20" height="20" aria-hidden="true"><path d="M3 5.5h14M3 10h14M3 14.5h14" /></svg>
+    </button>
     {#if !inBrowser}<button class="link" onclick={onclose}>‹ Libraries</button>{/if}
     <strong class="name" title={library.path}>{library.name}</strong>
     <div class="search">
@@ -1687,7 +1701,20 @@
   {/if}
 
   <div class="body">
-    <nav aria-label={t("Library sections")} style:width="{sidebarWidth}px">
+    {#if drawerOpen}
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div class="drawer-backdrop" onclick={() => (drawerOpen = false)}></div>
+    {/if}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+    <nav
+      aria-label={t("Library sections")}
+      style:width="{sidebarWidth}px"
+      class:open={drawerOpen}
+      onclick={(event) => {
+        // Choosing a section closes the drawer (on a phone).
+        if ((event.target as HTMLElement).closest("button.row")) drawerOpen = false;
+      }}
+    >
       {#snippet icon(name: Icon)}
         <svg class="row-icon" viewBox="0 0 20 20" width="18" height="18" aria-hidden="true">
           {#each ICONS[name] as d, i (i)}<path {d} />{/each}
@@ -3072,6 +3099,89 @@
 
   .toolbar input {
     width: 280px;
+  }
+
+  .drawer-button,
+  .drawer-backdrop {
+    display: none;
+  }
+
+  .drawer-button {
+    flex: none;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .drawer-button svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+  }
+
+  /* A phone: the sidebar slides in from the left, the top bar keeps only
+     the search and the settings, and the toolbar wraps. */
+  @media (max-width: 700px) {
+    .drawer-button {
+      display: grid;
+    }
+
+    header {
+      gap: 6px;
+      padding: 6px 8px;
+    }
+
+    header .name,
+    header .status,
+    .keys-button,
+    .scan-buttons {
+      display: none;
+    }
+
+    nav {
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      z-index: 60;
+      width: min(300px, 85vw) !important;
+      padding-top: max(8px, env(safe-area-inset-top));
+      box-shadow: 4px 0 24px rgb(0 0 0 / 0.3);
+      transform: translateX(-105%);
+      transition: transform 0.22s ease;
+    }
+
+    nav.open {
+      transform: none;
+    }
+
+    .drawer-backdrop {
+      display: block;
+      position: fixed;
+      inset: 0;
+      z-index: 55;
+      background: rgb(0 0 0 / 0.4);
+    }
+
+    .resizer {
+      display: none;
+    }
+
+    .toolbar {
+      flex-wrap: wrap;
+      padding: 6px 10px;
+    }
+
+    .toolbar input {
+      width: 100%;
+    }
   }
 
   .tree-row {

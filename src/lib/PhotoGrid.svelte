@@ -570,13 +570,13 @@
           <span class="badge">▶ {photo.durationMs === null ? "" : formatDuration(photo.durationMs)}</span>
         {:else if photo?.liveVideo}
           <span class="badge">LIVE</span>
-        {:else if photo?.rawFile}
+        {:else if photo?.rawFile && cell.width >= 100}
           <!-- Shorter on small cells, so it leaves room for the heart, but a
                pair never reads "RAW" alone: that is a RAW file without a JPEG. -->
           <span class="badge"
             >{cell.width < 120 ? "+RAW" : rawPairLabel(photo.relPath, cell.width < 190)}</span
           >
-        {:else if photo && isRawPath(photo.relPath)}
+        {:else if photo && isRawPath(photo.relPath) && cell.width >= 100}
           <span class="badge">RAW</span>
         {/if}
         {#if photo && (photo.favorite || photo.rating > 0 || photo.label)}
