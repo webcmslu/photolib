@@ -223,7 +223,7 @@ fn attach_faces(conn: &Connection, file: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn open_in_memory() -> rusqlite::Result<Connection> {
     let conn = Connection::open_in_memory()?;
     migrate(&conn)?;
@@ -1561,7 +1561,7 @@ pub struct PhotoItem {
 }
 
 /// A slice of the listing, newest first (ties broken by path).
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 pub fn photos_page(
     conn: &Connection,
     listing: &Listing,

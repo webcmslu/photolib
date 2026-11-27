@@ -295,7 +295,7 @@ export function removeRecentLibrary(path: string): Promise<RecentLibrary[]> {
 
 // --- Indexing ---------------------------------------------------------------
 
-/** Mirrors `Progress` in src-tauri/src/indexer.rs. */
+/** Mirrors `Progress` in src-tauri/core/src/indexer.rs. */
 export interface ScanProgress {
   phase: "scanning" | "indexing" | "thumbnails" | "comparing" | "faces";
   /** Image files found so far by the folder walk. */
@@ -307,7 +307,7 @@ export interface ScanProgress {
   known: number;
 }
 
-/** Mirrors `ScanSummary` in src-tauri/src/indexer.rs. */
+/** Mirrors `ScanSummary` in src-tauri/core/src/indexer.rs. */
 export interface ScanSummary {
   total: number;
   added: number;
@@ -320,7 +320,7 @@ export interface ScanSummary {
   durationMs: number;
 }
 
-/** Mirrors `ThumbSummary` in src-tauri/src/thumbs.rs. */
+/** Mirrors `ThumbSummary` in src-tauri/core/src/thumbs.rs. */
 export interface ThumbSummary {
   generated: number;
   /** Files that are not decodable images. */
@@ -375,7 +375,7 @@ export function libraryStats(path: string): Promise<LibraryStats> {
  * `timeZone: "UTC"`.
  */
 
-/** One day of the timeline. Mirrors `DayGroup` in src-tauri/src/db.rs. */
+/** One day of the timeline. Mirrors `DayGroup` in src-tauri/core/src/db.rs. */
 export interface DayGroup {
   /** Days since 1970-01-01; null when sorted by name (one group for all). */
   day: number | null;
@@ -384,7 +384,7 @@ export interface DayGroup {
   videos: number;
 }
 
-/** Mirrors `PhotoItem` in src-tauri/src/db.rs. */
+/** Mirrors `PhotoItem` in src-tauri/core/src/db.rs. */
 export interface PhotoItem {
   fingerprint: string;
   relPath: string;
@@ -408,7 +408,7 @@ export interface PhotoItem {
   label: LabelColor | null;
 }
 
-/** Mirrors `FolderEntry` in src-tauri/src/db.rs. */
+/** Mirrors `FolderEntry` in src-tauri/core/src/db.rs. */
 export interface FolderEntry {
   /** Path relative to the library root; "" is the root itself. */
   folder: string;
@@ -416,7 +416,7 @@ export interface FolderEntry {
   count: number;
 }
 
-/** Mirrors `PhotoDetails` in src-tauri/src/db.rs. */
+/** Mirrors `PhotoDetails` in src-tauri/core/src/db.rs. */
 export interface PhotoDetails {
   relPath: string;
   fingerprint: string;
@@ -442,7 +442,7 @@ export interface PhotoDetails {
   place: string | null;
 }
 
-/** What a photo listing shows. Mirrors `Listing` in src-tauri/src/db.rs. */
+/** What a photo listing shows. Mirrors `Listing` in src-tauri/core/src/db.rs. */
 export type Listing =
   /** Every photo that is not hidden. */
   | { kind: "library" }
@@ -521,14 +521,14 @@ export type Only =
   | LabelColor;
 
 /** Day groups of a listing, newest first. */
-/** How the photo grid orders a listing. Mirrors `Order` in src-tauri/src/db.rs. */
+/** How the photo grid orders a listing. Mirrors `Order` in src-tauri/core/src/db.rs. */
 export type Order = "dateDesc" | "dateAsc" | "nameAsc" | "nameDesc";
 
 export function timeline(path: string, listing: Listing, order: Order = "dateDesc"): Promise<DayGroup[]> {
   return invoke("timeline", { path, listing, order });
 }
 
-/** Mirrors `MonthSummary` in src-tauri/src/db.rs. */
+/** Mirrors `MonthSummary` in src-tauri/core/src/db.rs. */
 export interface MonthSummary {
   year: number;
   /** 1 to 12. */
@@ -538,7 +538,7 @@ export interface MonthSummary {
   days: DaySummary[];
 }
 
-/** Mirrors `DaySummary` in src-tauri/src/db.rs. */
+/** Mirrors `DaySummary` in src-tauri/core/src/db.rs. */
 export interface DaySummary {
   /** Days since 1970-01-01, as in `DayGroup`. */
   day: number;
@@ -572,7 +572,7 @@ export function listFolders(path: string): Promise<FolderEntry[]> {
   return invoke("folders", { path });
 }
 
-/** How a photo was taken; mirrors `Shooting` in src-tauri/src/metadata.rs. */
+/** How a photo was taken; mirrors `Shooting` in src-tauri/core/src/metadata.rs. */
 export interface Shooting {
   lens: string | null;
   /** In mm, and the 35 mm equivalent. */
@@ -614,7 +614,7 @@ export function photoUrl(fingerprint: string): string {
   return convertFileSrc(fingerprint, "photo");
 }
 
-/** A group of photos taken close together. Mirrors `Cluster` in src-tauri/src/geo.rs. */
+/** A group of photos taken close together. Mirrors `Cluster` in src-tauri/core/src/geo.rs. */
 export interface MapCluster {
   /** Where the marker goes: the average position of the photos. */
   latitude: number;
@@ -650,7 +650,7 @@ export interface FacesStatus {
   downloadBytes: number;
 }
 
-/** Mirrors `Person` in src-tauri/src/people.rs. */
+/** Mirrors `Person` in src-tauri/core/src/people.rs. */
 export interface Person {
   /** `null` until someone names them. */
   name: string | null;
@@ -765,9 +765,9 @@ export function videoUrl(fingerprint: string): string {
 // --- Organization: favorites, hidden photos, albums ---------------------------
 //
 // These are shared by every computer that opens the library folder; see
-// src-tauri/src/org.rs for how.
+// src-tauri/core/src/org.rs for how.
 
-/** One change to the organization. Mirrors `Op` in src-tauri/src/org.rs. */
+/** One change to the organization. Mirrors `Op` in src-tauri/core/src/org.rs. */
 export type Op =
   | { op: "fav"; photo: string; on: boolean }
   | { op: "hide"; photo: string; on: boolean }
@@ -784,7 +784,7 @@ export type Op =
   /** A colour label; "" takes it away. */
   | { op: "label"; photo: string; color: LabelColor | "" };
 
-/** Mirrors `Album` in src-tauri/src/db.rs. */
+/** Mirrors `Album` in src-tauri/core/src/db.rs. */
 export interface Album {
   id: string;
   name: string;
@@ -815,7 +815,7 @@ export function syncLibrary(path: string): Promise<boolean> {
 
 // --- Similar shots -------------------------------------------------------------
 
-/** Mirrors `Shot` in src-tauri/src/similar.rs. */
+/** Mirrors `Shot` in src-tauri/core/src/similar.rs. */
 export interface SimilarShot {
   fingerprint: string;
   relPath: string;
@@ -858,10 +858,10 @@ export function similarGroups(path: string): Promise<SimilarGroup[]> {
 
 // --- Collections -----------------------------------------------------------------
 
-/** Mirrors `MemoryKind` in src-tauri/src/collections.rs. */
+/** Mirrors `MemoryKind` in src-tauri/core/src/collections.rs. */
 export type MemoryKind = "trip" | "event" | "onThisDay" | "person" | "together" | "season" | "year";
 
-/** Mirrors `Memory` in src-tauri/src/collections.rs. */
+/** Mirrors `Memory` in src-tauri/core/src/collections.rs. */
 export interface Memory {
   id: string;
   kind: MemoryKind;
@@ -898,7 +898,7 @@ export interface RecentDay {
   cover: string;
 }
 
-/** Mirrors `Collections` in src-tauri/src/collections.rs. */
+/** Mirrors `Collections` in src-tauri/core/src/collections.rs. */
 export interface Collections {
   /** Every memory, newest first. */
   memories: Memory[];

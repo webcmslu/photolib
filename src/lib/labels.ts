@@ -1,5 +1,5 @@
 // Star ratings and colour labels, shared through the library like
-// favorites. Mirrors `LABELS` in src-tauri/src/org.rs.
+// favorites. Mirrors `LABELS` in src-tauri/core/src/org.rs.
 
 import { t } from "./i18n";
 

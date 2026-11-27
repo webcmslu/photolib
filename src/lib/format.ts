@@ -133,7 +133,7 @@ export function rawPairLabel(relPath: string, compact = false): string {
   return `${extension === "JPG" ? "JPEG" : extension}${compact ? "+" : " + "}RAW`;
 }
 
-/** The RAW extensions, as in src-tauri/src/raw.rs. */
+/** The RAW extensions, as in src-tauri/core/src/raw.rs. */
 const RAW_EXTENSIONS = new Set(["cr2", "cr3", "nef", "nrw", "arw", "sr2", "dng", "raf", "orf", "rw2", "pef", "srw"]);
 
 /** Whether a file is a camera RAW file, by its extension. */

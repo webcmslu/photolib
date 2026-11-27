@@ -1,6 +1,6 @@
 // Edits change how a photo is shown, never its file: rotation, mirror, crop
 // and light/color adjustments are applied with CSS when the photo is drawn.
-// Mirrors `Edit` in src-tauri/src/org.rs.
+// Mirrors `Edit` in src-tauri/core/src/org.rs.
 
 export interface Edit {
   /** Clockwise rotation in degrees: 0, 90, 180 or 270. */
@@ -20,7 +20,7 @@ export interface Edit {
   enhance?: Enhance | null;
 }
 
-/** See `Enhance` in src-tauri/src/org.rs and enhance.rs. */
+/** See `Enhance` in src-tauri/core/src/org.rs and enhance.rs. */
 export interface Enhance {
   /** Red, green and blue black and white points, in thousandths. */
   black: [number, number, number];
@@ -57,7 +57,7 @@ export function isNeutral(edit: Edit): boolean {
 
 /**
  * The curve of one channel (0 red, 1 green, 2 blue) at `x` from 0 to 1.
- * Must match `curve` in src-tauri/src/enhance.rs.
+ * Must match `curve` in src-tauri/core/src/enhance.rs.
  */
 export function enhanceCurve(enhance: Enhance, channel: number, x: number): number {
   const black = enhance.black[channel] / 1000;

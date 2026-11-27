@@ -314,10 +314,7 @@ fn is_heic(source: &Path) -> bool {
 
 /// Decodes a photo at full size, the right way up (its EXIF `orientation`
 /// applied, unless the decoder already did).
-pub(crate) fn decode_upright(
-    source: &Path,
-    orientation: Option<u8>,
-) -> Result<RgbImage, ThumbError> {
+pub fn decode_upright(source: &Path, orientation: Option<u8>) -> Result<RgbImage, ThumbError> {
     let decoded = decode(source)?;
     let exif_orientation = orientation.filter(|_| !decoded.upright).unwrap_or(1);
     let mut image = DynamicImage::ImageRgb8(decoded.pixels);
@@ -425,7 +422,7 @@ fn flatten(image: DynamicImage) -> RgbImage {
     rgb
 }
 
-pub(crate) fn resize(source: RgbImage, width: u32, height: u32) -> Result<RgbImage, ThumbError> {
+pub fn resize(source: RgbImage, width: u32, height: u32) -> Result<RgbImage, ThumbError> {
     if source.dimensions() == (width, height) {
         return Ok(source);
     }

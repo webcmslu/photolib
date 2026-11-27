@@ -43,7 +43,7 @@ Formerly called Photolib. The shared folder in each library is still named
 - Milestone 10 (search): a search box that matches place, camera, folder
   and file names, years (`2024`), months (`2024-07`, `july`) and kinds
   (`video`, `live`, `raw`, `favorite`). Places are named offline from a
-  bundled GeoNames city list (`src-tauri/data/`).
+  bundled GeoNames city list (`src-tauri/core/data/`).
 - Milestone 11 (basic editing): rotate, mirror, crop and brightness /
   contrast / color adjustments in the viewer. Edits are instructions stored
   in the shared organization log and applied when a photo is drawn; the
@@ -134,7 +134,7 @@ the webview's own player: on Linux that needs `gstreamer1.0-libav`.
 npm install
 npm run tauri dev      # run the app with hot reload
 npm run check          # type-check the UI
-cd src-tauri && cargo test
+cd src-tauri && cargo test --workspace
 cargo test --release benchmark -- --ignored --nocapture   # 10k-file indexing benchmark
 # (`tools/photos-schema.sh` prints an Apple Photos database's structure)
 # check RAW support against your own camera files:
@@ -171,17 +171,19 @@ To build installers locally: `npm run tauri build`.
   grid, `Viewer.svelte` the viewer, and `pages.svelte.ts` loads the photo
   listing page by page.
 - `src-tauri/src/lib.rs` holds the Tauri commands and starts background scans.
+  The rest of `src-tauri/src/` is desktop-only: imports from phones and
+  cameras (`importer.rs`, `camera_*.rs`), Apple Photos (`apple.rs`), the
+  recent libraries (`recents.rs`) and the Linux video server (`media_server.rs`).
+- `src-tauri/core/` is the library itself, with no user interface, shared
+  with the NAS server. In `src-tauri/core/src/`:
 - `indexer.rs` walks the folder; `fingerprint.rs` and `metadata.rs` read each
-  file; `db.rs` is the SQLite index; `thumbs.rs` makes and caches thumbnails;
-  `recents.rs` is the recent libraries list.
+  file; `db.rs` is the SQLite index; `thumbs.rs` makes and caches thumbnails.
 - `raw.rs` finds the preview in RAW files; `video.rs` reads MP4/MOV
-  metadata; `frames.rs` grabs a video frame for thumbnails; `media_server.rs`
-  serves videos to the Linux webview, which can't play them from `photo://`.
+  metadata; `frames.rs` grabs a video frame for thumbnails.
 - `edit.ts`, `EditedImage.svelte` and `CropBox.svelte` draw and make edits.
 - `faces.rs` runs the face models; `people.rs` searches photos, groups faces
   and names people (`PeopleView.svelte`). Faces are stored in `faces.db`
   next to the index, so rebuilding the index keeps them.
-- `apple.rs` reads an Apple Photos library for the import.
 - `search.rs` turns a search into SQL; `places.rs` names the nearest town.
 - `geo.rs` clusters photo positions for the map (`MapView.svelte`, Leaflet).
 - `org.rs` is the shared organization: the `.photolib` log format and the

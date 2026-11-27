@@ -3303,8 +3303,8 @@ dependencies = [
  "getrandom 0.3.4",
  "image",
  "kamadak-exif",
- "libheif-rs",
  "percent-encoding",
+ "phototek-core",
  "rayon",
  "rusqlite",
  "serde",
@@ -3321,6 +3321,27 @@ dependencies = [
  "ureq",
  "walkdir",
  "windows 0.61.3",
+]
+
+[[package]]
+name = "phototek-core"
+version = "0.1.19"
+dependencies = [
+ "blake3",
+ "chrono",
+ "fast_image_resize",
+ "getrandom 0.3.4",
+ "image",
+ "kamadak-exif",
+ "libheif-rs",
+ "rayon",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tract-onnx",
+ "ureq",
+ "walkdir",
 ]
 
 [[package]]

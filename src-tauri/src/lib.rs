@@ -1,39 +1,23 @@
+// The library code, shared with the NAS server (core/).
+use phototek_core::{
+    collections, db, duplicates, enhance, export, faces, fingerprint, geo, indexer, metadata, org,
+    original, people, similar, thumbs,
+};
+
 mod apple;
 #[cfg(target_os = "macos")]
 mod camera_macos;
 #[cfg(windows)]
 mod camera_windows;
-mod collections;
 /// Phones and cameras connected by USB, where the system has a way to read them.
 #[cfg(target_os = "macos")]
 use camera_macos as camera;
 #[cfg(windows)]
 use camera_windows as camera;
-mod db;
-mod duplicates;
-mod enhance;
-mod export;
-mod faces;
-mod fingerprint;
-mod frames;
-mod geo;
-#[cfg(target_os = "macos")]
-mod heic_macos;
 mod importer;
-mod indexer;
 mod media_server;
-mod metadata;
-mod org;
-mod original;
-mod people;
-mod places;
-mod raw;
 mod recents;
 mod rename;
-mod search;
-mod similar;
-mod thumbs;
-mod video;
 
 use std::collections::HashMap;
 use std::fs;

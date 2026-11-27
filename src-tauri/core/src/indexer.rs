@@ -568,7 +568,7 @@ fn unix_ms(time: SystemTime) -> i64 {
 
 /// Converts a real instant to the "wall-clock as if UTC" encoding used for
 /// `sort_date`, using this computer's time zone.
-pub(crate) fn wall_clock_ms(unix_ms: i64) -> i64 {
+pub fn wall_clock_ms(unix_ms: i64) -> i64 {
     DateTime::from_timestamp_millis(unix_ms)
         .map(|utc| {
             utc.with_timezone(&Local)

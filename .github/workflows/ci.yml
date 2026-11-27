@@ -42,13 +42,13 @@ jobs:
 
       - name: Format
         working-directory: src-tauri
-        run: cargo fmt --check
+        run: cargo fmt --all --check
       - name: Lint
         working-directory: src-tauri
-        run: cargo clippy --all-targets
+        run: cargo clippy --workspace --all-targets
       - name: Test
         working-directory: src-tauri
-        run: cargo test
+        run: cargo test --workspace
 
   # Windows-only code (camera_windows.rs, phones on USB) is otherwise only
   # compiled by the release workflow. Built like the Windows release:
@@ -74,7 +74,7 @@ jobs:
 
       - name: Lint
         working-directory: src-tauri
-        run: cargo clippy --all-targets --no-default-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
       - name: Test
         working-directory: src-tauri
-        run: cargo test --no-default-features
+        run: cargo test --workspace --no-default-features

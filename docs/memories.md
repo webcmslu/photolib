@@ -12,7 +12,7 @@ library.
 
 | Part | File |
 |---|---|
-| Finding and choosing (backend) | `src-tauri/src/collections.rs` |
+| Finding and choosing (backend) | `src-tauri/core/src/collections.rs` |
 | Page | `src/lib/CollectionsView.svelte` |
 | Player | `src/lib/MemoryPlayer.svelte` |
 | Titles and music | `src/lib/memories.ts` |
@@ -231,7 +231,7 @@ The thresholds are constants at the top of `collections.rs`. To try changes
 on a real library without the app, run:
 
 ```sh
-cd src-tauri
+cd src-tauri/core
 PHOTOTEK_COLLECTIONS=<folder with index.db and faces.db> \
 PHOTOTEK_COLLECTIONS_JSON=/tmp/collections.json \
 cargo test collections_of_a_real_library -- --nocapture
