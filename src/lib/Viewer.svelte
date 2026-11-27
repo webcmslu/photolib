@@ -454,13 +454,45 @@
   let drag: { pointerId: number; startX: number; startY: number; x: number; y: number } | null =
     null;
 
+  // On a touch screen: swipe sideways to the next or previous photo, down
+  // to close, and pinch to zoom.
+  const touches = new Map<number, { x: number; y: number }>();
+  let swipe: { pointerId: number; startX: number; startY: number } | null = null;
+  let pinch: { distance: number; scale: number } | null = null;
+  const touchSpread = () => {
+    const [a, b] = [...touches.values()];
+    return { distance: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  };
+
   function onpointerdown(event: PointerEvent) {
+    if (event.pointerType === "touch") {
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      stage.setPointerCapture(event.pointerId);
+      if (touches.size === 2) {
+        pinch = { distance: touchSpread().distance, scale };
+        swipe = null;
+        drag = null;
+        return;
+      }
+      if (scale <= 1) {
+        swipe = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY };
+        return;
+      }
+    }
     if (scale <= 1 || event.button !== 0) return;
     drag = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, x, y };
     stage.setPointerCapture(event.pointerId);
   }
 
   function onpointermove(event: PointerEvent) {
+    if (touches.has(event.pointerId)) {
+      touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (pinch && touches.size >= 2) {
+        const spread = touchSpread();
+        zoomTo((pinch.scale * spread.distance) / Math.max(1, pinch.distance), spread.x, spread.y);
+        return;
+      }
+    }
     if (!drag || drag.pointerId !== event.pointerId) return;
     x = drag.x + event.clientX - drag.startX;
     y = drag.y + event.clientY - drag.startY;
@@ -468,6 +500,15 @@
   }
 
   function onpointerup(event: PointerEvent) {
+    touches.delete(event.pointerId);
+    if (pinch && touches.size < 2) pinch = null;
+    if (swipe?.pointerId === event.pointerId) {
+      const dx = event.clientX - swipe.startX;
+      const dy = event.clientY - swipe.startY;
+      swipe = null;
+      if (event.type === "pointerup" && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) go(dx < 0 ? 1 : -1);
+      else if (event.type === "pointerup" && dy > 110 && dy > Math.abs(dx) * 1.5) onclose();
+    }
     if (drag?.pointerId === event.pointerId) drag = null;
   }
 
