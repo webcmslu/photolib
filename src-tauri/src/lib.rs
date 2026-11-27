@@ -776,6 +776,16 @@ fn gear_options(
     db::gear_options(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
 }
 
+/// The town most of a listing's photos were taken in, to name a pinned place.
+#[tauri::command(async)]
+fn listing_place(
+    path: String,
+    listing: db::Listing,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    db::listing_place(&open_index(&state, &path)?, &listing).map_err(|e| e.to_string())
+}
+
 /// Day groups of a listing, newest first.
 #[tauri::command(async)]
 fn timeline(
@@ -1603,6 +1613,7 @@ pub fn run() {
             close_library,
             library_stats,
             timeline,
+            listing_place,
             photos_page,
             shapes,
             release_asset_suffix,

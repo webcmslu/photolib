@@ -29,6 +29,8 @@
     syncLibrary,
     timeline,
     shapes,
+    listPeople,
+    listingPlace,
     type Album,
     type DayGroup,
     type FolderEntry,
@@ -45,6 +47,7 @@
     type ThumbSummary,
     type Gear,
     type Memory,
+    type Person,
   } from "./api";
   import CollectionsView, { type PinnedTile } from "./CollectionsView.svelte";
   import MemoryPlayer from "./MemoryPlayer.svelte";
@@ -303,6 +306,7 @@
   async function loadSidebar() {
     try {
       [albums, folders] = await Promise.all([listAlbums(library.path), listFolders(library.path)]);
+      void loadPeople();
       // The album or folder being shown may be gone (deleted on another computer).
       const gone =
         (listing.kind === "album" && !albums.some((a) => a.id === (listing as { album: string }).album)) ||
@@ -356,6 +360,36 @@
   const mediaListing = (only: Only): Listing => ({ kind: "only", within: { kind: "library" }, only });
   const sameListing = (a: Listing, b: Listing) => JSON.stringify(a) === JSON.stringify(b);
 
+  /**
+   * People, places and other listings pinned from People, the Map or a
+   * listing's toolbar, by their sidebar id; kept per computer. A person is
+   * kept by name: their face groups change as faces are grouped again.
+   */
+  interface PinnedListing {
+    label: string;
+    icon: Icon;
+    listing: Listing;
+    person?: string;
+  }
+  let pinnedListings = $state<Record<string, PinnedListing>>(readStored("photolib.pinnedListings", {}));
+  /** The named people, to find a pinned person's face groups. */
+  let namedPeople = $state.raw<Person[]>([]);
+  /** The names of the favourite people (the heart on their card); kept per computer. */
+  let favoritePeople = $state<string[]>(readStored("photolib.favoritePeople", []));
+  function toggleFavoritePerson(name: string) {
+    favoritePeople = favoritePeople.includes(name)
+      ? favoritePeople.filter((other) => other !== name)
+      : [...favoritePeople, name];
+    store("photolib.favoritePeople", favoritePeople);
+  }
+  async function loadPeople() {
+    try {
+      namedPeople = (await listPeople(library.path)).filter((person) => person.name);
+    } catch {
+      // Faces not searched on this computer: pinned people stay as they were.
+    }
+  }
+
   /** A row of the sidebar that can be pinned: an album, a filter or a view. */
   interface SidebarItem {
     id: string;
@@ -402,6 +436,21 @@
       ...albums.map((album) =>
         ofListing(`album:${album.id}`, { kind: "album", album: album.id }, album.name, "album", album.count),
       ),
+      ...Object.entries(pinnedListings).map(([id, pin]) => {
+        if (pin.person === undefined) return ofListing(id, pin.listing, pin.label, pin.icon);
+        const name = pin.person;
+        const person = namedPeople.find((candidate) => candidate.name === name);
+        const target: Listing = person ? { kind: "person", clusters: person.clusters } : pin.listing;
+        return {
+          ...ofListing(id, target, name, "person"),
+          open: () => {
+            personName = name;
+            personHidden = person?.hidden ?? false;
+            listing = target;
+            section = "photos";
+          },
+        };
+      }),
     ];
     return new Map(items.map((item) => [item.id, item]));
   });
@@ -431,9 +480,78 @@
     entry.selected &&
     (place === (clickedIn === "pinned" && openGroups.pinned ? "pinned" : "home") || !pinned.includes(entry.id));
   function togglePin(id: string) {
-    pinned = pinned.includes(id) ? pinned.filter((other) => other !== id) : [...pinned, id];
+    const unpinning = pinned.includes(id);
+    pinned = unpinning ? pinned.filter((other) => other !== id) : [...pinned, id];
     store("photolib.pinned", pinned);
+    if (unpinning && id in pinnedListings) {
+      const { [id]: _, ...rest } = pinnedListings;
+      pinnedListings = rest;
+      store("photolib.pinnedListings", pinnedListings);
+    }
   }
+  /** Pins a person, a place or another listing, or unpins it. */
+  function togglePinListing(id: string, pin: PinnedListing) {
+    if (!pinned.includes(id)) {
+      pinnedListings = { ...pinnedListings, [id]: pin };
+      store("photolib.pinnedListings", pinnedListings);
+    }
+    togglePin(id);
+  }
+  const personPinId = (name: string) => `person:${name}`;
+  function togglePinPerson(person: Person) {
+    if (!person.name) return;
+    togglePinListing(personPinId(person.name), {
+      label: person.name,
+      icon: "person",
+      listing: { kind: "person", clusters: person.clusters },
+      person: person.name,
+    });
+  }
+  /** Pins a part of the map, named after the town most of its photos were taken in. */
+  async function togglePinArea(area: Listing & { kind: "area" }) {
+    const id = `area:${[area.south, area.west, area.north, area.east].map((value) => value.toFixed(5)).join(",")}`;
+    if (pinned.includes(id)) return togglePin(id);
+    let place: string | null = null;
+    try {
+      place = await listingPlace(library.path, area);
+    } catch {
+      // Named "Photos from the map" instead.
+    }
+    togglePinListing(id, { label: place?.split(",")[0].trim() || t("Photos from the map"), icon: "map", listing: area });
+  }
+  /** What the toolbar's Pin button pins for the listing shown, if anything. */
+  const listingPin = $derived.by((): { id: string; pin: () => void } | null => {
+    const shown = listing;
+    switch (shown.kind) {
+      case "person":
+        if (!personName) return null;
+        return {
+          id: personPinId(personName),
+          pin: () => togglePinPerson({ name: personName, clusters: shown.clusters } as Person),
+        };
+      case "area": {
+        const id = `area:${[shown.south, shown.west, shown.north, shown.east].map((value) => value.toFixed(5)).join(",")}`;
+        return { id, pin: () => void togglePinArea(shown) };
+      }
+      case "days": {
+        const id = `days:${shown.from}-${shown.to}`;
+        const label = listingTitle ?? formatDayRange(shown.from, shown.to);
+        return { id, pin: () => togglePinListing(id, { label, icon: "photo", listing: shown }) };
+      }
+      case "folder": {
+        const id = `folder:${shown.folder}`;
+        const label = shown.folder.split("/").pop() || t("Top level");
+        return { id, pin: () => togglePinListing(id, { label, icon: "folder", listing: shown }) };
+      }
+      case "search": {
+        const id = `search:${shown.query}`;
+        const label = shown.query;
+        return { id, pin: () => togglePinListing(id, { label, icon: "photo", listing: shown }) };
+      }
+      default:
+        return null;
+    }
+  });
   const pinEntry = (id: string): MenuEntry => ({
     label: pinned.includes(id) ? t("Unpin") : t("Pin to Sidebar"),
     action: () => togglePin(id),
@@ -1737,6 +1855,7 @@
               listing = area;
               section = "photos";
             }}
+            onpin={(area) => void togglePinArea(area)}
           />
         </div>
       {:else if section === "collections"}
@@ -1764,6 +1883,7 @@
               personHidden = person.hidden;
               openFromCollections({ kind: "person", clusters: person.clusters }, person.name ?? "");
             }}
+            {favoritePeople}
             onplay={(memory) => {
               // Straight from the click, so the memory's music may play.
               unlockAudio();
@@ -1775,6 +1895,10 @@
         <div class="map">
           {#key facesRevision}
           <PeopleView
+            favorites={favoritePeople}
+            ontogglefavorite={toggleFavoritePerson}
+            pinned={(name) => pinned.includes(personPinId(name))}
+            ontogglepin={togglePinPerson}
             libraryPath={library.path}
             {revision}
             canEdit={online}
@@ -1920,6 +2044,27 @@
                 : t("Leave this person out of the People screen (e.g. a stranger)")}
             >
               {personHidden ? t("Show in People") : t("Hide from People")}
+            </button>
+            {#if personName}
+              {@const favorite = favoritePeople.includes(personName)}
+              <button
+                class="secondary icon-button"
+                class:on={favorite}
+                onclick={() => personName && toggleFavoritePerson(personName)}
+                aria-pressed={favorite}
+                aria-label={favorite ? t("Remove from Favorites") : t("Add to Favorites")}
+                title={favorite ? t("Remove from Favorites") : t("Add to Favorites")}
+              >
+                <svg viewBox="0 0 20 20" width="15" height="15" aria-hidden="true">
+                  <path d={ICONS.heart[0]} />
+                </svg>
+              </button>
+            {/if}
+          {/if}
+          {#if listingPin}
+            {@const pinnedHere = pinned.includes(listingPin.id)}
+            <button class="secondary" onclick={listingPin.pin} aria-pressed={pinnedHere}>
+              {pinnedHere ? t("Unpin") : t("Pin to Sidebar")}
             </button>
           {/if}
           <span class="spacer"></span>
@@ -3039,5 +3184,23 @@
 
   .keys-button:hover {
     background: var(--surface-hover);
+  }
+
+  .icon-button {
+    display: inline-grid;
+    place-items: center;
+    padding-inline: 8px;
+  }
+
+  .icon-button svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linejoin: round;
+  }
+
+  .icon-button.on svg {
+    fill: var(--danger);
+    stroke: var(--danger);
   }
 </style>

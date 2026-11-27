@@ -926,3 +926,8 @@ export function todayDay(): number {
   const now = new Date();
   return Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 86_400_000);
 }
+
+/** The town most of a listing's photos were taken in ("Cattolica, Italy"), to name a pinned place. */
+export function listingPlace(path: string, listing: Listing): Promise<string | null> {
+  return invoke("listing_place", { path, listing });
+}

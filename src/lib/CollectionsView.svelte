@@ -56,26 +56,34 @@
     onsection: (section: "people" | "map" | "duplicates" | "similar") => void;
     onperson: (person: Person) => void;
     onplay: (memory: Memory) => void;
+    /** The names of the favourite people, shown first. */
+    favoritePeople: string[];
   }
-  let { libraryPath, revision, albums, pinned, onlisting, onsection, onperson, onplay }: Props = $props();
+  let { libraryPath, revision, albums, pinned, onlisting, onsection, onperson, onplay, favoritePeople }: Props =
+    $props();
 
   /** The whole page, or all the memories, or all the trips. */
   let page = $state<"home" | "memories" | "trips">("home");
   const today = todayDay();
   let data = $state.raw<Collections | null>(null);
-  let people = $state.raw<Person[]>([]);
+  let everyone = $state.raw<Person[]>([]);
+  // Favourites first, then the people with the most photos.
+  const people = $derived(
+    everyone
+      .filter((person) => person.name && !person.hidden)
+      .map((person) => ({ person, favorite: favoritePeople.includes(person.name!) }))
+      .sort((a, b) => Number(b.favorite) - Number(a.favorite) || b.person.photos - a.person.photos)
+      .slice(0, 20),
+  );
   let error = $state<string | null>(null);
   let pinnedCovers = $state<Record<string, string>>({});
 
   async function load() {
     try {
-      const [found, everyone] = await Promise.all([collections(libraryPath, today), listPeople(libraryPath)]);
+      const [found, listed] = await Promise.all([collections(libraryPath, today), listPeople(libraryPath)]);
       remembered.set(libraryPath, { today, data: found });
       data = found;
-      people = everyone
-        .filter((person) => person.name && !person.hidden)
-        .sort((a, b) => b.photos - a.photos)
-        .slice(0, 20);
+      everyone = listed;
       error = null;
     } catch (e) {
       error = errorText(e);
@@ -315,7 +323,7 @@
         {@render header(t("People"), () => onsection("people"))}
         <div class="row-wrap">
           <div class="row">
-            {#each people as person (person.clusters[0])}
+            {#each people as { person, favorite } (person.clusters[0])}
               <button class="person" onclick={() => onperson(person)}>
                 <span class="face">
                   <EditedImage
@@ -326,7 +334,9 @@
                     fit="cover"
                   />
                 </span>
-                <span class="tile-name">{person.name}</span>
+                <span class="tile-name">
+                  {#if favorite}<span class="favorite" aria-label={t("Favorites")}>♥</span>{/if}{person.name}
+                </span>
               </button>
             {/each}
           </div>
@@ -818,6 +828,11 @@
     }
   }
   .error {
+    color: var(--danger);
+  }
+
+  .favorite {
+    margin-right: 4px;
     color: var(--danger);
   }
 </style>

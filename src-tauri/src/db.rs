@@ -1393,6 +1393,21 @@ pub fn timeline(conn: &Connection, listing: &Listing) -> rusqlite::Result<Vec<Da
     timeline_in(conn, listing, Order::DateDesc)
 }
 
+/// The town most of a listing's photos were taken in ("Cattolica, Italy"),
+/// to name a part of the map; `None` when none of them has a place.
+pub fn listing_place(conn: &Connection, listing: &Listing) -> rusqlite::Result<Option<String>> {
+    let (filter, param) = listing.filter();
+    conn.query_row(
+        &format!(
+            "SELECT place FROM photos {filter} AND place IS NOT NULL AND place <> ''
+             GROUP BY place ORDER BY COUNT(*) DESC LIMIT 1"
+        ),
+        [param],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 /// [`timeline`] for a listing in the given order.
 pub fn timeline_in(
     conn: &Connection,
@@ -3509,6 +3524,20 @@ mod tests {
         assert_eq!(details.place.as_deref(), Some("Paris, France"));
         let nowhere = photo_details(&conn, "trips/lake.heic").unwrap().unwrap();
         assert_eq!(nowhere.place, None);
+
+        // A pinned part of the map is named after its town; a part without
+        // one has no name.
+        let area = |south, north| Listing::Area {
+            south,
+            west: -10.0,
+            north,
+            east: 10.0,
+        };
+        assert_eq!(
+            listing_place(&conn, &area(40.0, 50.0)).unwrap().as_deref(),
+            Some("Paris, France")
+        );
+        assert_eq!(listing_place(&conn, &area(20.0, 35.0)).unwrap(), None);
     }
 
     #[test]

@@ -25,6 +25,7 @@
   import { onMount } from "svelte";
   import { mapClusters, thumbUrl, type Listing, type MapCluster } from "./api";
   import { formatNumber } from "./format";
+  import { showMenu } from "./contextMenu";
 
   interface Props {
     libraryPath: string;
@@ -32,8 +33,10 @@
     revision: number;
     /** Called with the listing of a clicked marker's photos. */
     onopen: (area: Listing) => void;
+    /** Pins the part of the map a marker stands for. */
+    onpin: (area: Listing & { kind: "area" }) => void;
   }
-  let { libraryPath, revision, onopen }: Props = $props();
+  let { libraryPath, revision, onopen, onpin }: Props = $props();
 
   let container: HTMLDivElement;
   let map: L.Map | undefined;
@@ -139,17 +142,28 @@
       title: label,
       alt: label,
       keyboard: true,
-    }).on("click", () => {
-      // Float rounding must not leave a photo just outside its own rectangle.
-      const margin = 1e-7;
-      onopen({
-        kind: "area",
-        south: cluster.south - margin,
-        west: cluster.west - margin,
-        north: cluster.north + margin,
-        east: cluster.east + margin,
+    })
+      .on("click", () => onopen(areaOf(cluster)))
+      .on("contextmenu", (event: L.LeafletMouseEvent) => {
+        const area = areaOf(cluster);
+        showMenu(event.originalEvent, [
+          { label: t("Open"), action: () => onopen(area) },
+          "-",
+          { label: t("Pin to Sidebar"), action: () => onpin(area) },
+        ]);
       });
-    });
+  }
+
+  function areaOf(cluster: MapCluster): Listing & { kind: "area" } {
+    // Float rounding must not leave a photo just outside its own rectangle.
+    const margin = 1e-7;
+    return {
+      kind: "area",
+      south: cluster.south - margin,
+      west: cluster.west - margin,
+      north: cluster.north + margin,
+      east: cluster.east + margin,
+    };
   }
 </script>
 

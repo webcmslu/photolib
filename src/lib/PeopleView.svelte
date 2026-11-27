@@ -3,7 +3,9 @@
   with their name on it, as in Apple Photos; the others a smaller round
   picture below, with "Add name". Clicking a person lists their photos;
   clicking a name (or "Rename…" in the menu) names them. Giving two people
-  the same name merges them.
+  the same name merges them. The heart on a card makes them a favourite,
+  listed first (here and in Collections); the menu also pins them to the
+  sidebar.
 
   Finding faces needs two model files that are downloaded once; until then
   this screen explains that and offers the download.
@@ -36,8 +38,15 @@
     /** True while faces are being searched. */
     searching: boolean;
     onopen: (person: Person) => void;
+    /** The names of the favourite people, listed first. */
+    favorites: string[];
+    ontogglefavorite: (name: string) => void;
+    /** Whether a named person is pinned to the sidebar. */
+    pinned: (name: string) => boolean;
+    ontogglepin: (person: Person) => void;
   }
-  let { libraryPath, revision, canEdit, searching, onopen }: Props = $props();
+  let { libraryPath, revision, canEdit, searching, onopen, favorites, ontogglefavorite, pinned, ontogglepin }: Props =
+    $props();
 
   let status = $state<FacesStatus | null>(null);
   let people = $state<Person[] | null>(null);
@@ -51,7 +60,13 @@
   let showHidden = $state(false);
   const hiddenCount = $derived(people?.filter((person) => person.hidden).length ?? 0);
   const listed = $derived(people?.filter((person) => showHidden || !person.hidden) ?? []);
-  const named = $derived(listed.filter((person) => person.name));
+  const isFavorite = (person: Person) => person.name !== null && favorites.includes(person.name);
+  // Favourites first; otherwise in the order the backend gives (most photos first).
+  const named = $derived(
+    listed
+      .filter((person) => person.name)
+      .sort((a, b) => Number(isFavorite(b)) - Number(isFavorite(a))),
+  );
   const unnamed = $derived(listed.filter((person) => !person.name));
 
   /**
@@ -89,6 +104,18 @@
       { label: t("Open"), action: () => onopen(person) },
       "-",
       { label: person.name ? t("Rename…") : t("Name…"), enabled: canEdit, action: () => startNaming(person) },
+      ...(person.name
+        ? [
+            {
+              label: isFavorite(person) ? t("Remove from Favorites") : t("Add to Favorites"),
+              action: () => ontogglefavorite(person.name!),
+            },
+            {
+              label: pinned(person.name) ? t("Unpin") : t("Pin to Sidebar"),
+              action: () => ontogglepin(person),
+            },
+          ]
+        : []),
       {
         label: person.hidden ? t("Show in People") : t("Hide from People"),
         action: () => setHidden(person, !person.hidden),
@@ -203,6 +230,21 @@
           {person.hidden ? t("Show") : t("Hide")}
         </button>
       {/snippet}
+      {#snippet heartButton(person: Person)}
+        {@const on = isFavorite(person)}
+        <button
+          class="heart"
+          class:on
+          onclick={() => ontogglefavorite(person.name!)}
+          aria-pressed={on}
+          aria-label={on ? t("Remove from Favorites") : t("Add to Favorites")}
+          title={on ? t("Remove from Favorites") : t("Add to Favorites")}
+        >
+          <svg viewBox="0 0 20 20" width="16" height="16" aria-hidden="true">
+            <path d="M10 16.5S3 12.3 3 7.7a3.6 3.6 0 0 1 7-1.6 3.6 3.6 0 0 1 7 1.6c0 4.6-7 8.8-7 8.8z" />
+          </svg>
+        </button>
+      {/snippet}
       {#snippet nameField(person: Person)}
         <form
           onsubmit={(event) => {
@@ -227,6 +269,7 @@
           {#each named as person (person.clusters[0])}
             <li class:hidden-person={person.hidden}>
               {@render hideButton(person)}
+              {@render heartButton(person)}
               <button
                 class="card"
                 onclick={() => onopen(person)}
@@ -463,6 +506,43 @@
 
   li:hover .hide,
   .hide:focus-visible {
+    opacity: 1;
+  }
+
+  /* The heart, at the top left of a card: always shown once on. */
+  .heart {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 0.35);
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
+  .heart svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linejoin: round;
+  }
+
+  .heart.on svg {
+    fill: currentColor;
+  }
+
+  li:hover .heart,
+  .heart:focus-visible,
+  .heart.on {
     opacity: 1;
   }
 
