@@ -108,6 +108,33 @@ impl Library {
         wake.notify_one();
     }
 
+    /// Where the organization logs are: the library's shared one, and the
+    /// server's own while the library is read-only.
+    pub fn org_paths(&self) -> OrgPaths {
+        OrgPaths::new(&self.root, &self.data_dir.join("local-log"))
+    }
+
+    /// True when the server can write its log into the library, so that its
+    /// changes reach the desktop apps (false with a read-only mount: they
+    /// then stay on the server).
+    pub fn writable(&self) -> bool {
+        self.org_paths().shared_is_writable(&self.device)
+    }
+
+    /// Records changes (favourites, albums, names…) as this device, like the
+    /// desktop apps do. The photo files themselves are never touched.
+    pub fn record(&self, conn: &mut rusqlite::Connection, ops: Vec<org::Op>) -> Result<(), String> {
+        org::record(conn, &self.org_paths(), &self.device, self.writable(), ops)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Reads the changes the other devices made since the last time.
+    pub fn sync(&self, conn: &mut rusqlite::Connection) -> Result<bool, String> {
+        org::sync(conn, &self.org_paths(), &self.device, self.writable())
+            .map(|read| read > 0)
+            .map_err(|e| e.to_string())
+    }
+
     /// Lets at most a few decodings run at a time.
     pub fn decoding(&self) -> Permit<'_> {
         self.on_demand.acquire()
@@ -138,10 +165,7 @@ impl Library {
         let cancel = AtomicBool::new(false);
         let quiet = |_| {};
         let mut conn = db::open(&self.index_path())?;
-        let paths = OrgPaths::new(&self.root, &self.data_dir.join("local-log"));
-        // Read only for now: the server merges what the desktop apps wrote,
-        // and writes nothing of its own into the library.
-        org::sync(&mut conn, &paths, &self.device, false)?;
+        org::sync(&mut conn, &self.org_paths(), &self.device, self.writable())?;
         let summary = indexer::scan_with(
             &self.root,
             &mut conn,

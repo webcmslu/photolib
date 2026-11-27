@@ -21,9 +21,9 @@
 //! | `PHOTOTEK_SCAN_EVERY` | Minutes between checks for new photos: `0` only at start, `off` never | `30` |
 //! | `PHOTOTEK_FACES`      | `1` to find and group faces                | off        |
 //!
-//! For now the server only shows the library: changes (favourites, albums,
-//! names) are made in the desktop app and reach the server through the
-//! library's shared logs.
+//! Changes made in a browser (favourites, albums, hidden photos, names) go
+//! into the library's shared logs (`.photolib/devices/`), as any device's,
+//! so the desktop apps see them; the photo files are never changed.
 
 mod commands;
 mod library;

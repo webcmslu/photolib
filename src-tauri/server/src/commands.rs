@@ -4,7 +4,10 @@
 //! browser. A failed command answers 400 with its message, as a JSON string.
 //!
 //! The library is the server's own: the `path` the interface sends along is
-//! ignored. Commands that change the library are not served yet.
+//! ignored. Changes (favourites, albums, hidden photos, people's names) are
+//! recorded in the library's shared logs like any device's; the photo files
+//! themselves are never changed, and imports, exports and edits that write
+//! files stay in the desktop app.
 
 use std::sync::Arc;
 
@@ -12,7 +15,7 @@ use axum::extract::{Path as UrlPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phototek_core::{collections, db, duplicates, faces, geo, metadata, people, similar};
+use phototek_core::{collections, db, duplicates, faces, geo, metadata, org, people, similar};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -91,6 +94,35 @@ struct ClustersArgs {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct OpsArgs {
+    ops: Vec<org::Op>,
+}
+
+#[derive(Deserialize)]
+struct NameArgs {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct HiddenArgs {
+    clusters: Vec<i64>,
+    hidden: bool,
+}
+
+#[derive(Deserialize)]
+struct KeyPhotoArgs {
+    clusters: Vec<i64>,
+    name: String,
+    photo: String,
+}
+
+#[derive(Deserialize)]
+struct RejectArgs {
+    cluster: i64,
+    name: String,
+}
+
 /// Mirrors `LibraryInfo` in the desktop app.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,8 +137,7 @@ fn library_info(library: &Library) -> LibraryInfo {
     LibraryInfo {
         path: library.root().to_string_lossy().into_owned(),
         name: library.name(),
-        // Changes are made in the desktop app for now.
-        writable: false,
+        writable: library.writable(),
         online: true,
     }
 }
@@ -222,9 +253,55 @@ fn run(library: &Library, command: &str, args: Value) -> Result<Value, String> {
             answer(people::suggestions(&index()?, &a.clusters, &a.name).map_err(failed)?)
         }
 
-        // Whatever changes the library, for now only in the desktop app.
+        // Changes, recorded in the library's logs.
+        "apply_ops" => {
+            let a: OpsArgs = parse(args)?;
+            library.record(&mut index()?, a.ops)?;
+            Ok(Value::Null)
+        }
+        "create_album" => {
+            let a: NameArgs = parse(args)?;
+            let album = org::new_id().map_err(failed)?;
+            library.record(
+                &mut index()?,
+                vec![org::Op::AlbumName {
+                    album: album.clone(),
+                    name: a.name,
+                }],
+            )?;
+            answer(album)
+        }
+        "sync_library" => answer(library.sync(&mut index()?)?),
+        "name_person" => {
+            let a: ClustersArgs = parse(args)?;
+            let mut conn = index()?;
+            let ops = people::naming_ops(&conn, &a.clusters, a.name.trim()).map_err(failed)?;
+            library.record(&mut conn, ops)?;
+            Ok(Value::Null)
+        }
+        "make_key_photo" => {
+            let a: KeyPhotoArgs = parse(args)?;
+            let mut conn = index()?;
+            let op = people::key_photo_op(&conn, &a.clusters, a.name.trim(), &a.photo)
+                .map_err(failed)?
+                .ok_or("This person's face isn't found in this photo.")?;
+            library.record(&mut conn, vec![op])?;
+            Ok(Value::Null)
+        }
+        "set_person_hidden" => {
+            let a: HiddenArgs = parse(args)?;
+            db::set_face_groups_hidden(&mut index()?, &a.clusters, a.hidden).map_err(failed)?;
+            Ok(Value::Null)
+        }
+        "reject_suggestion" => {
+            let a: RejectArgs = parse(args)?;
+            db::add_not_person(&index()?, a.cluster, &a.name).map_err(failed)?;
+            Ok(Value::Null)
+        }
+
+        // Imports, exports and edits that write files: in the desktop app.
         _ => Err(format!(
-            "\"{command}\" can't be done on the server yet: use the Phototek app on a computer."
+            "\"{command}\" can't be done on the server: use the Phototek app on a computer."
         )),
     }
 }
@@ -261,7 +338,19 @@ mod tests {
 
         // Bad arguments and changes are refused, with a message.
         assert!(run(&library, "timeline", json!({})).is_err());
-        let refused = run(&library, "apply_ops", json!({})).unwrap_err();
-        assert!(refused.contains("apply_ops"));
+        let refused = run(&library, "export_photos", json!({})).unwrap_err();
+        assert!(refused.contains("export_photos"));
+
+        // Changes go into the library's logs and show at once.
+        let album = run(
+            &library,
+            "create_album",
+            json!({ "path": "", "name": "Noël" }),
+        )
+        .unwrap();
+        let albums = run(&library, "albums", json!({ "path": "" })).unwrap();
+        assert_eq!(albums[0]["id"], album);
+        assert_eq!(albums[0]["name"], "Noël");
+        assert!(photos.path().join(".photolib/devices").is_dir());
     }
 }

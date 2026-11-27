@@ -12,10 +12,12 @@ Samsung's Tizen. Later the mobile and TV apps will use the same server.
 
 The desktop apps (Mac, Windows, Linux) don't change and don't need it.
 
-> **For now the server only shows the library.** Favourites, albums,
-> hidden photos and people's names are changed in the desktop app. The
-> server reads them from the library's shared logs (`.photolib/`) at each
-> scan.
+> **Changes:** favourites, albums, hidden photos and people's names can be
+> changed in the browser. The server records them in the library's shared
+> logs (`.photolib/devices/`), like every desktop app, so everyone sees them,
+> and it reads the apps' changes at each scan. It never changes, moves or
+> deletes a photo file. Imports, exports and edits applied to files stay in
+> the desktop app.
 
 ## What's in it
 
@@ -82,8 +84,6 @@ Then open http://localhost:8080.
 
 ## Next
 
-- **Changes from the server:** favourites, albums, names. The server would
-  write its own log into `.photolib/devices/`, like any other device.
 - **Live updates:** server-sent events in place of the app's Tauri events
   (scan progress, new photos).
 - **A published image:** a multi-architecture image on a registry, so the

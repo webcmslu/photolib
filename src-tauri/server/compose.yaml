@@ -8,8 +8,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # Your photos. ":ro" lets the server read them only.
-      - /volume1/Photos:/photos:ro
+      # Your photos. The server writes only in their ".photolib" folder (the
+      # changes made in a browser, shared with the desktop apps). Add ":ro"
+      # at the end to keep those changes on the server instead.
+      - /volume1/Photos:/photos
       # The index, thumbnails and face models (a few GB for a large library).
       - /volume1/Docker/phototek:/data
     environment:
