@@ -107,7 +107,11 @@ screenshot-like file name.
 
 ## 4. Picking a memory's photos
 
-1. Videos and screenshots are left out.
+1. Screenshots are left out, and so are videos, except short clips (2 to
+   60 s). At most one slide in five is a clip, and a clip is never the
+   cover. In the player, clips play muted under the music for up to 10 s,
+   and Live Photos play their moment once before holding still. Saved
+   videos keep the photos only.
 2. Only the best shot of each burst is kept.
 3. Near-duplicates are dropped. These are shots taken less than 2 minutes
    apart whose visual fingerprints differ by 8 bits or fewer (out of 64).
@@ -238,7 +242,7 @@ the JSON file, together with people and albums.
 
 ## Ideas for later
 
-- Memories with video clips (also in the saved videos).
+- Clips in the saved videos too.
 - Music chosen by the user.
 - Choosing home by hand.
 - Trips before GPS, from folder names that are place names.

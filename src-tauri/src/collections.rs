@@ -49,6 +49,10 @@ const NEAR_DUPLICATE_MS: i64 = 120_000;
 /// Featured photos offered at a time (the page shows the first few).
 const FEATURED: usize = 60;
 const RECENT_DAYS: usize = 12;
+/// Videos this long (in ms) play in memories, as short clips.
+const CLIP_MS: std::ops::RangeInclusive<i64> = 2_000..=60_000;
+/// At most one slide in this many is a clip.
+const CLIP_SHARE: usize = 5;
 
 /// Everything on the Collections page that is not already elsewhere.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -139,6 +143,8 @@ struct Shot {
     country: Option<String>,
     folder: String,
     video: bool,
+    /// A short video, which can play in a memory.
+    clip: bool,
     screenshot: bool,
     burst: Option<String>,
     visual: Option<u64>,
@@ -148,9 +154,14 @@ struct Shot {
 }
 
 impl Shot {
-    /// Can be shown in a memory or as a featured photo.
+    /// Can be shown as a photo: in a memory, as its cover or as a featured photo.
     fn showable(&self) -> bool {
         !self.video && !self.screenshot
+    }
+
+    /// Can play in a memory: a photo, or a short clip.
+    fn in_memory(&self) -> bool {
+        self.showable() || self.clip
     }
 }
 
@@ -241,7 +252,8 @@ impl Library {
 
         let mut stmt = conn.prepare(&format!(
             "SELECT fingerprint, sort_date, date_source = 'exif', latitude, longitude, place,
-                    folder, kind, media, burst, width, height, lens, camera_model, rel_path
+                    folder, kind, media, burst, width, height, lens, camera_model, rel_path,
+                    duration_ms
              FROM photos WHERE {}
              ORDER BY sort_date, rel_path",
             db::visible_condition()
@@ -265,6 +277,7 @@ impl Library {
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, String>(14)?,
                 ),
+                row.get::<_, Option<i64>>(15)?,
             ))
         })?;
         let mut shots = Vec::new();
@@ -281,8 +294,10 @@ impl Library {
                 media,
                 burst,
                 (width, height, lens, camera_model, rel_path),
+                duration,
             ) = row?;
             let video = kind == 1;
+            let clip = video && duration.is_some_and(|ms| CLIP_MS.contains(&ms));
             let screenshot = !video
                 && ((media as u32 & crate::metadata::SCREENSHOT) != 0
                     || (camera_model.is_none() && looks_like_screenshot(&rel_path)));
@@ -330,6 +345,7 @@ impl Library {
                 country,
                 folder,
                 video,
+                clip,
                 screenshot,
                 burst,
                 people,
@@ -467,7 +483,7 @@ impl Library {
         let mut best_of_burst: HashMap<&str, usize> = HashMap::new();
         for &i in shots {
             let shot = &self.shots[i];
-            if !shot.showable() {
+            if !shot.in_memory() {
                 continue;
             }
             if let Some(burst) = shot.burst.as_deref() {
@@ -505,27 +521,37 @@ impl Library {
             }
         }
         let wanted = ((distinct.len() as f64).sqrt() * 2.5).clamp(12.0, 45.0) as usize;
-        if distinct.len() <= wanted {
-            return distinct;
-        }
-        // The best of each of `wanted` equal stretches.
-        (0..wanted)
-            .filter_map(|bucket| {
-                let start = bucket * distinct.len() / wanted;
-                let end = (bucket + 1) * distinct.len() / wanted;
-                distinct[start..end].iter().copied().max_by(|&a, &b| {
+        let buckets = wanted.min(distinct.len());
+        // The best of each of `buckets` equal stretches, with a clip now and
+        // then (they play muted, under the music) but mostly photos.
+        let clips_allowed = buckets / CLIP_SHARE;
+        let mut clips = 0;
+        let mut chosen = Vec::with_capacity(buckets);
+        for bucket in 0..buckets {
+            let start = bucket * distinct.len() / buckets;
+            let end = (bucket + 1) * distinct.len() / buckets;
+            let best = distinct[start..end]
+                .iter()
+                .copied()
+                .filter(|&i| !self.shots[i].clip || clips < clips_allowed)
+                .max_by(|&a, &b| {
                     self.shots[a]
                         .score
                         .total_cmp(&self.shots[b].score)
                         .then(b.cmp(&a))
-                })
-            })
-            .collect()
+                });
+            if let Some(best) = best {
+                clips += usize::from(self.shots[best].clip);
+                chosen.push(best);
+            }
+        }
+        chosen
     }
 
     fn cover(&self, photos: &[usize]) -> Option<String> {
         photos
             .iter()
+            .filter(|&&i| self.shots[i].showable())
             .max_by(|&&a, &&b| {
                 let rank = |i: usize| {
                     let shot = &self.shots[i];

@@ -5,13 +5,16 @@
   spot. Upright photos sit on a blurred copy of themselves. At the end it
   offers to play again or to show all the memory's photos.
 
+  Short clips play muted, under the music, for up to ten seconds; Live
+  Photos come alive for a moment before they hold still.
+
   Keys: Space pauses, ← and → step back and forward, M mutes, Esc ends it.
 -->
 <script lang="ts">
   import { t, tn } from "./i18n";
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
-  import { photosPage, photoUrl, thumbUrl, todayDay, type Memory, type PhotoItem } from "./api";
+  import { photosPage, photoUrl, thumbUrl, todayDay, videoUrl, type Memory, type PhotoItem } from "./api";
   import { NO_EDIT } from "./edit";
   import EditedImage from "./EditedImage.svelte";
   import { memorySubtitle, memoryTitle, musicWanted, playMusic, setMusicWanted } from "./memories";
@@ -29,6 +32,11 @@
 
   const TITLE_MS = 4200;
   const SLIDE_MS = 4600;
+  /** A clip plays this long at most. */
+  const CLIP_MS = 10_000;
+  /** How long a photo or clip stays. */
+  const slideMs = (photo: PhotoItem | undefined) =>
+    photo?.video ? Math.min(CLIP_MS, Math.max(SLIDE_MS, photo.durationMs ?? SLIDE_MS)) : SLIDE_MS;
   /** Longest wait for the full-size file before showing the preview instead. */
   const LOAD_LIMIT_MS = 2500;
 
@@ -61,6 +69,8 @@
 
   /** Resolves with the full-size URL once loaded, or the preview's after a while. */
   function preload(photo: PhotoItem): Promise<string> {
+    // A clip starts loading as it shows.
+    if (photo.video) return Promise.resolve(videoUrl(photo.fingerprint));
     const known = loaded.get(photo.fingerprint);
     if (known) return known;
     const promise = new Promise<string>((resolve) => {
@@ -108,7 +118,7 @@
     position = to;
     // The next one loads while this one shows.
     if (photos[to + 1]) void preload(photos[to + 1]);
-    schedule(SLIDE_MS);
+    schedule(slideMs(photo));
   }
 
   function schedule(ms: number) {
@@ -119,7 +129,7 @@
   function togglePause() {
     paused = !paused;
     if (paused) clearTimeout(timer);
-    else if (position < photos.length) schedule(position < 0 ? TITLE_MS / 2 : SLIDE_MS / 2);
+    else if (position < photos.length) schedule(position < 0 ? TITLE_MS / 2 : slideMs(photos[position]) / 2);
     wake();
   }
 
@@ -164,6 +174,13 @@
     wake();
   }
 
+  /** Keeps a clip playing or paused with the memory. */
+  function playing(video: HTMLVideoElement, paused: boolean) {
+    const apply = (paused: boolean) => (paused ? video.pause() : void video.play().catch(() => {}));
+    apply(paused);
+    return { update: apply };
+  }
+
   /** Upright photos (and very wide ones) are shown whole, on a blurred copy. */
   const whole = (photo: PhotoItem) => {
     let width = photo.width ?? 4;
@@ -191,7 +208,7 @@
     wake();
     photosPage(libraryPath, { kind: "picked", fingerprints: memory.photos }, "dateAsc", 0, memory.photos.length)
       .then((items) => {
-        photos = items.filter((item) => !item.video);
+        photos = items;
         if (photos[0]) void preload(photos[0]);
       })
       .catch(() => (photos = []));
@@ -235,15 +252,42 @@
         {#if whole(layer.photo)}
           <img class="backdrop" src={thumbUrl(layer.photo.fingerprint, "preview")} alt="" draggable="false" />
         {/if}
-        <div class="drift {layer.drift}" class:paused style:animation-duration="{SLIDE_MS + 1600}ms">
-          <EditedImage
+        {#if layer.photo.video}
+          <!-- svelte-ignore a11y_media_has_caption -->
+          <video
+            class="clip"
+            class:whole={whole(layer.photo)}
             src={layer.src}
-            edit={layer.photo.edit ?? NO_EDIT}
-            width={layer.photo.width}
-            height={layer.photo.height}
-            fit={whole(layer.photo) ? "contain" : "cover"}
-          />
-        </div>
+            muted
+            autoplay
+            playsinline
+            use:playing={paused}
+          ></video>
+        {:else}
+          <div class="drift {layer.drift}" class:paused style:animation-duration="{SLIDE_MS + 1600}ms">
+            <EditedImage
+              src={layer.src}
+              edit={layer.photo.edit ?? NO_EDIT}
+              width={layer.photo.width}
+              height={layer.photo.height}
+              fit={whole(layer.photo) ? "contain" : "cover"}
+            />
+            {#if layer.photo.liveVideo && !layer.photo.edit}
+              <!-- The Live Photo's moment, once, then the still photo. -->
+              <!-- svelte-ignore a11y_media_has_caption -->
+              <video
+                class="live"
+                class:whole={whole(layer.photo)}
+                src={videoUrl(layer.photo.liveVideo)}
+                muted
+                autoplay
+                playsinline
+                onended={(event) => event.currentTarget.classList.add("over")}
+                onerror={(event) => event.currentTarget.classList.add("over")}
+              ></video>
+            {/if}
+          </div>
+        {/if}
       </div>
     {/if}
   {/each}
@@ -274,7 +318,7 @@
           class:done={i < position}
           class:running={i === position}
           class:paused
-          style:animation-duration="{SLIDE_MS}ms"
+          style:animation-duration="{slideMs(photo)}ms"
         ></span>
       </span>
     {/each}
@@ -644,5 +688,24 @@
     .title-photo {
       animation: none;
     }
+  }
+
+  .clip,
+  .live {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .clip.whole,
+  .live.whole {
+    object-fit: contain;
+  }
+  .live {
+    transition: opacity 0.6s;
+  }
+  .live:global(.over) {
+    opacity: 0;
   }
 </style>
