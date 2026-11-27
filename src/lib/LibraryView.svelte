@@ -3135,7 +3135,7 @@
 
     header {
       gap: 6px;
-      padding: 6px 8px;
+      padding: max(6px, env(safe-area-inset-top)) 8px 6px;
     }
 
     header .name,

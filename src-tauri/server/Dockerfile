@@ -16,6 +16,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY index.html vite.config.ts svelte.config.js tsconfig.json ./
 COPY src ./src
+COPY public ./public
 COPY app-icon.svg ./
 RUN npm run build
 
