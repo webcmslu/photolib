@@ -16,6 +16,8 @@
 //! | `red`, `blue`… (label names) | photos with that colour label        |
 //! | `rated`, `★★★`               | photos with a rating (at least ★★★)  |
 //!
+//! | `beach`, `plage`, `strand`…   | photos showing it (see clip.rs)       |
+//!
 //! The French and German words work too, whatever the app's language:
 //! `juillet`, `juli`, `vidéo`, `favoris`, `rouge`, `gelb`, `bewertet`…
 
@@ -88,8 +90,8 @@ const OTHER_LABELS: &[(&str, &str)] = &[
 /// The SQL condition for a search, to put after `WHERE`. An empty search
 /// matches nothing.
 pub fn condition(query: &str) -> String {
-    let words: Vec<String> = query
-        .split_whitespace()
+    let words: Vec<String> = crate::clip::search_words(query)
+        .into_iter()
         .map(|word| word.to_lowercase())
         .take(12) // more than anyone types; keeps the SQL small
         .collect();
@@ -101,10 +103,17 @@ pub fn condition(query: &str) -> String {
 }
 
 fn word_condition(word: &str) -> String {
-    let text = text_condition(word);
-    match meaning(word) {
-        Some(meaning) => format!("({meaning} OR {text})"),
-        None => text,
+    let mut either = Vec::new();
+    either.extend(meaning(word));
+    let concepts = crate::clip::concepts_for(word);
+    if !concepts.is_empty() {
+        either.push(crate::clip::condition(&concepts));
+    }
+    either.push(text_condition(word));
+    if either.len() == 1 {
+        either.pop().unwrap_or_default()
+    } else {
+        format!("({})", either.join(" OR "))
     }
 }
 
@@ -291,6 +300,16 @@ mod tests {
         assert!(meaning("gelb").unwrap().contains("value = 'yellow'"));
         assert!(meaning("favoris").is_some());
         assert_eq!(meaning("canon"), None);
+    }
+
+    #[test]
+    fn words_for_what_photos_show() {
+        let sql = condition("plage");
+        assert!(sql.contains("concept IN ('beach')"), "{sql}");
+        assert!(sql.contains("'%plage%'"), "{sql}");
+        let sql = condition("salle de bain");
+        assert!(sql.contains("concept IN ('bathroom')"), "{sql}");
+        assert!(!condition("canon").contains("content.tag"));
     }
 
     #[test]

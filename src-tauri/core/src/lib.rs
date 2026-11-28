@@ -2,6 +2,7 @@
 //! index of a photo folder, thumbnails, faces and people, memories and
 //! trips, the map and search. Nothing here knows about a user interface.
 
+pub mod clip;
 pub mod collections;
 pub mod db;
 pub mod duplicates;
@@ -16,6 +17,7 @@ pub mod heic_macos;
 pub mod indexer;
 pub mod media_server;
 pub mod metadata;
+mod models;
 pub mod org;
 pub mod original;
 pub mod people;

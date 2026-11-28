@@ -3,8 +3,8 @@
 
 // The library code, shared with the NAS server (core/).
 use phototek_core::{
-    collections, db, duplicates, enhance, export, faces, geo, indexer, media_server, metadata, org,
-    original, people, similar, thumbs,
+    clip, collections, db, duplicates, enhance, export, faces, geo, indexer, media_server,
+    metadata, org, original, people, similar, thumbs,
 };
 
 use crate::{apple, importer, recents, rename};
@@ -48,6 +48,8 @@ struct AppState {
     on_demand: Limiter,
     /// The face models, loaded the first time they are needed.
     face_finder: Mutex<Option<Arc<faces::FaceFinder>>>,
+    /// The search-by-content model, loaded the first time it is needed.
+    content_model: Mutex<Option<Arc<clip::ContentModel>>>,
     /// Where the viewer loads videos from when the webview can't play them
     /// from `photo://` (Linux; see media_server.rs). `None` elsewhere.
     media_base: Option<String>,
@@ -319,6 +321,7 @@ fn run_scan(
             // need for the library to be reachable.
             similar::hash_pending(&mut conn, cache, cancel, &on_progress)?;
             find_people(app, library_path, &mut conn, cache, cancel, &on_progress)?;
+            find_content(&state, &mut conn, cache, cancel, &on_progress)?;
             return Err(e);
         }
         Err(e) => return Err(e),
@@ -339,12 +342,43 @@ fn run_scan(
     }
 
     // Then what is worked out from the thumbnails: which photos look alike,
-    // and last, only if the user switched it on, the faces.
+    // and last, only if the user switched them on, the faces and what the
+    // photos show.
     if !thumbnails.cancelled {
         similar::hash_pending(&mut conn, cache, cancel, &on_progress)?;
         find_people(app, library_path, &mut conn, cache, cancel, &on_progress)?;
+        find_content(&state, &mut conn, cache, cancel, &on_progress)?;
     }
     Ok((summary, thumbnails))
+}
+
+/// If search by content is switched on: finds what the photos not looked
+/// at yet show.
+fn find_content(
+    state: &AppState,
+    conn: &mut rusqlite::Connection,
+    cache: &ThumbCache,
+    cancel: &AtomicBool,
+    on_progress: &(dyn Fn(indexer::Progress) + Sync),
+) -> rusqlite::Result<()> {
+    if let Some(model) = content_model(state) {
+        clip::embed_pending(conn, cache, &model, cancel, on_progress)?;
+    }
+    Ok(())
+}
+
+/// The loaded search-by-content model, or `None` if it is not switched on
+/// (the model was never downloaded) or can't be loaded.
+fn content_model(state: &AppState) -> Option<Arc<clip::ContentModel>> {
+    let mut slot = state.content_model.lock().unwrap();
+    if clip::switched_off(&state.data_dir) {
+        *slot = None; // frees the model's memory
+        return None;
+    }
+    if slot.is_none() && clip::model_present(&state.data_dir) {
+        *slot = clip::ContentModel::load(&state.data_dir).ok().map(Arc::new);
+    }
+    slot.clone()
 }
 
 /// If face grouping is switched on: looks for faces in the photos not
@@ -995,6 +1029,45 @@ fn disable_faces(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Whether search by content is on, as for the faces.
+#[tauri::command(async)]
+fn content_status(state: State<'_, AppState>) -> FacesStatus {
+    let downloaded = clip::model_present(&state.data_dir);
+    FacesStatus {
+        enabled: downloaded && !clip::switched_off(&state.data_dir),
+        downloaded,
+        download_bytes: clip::DOWNLOAD_BYTES,
+    }
+}
+
+/// Switches search by content on: downloads the model (the UI hears the
+/// bytes received so far in `content-download` events), then scans the open
+/// library again so that its photos are looked at.
+#[tauri::command(async)]
+fn enable_content(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    clip::set_switched_off(&state.data_dir, false)
+        .map_err(|e| format!("Couldn't save the setting: {e}"))?;
+    clip::download_model(&state.data_dir, &|received| {
+        let _ = app.emit("content-download", received);
+    })
+    .map_err(|e| format!("Couldn't download the search model: {e}"))?;
+    let open = state.open_library.lock().unwrap().clone();
+    if let Some(open) = open {
+        start_scan(&app, &open.path, indexer::Mode::Changes);
+    }
+    Ok(())
+}
+
+/// Switches search by content off: no more photos are looked at, and what
+/// was found stays searchable.
+#[tauri::command(async)]
+fn disable_content(state: State<'_, AppState>) -> Result<(), String> {
+    clip::set_switched_off(&state.data_dir, true)
+        .map_err(|e| format!("Couldn't save the setting: {e}"))?;
+    *state.content_model.lock().unwrap() = None;
+    Ok(())
+}
+
 /// The people found in a library.
 #[tauri::command(async)]
 fn people(path: String, state: State<'_, AppState>) -> Result<Vec<people::Person>, String> {
@@ -1546,6 +1619,7 @@ pub fn run() {
             };
             app.manage(AppState {
                 face_finder: Mutex::new(None),
+                content_model: Mutex::new(None),
                 job_cancel: Arc::new(AtomicBool::new(false)),
                 media_base,
                 device,
@@ -1632,6 +1706,9 @@ pub fn run() {
             faces_status,
             enable_faces,
             disable_faces,
+            content_status,
+            enable_content,
+            disable_content,
             person_suggestions,
             make_key_photo,
             person_faces,

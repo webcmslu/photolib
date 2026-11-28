@@ -21,3 +21,6 @@ services:
       PHOTOTEK_SCAN_EVERY: "30"
       # "1" to find and group the people in the photos.
       PHOTOTEK_FACES: "1"
+      # "1" to find what the photos show, for search ("beach", "chien"…).
+      # The first pass takes long on a NAS: a day or two for 60,000 photos.
+      PHOTOTEK_CONTENT: "1"

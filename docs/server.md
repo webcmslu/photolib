@@ -44,6 +44,7 @@ The desktop apps (Mac, Windows, Linux) don't change and don't need it.
 | `PHOTOTEK_PASSWORD` | Asked by the browser (any user name) | none |
 | `PHOTOTEK_SCAN_EVERY` | Minutes between scans; `0` = at start only; `off` = only with "Check for new" | `30` |
 | `PHOTOTEK_FACES` | `1` = find and group faces (downloads the models, 39 MB, once) | off |
+| `PHOTOTEK_CONTENT` | `1` = find what photos show, for search: "beach", "chien", "Geburtstag"… (downloads the model, 352 MB, once; see [search.md](search.md)) | off |
 
 ## Install on an ASUSTOR NAS
 

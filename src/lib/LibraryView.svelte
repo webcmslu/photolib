@@ -255,6 +255,9 @@
       if (progress?.phase === "faces") {
         return t("Finding faces: {done} of {total}", { done: progress.done, total: progress.total });
       }
+      if (progress?.phase === "content") {
+        return t("Finding what photos show: {done} of {total}", { done: progress.done, total: progress.total });
+      }
       if (progress?.phase === "comparing") {
         return t("Comparing photos: {done} of {total}", { done: progress.done, total: progress.total });
       }

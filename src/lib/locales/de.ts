@@ -577,6 +577,13 @@ const de: Record<string, string> = {
   "Connecting…": "Verbinden …",
   "Connect": "Verbinden",
   "Your photos, from the Phototek server on your NAS.": "Ihre Fotos, vom Phototek-Server auf Ihrem NAS.",
+  "Finding what photos show: {done} of {total}": "Bildinhalte werden erkannt: {done} von {total}",
+  "Set on the Phototek server (PHOTOTEK_FACES).": "Wird auf dem Phototek-Server eingestellt (PHOTOTEK_FACES).",
+  "Set on the Phototek server (PHOTOTEK_CONTENT).": "Wird auf dem Phototek-Server eingestellt (PHOTOTEK_CONTENT).",
+  "Find what photos show: a beach, a dog, a birthday…": "Erkennen, was Fotos zeigen: einen Strand, einen Hund, einen Geburtstag …",
+  "Then type what you're looking for in the search box, in English, French or German.": "Geben Sie dann ins Suchfeld ein, was Sie suchen, auf Deutsch, Englisch oder Französisch.",
+  "Everything happens on this computer: no photo leaves it.": "Alles geschieht auf diesem Computer: Kein Foto verlässt ihn.",
+  "Switching it on downloads a model file ({size}) once.": "Beim Einschalten wird einmalig eine Modelldatei ({size}) heruntergeladen.",
   "Connect to a Phototek server…": "Mit einem Phototek-Server verbinden …",
   "Phototek servers": "Phototek-Server",
 };

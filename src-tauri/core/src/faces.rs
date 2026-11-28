@@ -13,11 +13,13 @@
 //! known fingerprints before use.
 
 use std::fs;
-use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::Path;
 
 use image::RgbImage;
 use tract_onnx::prelude::*;
+
+use crate::models::{self, ModelFile};
 
 /// The side of the square picture the detector looks at.
 const DETECT_SIDE: u32 = 640;
@@ -39,17 +41,6 @@ const REFERENCE_POINTS: [(f32, f32); 5] = [
     (41.5493, 92.3655),
     (70.7299, 92.2041),
 ];
-
-struct ModelFile {
-    name: &'static str,
-    /// Where it can be downloaded, tried in this order: the original, then
-    /// our own copies, in case the original goes away. Any copy is checked
-    /// against `hash`, so a mirror can only serve the very same file.
-    urls: &'static [&'static str],
-    /// BLAKE3 hash of the file.
-    hash: &'static str,
-    size: u64,
-}
 
 const DETECTOR: ModelFile = ModelFile {
     name: "face_detection_yunet_2023mar.onnx",
@@ -74,16 +65,9 @@ const RECOGNIZER: ModelFile = ModelFile {
 /// Total download size, for the UI.
 pub const DOWNLOAD_BYTES: u64 = DETECTOR.size + RECOGNIZER.size;
 
-fn models_dir(app_data_dir: &Path) -> PathBuf {
-    app_data_dir.join("models")
-}
-
 /// True once both model files are on this computer.
 pub fn models_present(app_data_dir: &Path) -> bool {
-    [&DETECTOR, &RECOGNIZER].iter().all(|model| {
-        fs::metadata(models_dir(app_data_dir).join(model.name))
-            .is_ok_and(|meta| meta.len() == model.size)
-    })
+    models::present(app_data_dir, &[&DETECTOR, &RECOGNIZER])
 }
 
 /// The file whose presence means the user switched face grouping off in the
@@ -113,67 +97,7 @@ pub fn set_switched_off(app_data_dir: &Path, off: bool) -> io::Result<()> {
 /// Downloads the model files that are missing. `on_progress` gets the bytes
 /// received so far, out of [`DOWNLOAD_BYTES`].
 pub fn download_models(app_data_dir: &Path, on_progress: &dyn Fn(u64)) -> io::Result<()> {
-    let dir = models_dir(app_data_dir);
-    fs::create_dir_all(&dir)?;
-    let mut done = 0u64;
-    for model in [&DETECTOR, &RECOGNIZER] {
-        let target = dir.join(model.name);
-        if fs::metadata(&target).is_ok_and(|meta| meta.len() == model.size) {
-            done += model.size;
-            on_progress(done);
-            continue;
-        }
-        let mut failures = Vec::new();
-        let mut found = None;
-        for url in model.urls {
-            match fetch(model, url, &|got| on_progress(done + got)) {
-                Ok(bytes) => {
-                    found = Some(bytes);
-                    break;
-                }
-                Err(e) => failures.push(format!("{url}: {e}")),
-            }
-        }
-        let Some(bytes) = found else {
-            return Err(io::Error::other(format!(
-                "download failed: {}",
-                failures.join("; ")
-            )));
-        };
-        let tmp = target.with_extension("part");
-        fs::write(&tmp, &bytes)?;
-        fs::rename(&tmp, &target)?;
-        done += model.size;
-    }
-    Ok(())
-}
-
-/// Downloads one copy of `model` from `url`; only the expected file is
-/// returned.
-fn fetch(model: &ModelFile, url: &str, on_progress: &dyn Fn(u64)) -> io::Result<Vec<u8>> {
-    let response = ureq::get(url)
-        .timeout(std::time::Duration::from_secs(600))
-        .call()
-        .map_err(io::Error::other)?;
-    let mut reader = response.into_reader().take(model.size + 1);
-    let mut bytes = Vec::with_capacity(model.size as usize);
-    let mut chunk = vec![0u8; 256 * 1024];
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            break;
-        }
-        bytes.extend_from_slice(&chunk[..read]);
-        on_progress(bytes.len() as u64);
-    }
-    // Never run a file that is not exactly the one we expect.
-    if blake3::hash(&bytes).to_hex().as_str() != model.hash {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("{} is not the expected file", model.name),
-        ));
-    }
-    Ok(bytes)
+    models::download(app_data_dir, &[&DETECTOR, &RECOGNIZER], on_progress)
 }
 
 type Model = std::sync::Arc<TypedRunnableModel>;
@@ -207,7 +131,7 @@ impl FaceFinder {
     pub fn load(app_data_dir: &Path) -> Result<Self, String> {
         let load = |model: &ModelFile, side: u32| -> TractResult<Model> {
             tract_onnx::onnx()
-                .model_for_path(models_dir(app_data_dir).join(model.name))?
+                .model_for_path(models::path(app_data_dir, model))?
                 .with_input_fact(0, f32::fact([1, 3, side as usize, side as usize]).into())?
                 .into_optimized()?
                 .into_runnable()
@@ -429,6 +353,7 @@ pub fn similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     /// Prints the fingerprints to put in `DETECTOR` and `RECOGNIZER` when
     /// the model files change: `PHOTOTEK_DATA=<dir> cargo test model_hashes -- --ignored --nocapture`
@@ -437,7 +362,7 @@ mod tests {
     fn model_hashes() {
         let data = std::env::var("PHOTOTEK_DATA").expect("set PHOTOTEK_DATA");
         for model in [&DETECTOR, &RECOGNIZER] {
-            let bytes = fs::read(models_dir(Path::new(&data)).join(model.name)).unwrap();
+            let bytes = fs::read(models::path(Path::new(&data), model)).unwrap();
             println!(
                 "{} {} {}",
                 model.name,

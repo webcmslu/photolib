@@ -362,7 +362,7 @@ export function removeRecentLibrary(path: string): Promise<RecentLibrary[]> {
 
 /** Mirrors `Progress` in src-tauri/core/src/indexer.rs. */
 export interface ScanProgress {
-  phase: "scanning" | "indexing" | "thumbnails" | "comparing" | "faces";
+  phase: "scanning" | "indexing" | "thumbnails" | "comparing" | "faces" | "content";
   /** Image files found so far by the folder walk. */
   discovered: number;
   /** Items the current phase has to process, and how many are done. */
@@ -749,6 +749,26 @@ export function enableFaces(): Promise<void> {
 /** Calls `handler` with the bytes received so far while the models download. */
 export function onFacesDownload(handler: (received: number) => void): Promise<UnlistenFn> {
   return listen<number>("faces-download", (event) => handler(event.payload));
+}
+
+/** Whether search by content (what photos show) is on, as for the faces. */
+export function contentStatus(): Promise<FacesStatus> {
+  return invoke("content_status");
+}
+
+/** Stops looking at new photos; what was found stays searchable. */
+export function disableContent(): Promise<void> {
+  return invoke("disable_content");
+}
+
+/** Switches search by content on: downloads the model if needed, then looks at the open library's photos. */
+export function enableContent(): Promise<void> {
+  return invoke("enable_content");
+}
+
+/** Calls `handler` with the bytes received so far while the model downloads. */
+export function onContentDownload(handler: (received: number) => void): Promise<UnlistenFn> {
+  return listen<number>("content-download", (event) => handler(event.payload));
 }
 
 export function listPeople(path: string): Promise<Person[]> {

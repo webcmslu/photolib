@@ -53,6 +53,10 @@ Formerly called Photolib. The shared folder in each library is still named
   the OpenCV zoo, 39 MB) are downloaded on first use and run with `tract`,
   a pure-Rust runtime. Names are shared through the library's log; giving
   two groups the same name merges them.
+- Search by content: "beach", "plage" or "Strand" finds the photos showing
+  one. OpenAI's CLIP (MIT, 352 MB, downloaded when switched on in Settings)
+  runs with `tract` on the thumbnails; about 220 concepts with words in
+  English, French and German (see docs/search.md).
 - Milestone 13 (Apple Photos import): "Import from Apple Photos…" reads a
   `.photoslibrary` (read-only) and brings its favorites, hidden photos and
   albums over, for the photos that are also in the library folder. Photos in

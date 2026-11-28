@@ -4,7 +4,18 @@
 -->
 <script lang="ts">
   import { onMount } from "svelte";
-  import { disableFaces, enableFaces, facesStatus, onFacesDownload, type FacesStatus } from "./api";
+  import {
+    contentStatus,
+    disableContent,
+    disableFaces,
+    enableContent,
+    enableFaces,
+    facesStatus,
+    onContentDownload,
+    onFacesDownload,
+    type FacesStatus,
+  } from "./api";
+  import { server } from "./platform";
   import { formatBytes } from "./format";
   import { chooseLanguage, errorText, languageChoice, LANGUAGES, t, type LanguageChoice } from "./i18n";
   import type { Order } from "./api";
@@ -21,13 +32,22 @@
   /** Bytes received while the models download; `null` when not downloading. */
   let received = $state<number | null>(null);
   let error = $state<string | null>(null);
+  /** Search by content (what photos show), and its download, as for the faces. */
+  let content = $state<FacesStatus | null>(null);
+  let contentReceived = $state<number | null>(null);
+  /** On a Phototek server, these are set on the server, not here. */
+  const onServer = $derived(open && server() !== null);
 
   onMount(() => {
     const unlisten = onFacesDownload((bytes) => {
       if (received !== null) received = bytes;
     });
+    const unlistenContent = onContentDownload((bytes) => {
+      if (contentReceived !== null) contentReceived = bytes;
+    });
     return () => {
       unlisten.then((stop) => stop());
+      unlistenContent.then((stop) => stop());
     };
   });
 
@@ -35,9 +55,27 @@
     open = true;
     error = null;
     try {
-      faces = await facesStatus();
+      [faces, content] = await Promise.all([facesStatus(), contentStatus()]);
     } catch (e) {
       error = errorText(e);
+    }
+  }
+
+  async function setContent(on: boolean) {
+    error = null;
+    try {
+      if (on) {
+        contentReceived = content?.downloaded ? null : 0;
+        await enableContent();
+      } else {
+        await disableContent();
+      }
+      content = await contentStatus();
+    } catch (e) {
+      error = errorText(e);
+      content = await contentStatus().catch(() => content);
+    } finally {
+      contentReceived = null;
     }
   }
 
@@ -156,7 +194,7 @@
             role="switch"
             class="switch"
             checked={faces?.enabled ?? false}
-            disabled={faces === null || received !== null}
+            disabled={faces === null || received !== null || onServer}
             onchange={(event) => setFaces(event.currentTarget.checked)}
           />
         </label>
@@ -164,11 +202,44 @@
           <progress value={received} max={faces.downloadBytes}></progress>
         {/if}
         <p class="note">
-          {t("Everything happens on this computer: no photo and no face leaves it.")}
-          {#if faces && !faces.downloaded}
-            {t("Switching it on downloads two model files ({size}) once.", { size: formatBytes(faces.downloadBytes) })}
-          {:else if faces && !faces.enabled}
-            {t("The people already found stay; no new faces are searched while it is off.")}
+          {#if onServer}
+            {t("Set on the Phototek server (PHOTOTEK_FACES).")}
+          {:else}
+            {t("Everything happens on this computer: no photo and no face leaves it.")}
+            {#if faces && !faces.downloaded}
+              {t("Switching it on downloads two model files ({size}) once.", { size: formatBytes(faces.downloadBytes) })}
+            {:else if faces && !faces.enabled}
+              {t("The people already found stay; no new faces are searched while it is off.")}
+            {/if}
+          {/if}
+        </p>
+      </section>
+
+      <section>
+        <h3>{t("Search")}</h3>
+        <label class="row">
+          <span>{t("Find what photos show: a beach, a dog, a birthday…")}</span>
+          <input
+            type="checkbox"
+            role="switch"
+            class="switch"
+            checked={content?.enabled ?? false}
+            disabled={content === null || contentReceived !== null || onServer}
+            onchange={(event) => setContent(event.currentTarget.checked)}
+          />
+        </label>
+        {#if contentReceived !== null && content}
+          <progress value={contentReceived} max={content.downloadBytes}></progress>
+        {/if}
+        <p class="note">
+          {#if onServer}
+            {t("Set on the Phototek server (PHOTOTEK_CONTENT).")}
+          {:else}
+            {t("Then type what you're looking for in the search box, in English, French or German.")}
+            {t("Everything happens on this computer: no photo leaves it.")}
+            {#if content && !content.downloaded}
+              {t("Switching it on downloads a model file ({size}) once.", { size: formatBytes(content.downloadBytes) })}
+            {/if}
           {/if}
         </p>
       </section>

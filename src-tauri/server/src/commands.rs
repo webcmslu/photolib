@@ -15,7 +15,9 @@ use axum::extract::{Path as UrlPath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phototek_core::{collections, db, duplicates, faces, geo, metadata, org, people, similar};
+use phototek_core::{
+    clip, collections, db, duplicates, faces, geo, metadata, org, people, similar,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -243,6 +245,11 @@ fn run(library: &Library, command: &str, args: Value) -> Result<Value, String> {
                 "downloadBytes": faces::DOWNLOAD_BYTES,
             }))
         }
+        "content_status" => answer(json!({
+            "enabled": library.content_enabled(),
+            "downloaded": clip::model_present(library.data_dir()),
+            "downloadBytes": clip::DOWNLOAD_BYTES,
+        })),
         "people" => answer(people::people(&index()?).map_err(failed)?),
         "person_faces" => {
             let a: ClustersArgs = parse(args)?;
@@ -314,7 +321,8 @@ mod tests {
     fn commands_answer_like_the_app() {
         let photos = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
-        let library = Library::open(photos.path().into(), data.path().into(), false).unwrap();
+        let library =
+            Library::open(photos.path().into(), data.path().into(), false, false).unwrap();
 
         let stats = run(&library, "library_stats", json!({ "path": "" })).unwrap();
         assert_eq!(stats["photoCount"], 0);

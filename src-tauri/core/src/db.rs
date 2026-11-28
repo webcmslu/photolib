@@ -159,6 +159,7 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     conn.busy_timeout(std::time::Duration::from_secs(10))?;
     migrate(&conn)?;
     attach_faces(&conn, &path.with_file_name("faces.db").to_string_lossy())?;
+    attach_content(&conn, &path.with_file_name("content.db").to_string_lossy())?;
     Ok(conn)
 }
 
@@ -228,7 +229,41 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
     let conn = Connection::open_in_memory()?;
     migrate(&conn)?;
     attach_faces(&conn, ":memory:")?;
+    attach_content(&conn, ":memory:")?;
     Ok(conn)
+}
+
+/// What the photos show (see clip.rs) lives in a third database file next
+/// to the index, reachable as `content.…`, for the same reason as the faces:
+/// looking at every photo takes hours. Rows are keyed by photo fingerprint.
+const CONTENT_SCHEMA: &str = "
+-- Each photo's point from CLIP: 512 little-endian 32-bit floats (empty when
+-- its thumbnail couldn't be read).
+CREATE TABLE IF NOT EXISTS content.embedding (
+    fingerprint TEXT PRIMARY KEY,
+    point       BLOB NOT NULL
+) WITHOUT ROWID;
+-- The concepts each photo shows (keys from data/concepts.tsv).
+CREATE TABLE IF NOT EXISTS content.tag (
+    concept     TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    similarity  REAL NOT NULL,
+    PRIMARY KEY (concept, fingerprint)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS content.tag_fingerprint ON tag (fingerprint);
+-- 'vocabulary': the version of the list the tags were worked out with.
+CREATE TABLE IF NOT EXISTS content.meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+) WITHOUT ROWID;
+";
+
+fn attach_content(conn: &Connection, file: &str) -> rusqlite::Result<()> {
+    conn.execute("ATTACH DATABASE ?1 AS content", [file])?;
+    if file != ":memory:" {
+        conn.query_row("PRAGMA content.journal_mode = WAL", [], |_| Ok(()))?;
+    }
+    conn.execute_batch(CONTENT_SCHEMA)
 }
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {

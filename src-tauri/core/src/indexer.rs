@@ -47,6 +47,8 @@ pub enum Phase {
     /// Working out which photos look alike (see similar.rs).
     Comparing,
     Faces,
+    /// Finding what the photos show (see clip.rs).
+    Content,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

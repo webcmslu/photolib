@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 
 use phototek_core::org::OrgPaths;
 use phototek_core::thumbs::ThumbCache;
-use phototek_core::{db, faces, indexer, org, people, similar, thumbs};
+use phototek_core::{clip, db, faces, indexer, org, people, similar, thumbs};
 
 pub struct Library {
     root: PathBuf,
@@ -22,6 +22,9 @@ pub struct Library {
     /// Whether faces are searched (`PHOTOTEK_FACES=1`).
     faces: bool,
     face_finder: Mutex<Option<Arc<faces::FaceFinder>>>,
+    /// Whether what photos show is found, for search (`PHOTOTEK_CONTENT=1`).
+    content: bool,
+    content_model: Mutex<Option<Arc<clip::ContentModel>>>,
     scanning: AtomicBool,
     /// Set to ask for a scan now; the scan thread waits on it between scans.
     wanted: (Mutex<bool>, Condvar),
@@ -33,7 +36,12 @@ pub struct Library {
 }
 
 impl Library {
-    pub fn open(root: PathBuf, data_dir: PathBuf, faces: bool) -> Result<Self, String> {
+    pub fn open(
+        root: PathBuf,
+        data_dir: PathBuf,
+        faces: bool,
+        content: bool,
+    ) -> Result<Self, String> {
         if !root.is_dir() {
             return Err(format!(
                 "the photo folder {} can't be found (set PHOTOTEK_LIBRARY)",
@@ -53,6 +61,8 @@ impl Library {
             device,
             faces,
             face_finder: Mutex::new(None),
+            content,
+            content_model: Mutex::new(None),
             scanning: AtomicBool::new(false),
             wanted: (Mutex::new(false), Condvar::new()),
             on_demand: Limiter::new(
@@ -106,6 +116,10 @@ impl Library {
 
     pub fn faces_enabled(&self) -> bool {
         self.faces && faces::models_present(&self.data_dir)
+    }
+
+    pub fn content_enabled(&self) -> bool {
+        self.content && clip::model_present(&self.data_dir)
     }
 
     /// Asks for a scan as soon as the current one (if any) is over.
@@ -179,8 +193,29 @@ impl Library {
         slot.clone()
     }
 
+    /// The search-by-content model, loaded the first time (and downloaded
+    /// if needed).
+    fn content_model(&self) -> Option<Arc<clip::ContentModel>> {
+        if !self.content {
+            return None;
+        }
+        let mut slot = self.content_model.lock().unwrap();
+        if slot.is_none() {
+            if !clip::model_present(&self.data_dir) {
+                println!("Downloading the search model…");
+                if let Err(e) = clip::download_model(&self.data_dir, &|_| {}) {
+                    eprintln!("Couldn't download the search model: {e}");
+                    return None;
+                }
+            }
+            *slot = clip::ContentModel::load(&self.data_dir).ok().map(Arc::new);
+        }
+        slot.clone()
+    }
+
     /// Merges the organization logs, indexes the folder, makes the missing
-    /// thumbnails, then finds similar shots and (if switched on) faces.
+    /// thumbnails, then finds similar shots and (if switched on) faces and
+    /// what the photos show.
     fn scan(&self) -> Result<(), indexer::ScanError> {
         let cancel = AtomicBool::new(false);
         // Progress, a few times a second at most.
@@ -218,6 +253,9 @@ impl Library {
             if people::group_faces(&mut conn)? > 0 || searched > 0 {
                 self.index_event("synced", json!({}));
             }
+        }
+        if let Some(model) = self.content_model() {
+            clip::embed_pending(&mut conn, &self.thumbs, &model, &cancel, &progress)?;
         }
         self.index_event(
             "finished",

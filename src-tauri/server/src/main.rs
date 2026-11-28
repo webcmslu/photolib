@@ -20,6 +20,7 @@
 //! | `PHOTOTEK_PASSWORD`   | Asked by the browser when set              | none       |
 //! | `PHOTOTEK_SCAN_EVERY` | Minutes between checks for new photos: `0` only at start, `off` never | `30` |
 //! | `PHOTOTEK_FACES`      | `1` to find and group faces                | off        |
+//! | `PHOTOTEK_CONTENT`    | `1` to find what photos show, for search   | off        |
 //!
 //! Changes made in a browser (favourites, albums, hidden photos, names) go
 //! into the library's shared logs (`.photolib/devices/`), as any device's,
@@ -61,11 +62,12 @@ async fn main() {
         minutes => Some(minutes.parse().unwrap_or(30)),
     };
     let faces = env_or("PHOTOTEK_FACES", "0") == "1";
+    let content = env_or("PHOTOTEK_CONTENT", "0") == "1";
     let password = std::env::var("PHOTOTEK_PASSWORD")
         .ok()
         .filter(|value| !value.is_empty());
 
-    let library = match Library::open(library_dir, data_dir, faces) {
+    let library = match Library::open(library_dir, data_dir, faces, content) {
         Ok(library) => Arc::new(library),
         Err(e) => {
             eprintln!("phototek-server: {e}");

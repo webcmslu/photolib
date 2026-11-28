@@ -1,0 +1,230 @@
+# What search by content knows: one concept per line.
+# key	what CLIP is shown ("a photo of …")	English words	French words	German words
+# Words are comma-separated; each one, typed in the search box, finds the
+# photos showing the concept. A word can be several words ("salle de bain"),
+# and one word can name several concepts. Accents are optional when searching.
+# After a change: tools/clip-concepts (see docs/search.md) remakes concepts.bin.
+beach	a beach	beach,beaches,seaside	plage,plages	strand
+sea	the sea	sea,ocean	mer,océan	meer,ozean
+lake	a lake	lake	lac	see
+river	a river	river	rivière,fleuve	fluss
+waterfall	a waterfall	waterfall	cascade,chute	wasserfall
+mountain	mountains	mountain,mountains	montagne,montagnes	berg,berge,gebirge
+snow	snow	snow,snowy	neige	schnee
+forest	a forest	forest,woods	forêt,bois	wald
+field	a field in the countryside	field,countryside	champ,campagne	feld,landschaft
+desert	a desert	desert	désert	wüste
+island	an island	island	île	insel
+cave	a cave	cave	grotte	höhle
+sky	the sky	sky	ciel	himmel
+clouds	clouds in the sky	cloud,clouds	nuage,nuages	wolke,wolken
+sunset	a sunset	sunset,dusk	coucher de soleil,crépuscule	sonnenuntergang
+sunrise	a sunrise	sunrise,dawn	lever de soleil,aube	sonnenaufgang
+night	a scene at night	night	nuit	nacht
+rainbow	a rainbow	rainbow	arc-en-ciel	regenbogen
+rain	rain	rain,rainy	pluie	regen
+fog	fog	fog,mist	brouillard,brume	nebel
+moon	the moon	moon	lune	mond
+stars	stars in the night sky	stars	étoiles	sterne
+city	a city	city,town	ville	stadt
+street	a street	street,road	rue,route	straße,strasse
+bridge	a bridge	bridge	pont	brücke
+building	a building	building	bâtiment,immeuble	gebäude
+house	a house	house,home	maison	haus
+castle	a castle	castle	château	schloss,burg
+church	a church	church,cathedral	église,cathédrale	kirche,dom
+tower	a tower	tower	tour	turm
+monument	a monument	monument	monument	denkmal
+ruins	ancient ruins	ruins	ruines	ruinen
+museum	a museum	museum	musée	museum
+garden	a garden	garden	jardin	garten
+park	a park	park	parc	park
+playground	a playground	playground	aire de jeux	spielplatz
+pool	a swimming pool	pool	piscine	schwimmbad,pool
+harbor	a harbor with boats	harbor,harbour,port	port	hafen
+airport	an airport	airport	aéroport	flughafen
+station	a train station	station	gare	bahnhof
+stadium	a stadium	stadium	stade	stadion
+market	a market	market	marché	markt
+shop	a shop	shop,store	magasin,boutique	laden,geschäft
+restaurant	a restaurant	restaurant	restaurant	restaurant
+kitchen	a kitchen	kitchen	cuisine	küche
+bedroom	a bedroom	bedroom	chambre	schlafzimmer
+living	a living room	living room	salon	wohnzimmer
+bathroom	a bathroom	bathroom	salle de bain	badezimmer
+office	an office	office	bureau	büro
+classroom	a classroom	classroom,school	école,classe	schule,klasse
+hospital	a hospital	hospital	hôpital	krankenhaus
+farm	a farm	farm	ferme	bauernhof
+vineyard	a vineyard	vineyard,vines	vigne,vignoble	weinberg
+camping	a tent at a campsite	camping,tent	camping,tente	zelt,zelten
+fireplace	a fireplace	fireplace	cheminée	kamin
+car	a car	car,cars	voiture,auto	auto,wagen
+bicycle	a bicycle	bicycle,bike	vélo,bicyclette	fahrrad
+motorcycle	a motorcycle	motorcycle,motorbike	moto	motorrad
+bus	a bus	bus	bus	bus
+truck	a truck	truck	camion	lastwagen,lkw
+tractor	a tractor	tractor	tracteur	traktor
+train	a train	train	train	zug
+tram	a tram	tram	tram,tramway	straßenbahn,strassenbahn
+airplane	an airplane	airplane,plane	avion	flugzeug
+helicopter	a helicopter	helicopter	hélicoptère	hubschrauber
+boat	a boat	boat,boats	bateau,bateaux	boot
+ship	a ship	ship,cruise	navire,paquebot	schiff
+sailboat	a sailboat	sailboat,sailing	voilier,voile	segelboot,segeln
+kayak	a kayak or canoe	kayak,canoe	kayak,canoë	kajak,kanu
+dog	a dog	dog,dogs,puppy	chien,chiens,chiot	hund,hunde,welpe
+cat	a cat	cat,cats,kitten	chat,chats,chaton	katze,katzen,kätzchen
+horse	a horse	horse,horses,pony	cheval,chevaux,poney	pferd,pferde,pony
+cow	a cow	cow,cows	vache,vaches	kuh,kühe
+sheep	a sheep	sheep	mouton,moutons	schaf,schafe
+goat	a goat	goat	chèvre	ziege
+pig	a pig	pig	cochon	schwein
+chicken	a chicken	chicken,hen	poule	huhn
+duck	a duck	duck	canard	ente
+swan	a swan	swan	cygne	schwan
+bird	a bird	bird,birds	oiseau,oiseaux	vogel,vögel
+rabbit	a rabbit	rabbit,bunny	lapin	kaninchen,hase
+hamster	a hamster or guinea pig	hamster,guinea pig	hamster,cochon d'inde	hamster,meerschweinchen
+fish	a fish	fish	poisson,poissons	fisch,fische
+butterfly	a butterfly	butterfly	papillon	schmetterling
+insect	an insect	insect,bee	insecte,abeille	insekt,biene
+deer	a deer	deer	cerf,biche	hirsch,reh
+squirrel	a squirrel	squirrel	écureuil	eichhörnchen
+elephant	an elephant	elephant	éléphant	elefant
+giraffe	a giraffe	giraffe	girafe	giraffe
+lion	a lion	lion	lion	löwe
+monkey	a monkey	monkey	singe	affe
+bear	a bear	bear	ours	bär
+zoo	animals at the zoo	zoo	zoo	zoo
+dolphin	a dolphin	dolphin	dauphin	delfin
+flower	flowers	flower,flowers	fleur,fleurs	blume,blumen
+rose	a rose	rose,roses	rose,roses	rose,rosen
+tree	a tree	tree,trees	arbre,arbres	baum,bäume
+palm	a palm tree	palm	palmier	palme
+leaves	autumn leaves	autumn,fall,leaves	automne,feuilles	herbst,blätter
+cactus	a cactus	cactus	cactus	kaktus
+mushroom	a mushroom	mushroom	champignon	pilz
+food	a plate of food	food,meal,dinner,lunch	repas,plat,dîner,déjeuner	essen,mahlzeit,gericht
+breakfast	breakfast	breakfast	petit-déjeuner	frühstück
+cake	a cake	cake	gâteau	kuchen,torte
+pizza	a pizza	pizza	pizza	pizza
+burger	a burger	burger,hamburger	burger,hamburger	burger,hamburger
+pasta	pasta	pasta,spaghetti	pâtes,spaghetti	nudeln,pasta
+bread	bread	bread	pain	brot
+cheese	cheese	cheese	fromage	käse
+fruit	fruit	fruit,fruits	fruit,fruits	obst,früchte
+salad	a salad	salad	salade	salat
+icecream	ice cream	ice cream,icecream	glace	eis
+chocolate	chocolate	chocolate	chocolat	schokolade
+seafood	seafood	seafood,oysters,mussels	fruits de mer,huîtres,moules	meeresfrüchte,muscheln
+barbecue	a barbecue	barbecue,bbq,grill	barbecue	grillen,grill
+wine	a glass of wine	wine	vin	wein
+beer	a glass of beer	beer	bière	bier
+coffee	a cup of coffee	coffee	café	kaffee
+cocktail	a cocktail	cocktail	cocktail	cocktail
+baby	a baby	baby,babies,newborn	bébé,bébés,nourrisson	baby,babys,säugling
+child	a child	child,children,kid,kids	enfant,enfants	kind,kinder
+portrait	a portrait of a person	portrait	portrait	porträt
+selfie	a selfie	selfie	selfie	selfie
+group	a group of people	group	groupe	gruppe
+family	a family photo	family	famille	familie
+couple	a couple	couple	couple	paar
+crowd	a crowd of people	crowd	foule	menge
+wedding	a wedding	wedding,bride	mariage,mariée	hochzeit,braut
+birthday	a birthday party	birthday	anniversaire	geburtstag
+party	a party	party	fête,soirée	party,feier
+christmas	christmas	christmas,xmas	noël	weihnachten
+christmastree	a christmas tree	christmas tree,tree	sapin,sapin de noël	tannenbaum,weihnachtsbaum
+halloween	halloween	halloween,pumpkin	halloween,citrouille	halloween,kürbis
+easter	easter eggs	easter	pâques	ostern
+carnival	people in carnival costumes	carnival,costume,costumes	carnaval,déguisement	karneval,fasching,kostüm
+fireworks	fireworks	fireworks	feu d'artifice,feux d'artifice	feuerwerk
+concert	a concert	concert	concert	konzert
+gift	a gift	gift,present,presents	cadeau,cadeaux	geschenk,geschenke
+balloon	balloons	balloon,balloons	ballon,ballons	ballon,luftballon
+candles	candles	candle,candles	bougie,bougies	kerze,kerzen
+graduation	a graduation ceremony	graduation	remise de diplôme,diplôme	abschluss
+football	people playing football	football,soccer	foot,football	fußball,fussball
+basketball	basketball	basketball	basket	basketball
+tennis	tennis	tennis	tennis	tennis
+golf	golf	golf	golf	golf
+swimming	people swimming	swimming,swim	nager,baignade	schwimmen
+skiing	skiing	ski,skiing	ski	ski,skifahren
+snowboard	snowboarding	snowboard	snowboard	snowboard
+skating	ice skating	skating	patin,patinage	schlittschuh,eislaufen
+surfing	surfing	surf,surfing	surf	surfen
+cycling	people cycling	cycling	cyclisme	radfahren
+hiking	hiking	hiking,hike	randonnée	wandern
+running	running	running,race,marathon	course,marathon	laufen,marathon
+climbing	climbing	climbing	escalade	klettern
+horseriding	horse riding	riding	équitation	reiten
+dancing	people dancing	dancing,dance	danse	tanzen,tanz
+fishing	fishing	fishing	pêche	angeln
+gym	a gym	gym,fitness	gym,fitness	fitness
+yoga	yoga	yoga	yoga	yoga
+sledding	sledding	sled,sledge	luge	schlitten
+snowman	a snowman	snowman	bonhomme de neige	schneemann
+sandcastle	a sandcastle	sandcastle	château de sable	sandburg
+toy	toys	toy,toys	jouet,jouets	spielzeug
+teddy	a teddy bear	teddy	nounours,peluche	teddy,kuscheltier
+lego	lego bricks	lego	lego	lego
+ball	a ball	ball	ballon,balle	ball
+book	a book	book,books	livre,livres	buch,bücher
+computer	a computer	computer,laptop	ordinateur	computer,laptop
+phone	a phone	phone,smartphone	téléphone	handy,telefon
+tv	a television	tv,television	télé,télévision	fernseher
+camera	a camera	camera	appareil	kamera
+guitar	a guitar	guitar	guitare	gitarre
+piano	a piano	piano	piano	klavier
+drums	drums	drums	batterie	schlagzeug
+painting	a painting	painting,art	tableau,peinture	gemälde
+statue	a statue	statue,sculpture	statue,sculpture	statue,skulptur
+drawing	a drawing by a child	drawing	dessin	zeichnung
+sign	a sign	sign	panneau	schild
+flag	a flag	flag	drapeau	flagge,fahne
+umbrella	an umbrella	umbrella	parapluie	regenschirm
+sunglasses	sunglasses	sunglasses	lunettes de soleil	sonnenbrille
+hat	a hat	hat	chapeau	hut
+dress	a dress	dress	robe	kleid
+shoes	shoes	shoes	chaussures	schuhe
+bed	a bed	bed	lit	bett
+sofa	a sofa	sofa,couch	canapé	sofa,couch
+table	a table	table	table	tisch
+car_interior	inside a car	dashboard	tableau de bord	armaturenbrett
+document	a document	document,paper,letter	document,papier,lettre	dokument,papier,brief
+receipt	a receipt	receipt,invoice	reçu,ticket,facture	quittung,rechnung,kassenbon
+screenshot	a screenshot	screenshot	capture	bildschirmfoto,screenshot
+text	text	text	texte	text
+whiteboard	a whiteboard	whiteboard	tableau blanc	whiteboard
+map	a map	map	carte	karte
+qr	a qr code	qr	qr	qr
+id	an identity card or passport	passport,id card	passeport,carte d'identité	reisepass,ausweis
+car_plate	a license plate	license plate,number plate	plaque d'immatriculation	kennzeichen,nummernschild
+construction	a construction site	construction,building site	chantier,travaux	baustelle
+renovation	home renovation	renovation,diy	rénovation,bricolage	renovierung,heimwerken
+tools	tools	tools	outils	werkzeug
+plant	a house plant	plant,plants	plante,plantes	pflanze,pflanzen
+vegetables	vegetables	vegetables	légumes	gemüse
+aquarium	an aquarium	aquarium	aquarium	aquarium
+underwater	an underwater photo	underwater	sous-marin	unterwasser
+pier	a pier	pier,jetty	ponton,jetée	steg,pier
+lighthouse	a lighthouse	lighthouse	phare	leuchtturm
+windmill	a windmill	windmill	moulin	windmühle
+cliff	a cliff	cliff,cliffs	falaise	klippe,klippen
+volcano	a volcano	volcano	volcan	vulkan
+glacier	a glacier	glacier	glacier	gletscher
+canyon	a canyon	canyon	canyon,gorges	schlucht
+dunes	sand dunes	dunes	dunes	dünen
+road_trip	a road trip	road trip,roadtrip	roadtrip	roadtrip
+hotel	a hotel room	hotel	hôtel	hotel
+skyline	a city skyline	skyline	gratte-ciel	skyline
+fountain	a fountain	fountain	fontaine	brunnen
+square	a town square	square,plaza	grand-place	marktplatz
+alley	a narrow old street	alley	ruelle	gasse
+graffiti	graffiti	graffiti	graffiti	graffiti
+festival	a festival	festival	festival	festival
+fair	a funfair	fair,funfair	foire,manège	kirmes,jahrmarkt
+circus	a circus	circus	cirque	zirkus
+theater	a theater stage	theater,theatre,show	théâtre,spectacle	theater,aufführung
+cinema	a cinema	cinema,movie	cinéma	kino
