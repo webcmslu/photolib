@@ -281,6 +281,8 @@ pub fn fold(text: &str) -> String {
             'œ' => out.push_str("oe"),
             'æ' => out.push_str("ae"),
             '’' | '‘' => out.push('\''),
+            // A letter and its accent written apart ("e" + "̈"): the accent goes.
+            '\u{0300}'..='\u{036f}' => {}
             c if c.is_whitespace() => out.push(' '),
             c => out.push(c),
         }
@@ -661,6 +663,8 @@ mod tests {
         assert_eq!(concepts_for("strand"), ["beach"]);
         assert_eq!(concepts_for("chateau"), ["castle"]);
         assert_eq!(concepts_for("Straße"), ["street"]);
+        // "ä" written as "a" and a separate accent.
+        assert_eq!(fold("Noe\u{0308}l"), "noel");
         assert!(concepts_for("tree").contains(&"christmastree"));
         assert!(concepts_for("canon").is_empty());
     }

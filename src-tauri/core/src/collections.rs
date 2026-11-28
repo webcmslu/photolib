@@ -33,6 +33,44 @@ const HOME_CELL: f64 = 0.2;
 /// An event folder's photos fit in this many days (outliers aside).
 const EVENT_DAYS: i64 = 21;
 const EVENT_PHOTOS: usize = 15;
+/// An event folder without positions is a trip from this many days with
+/// photos (see `is_folder_trip`).
+const FOLDER_TRIP_DAYS: usize = 3;
+/// Folder names (folded, whole words) that are celebrations, not trips.
+const CELEBRATIONS: &[&str] = &[
+    "noel",
+    "christmas",
+    "weihnachten",
+    "anniversaire",
+    "anniv",
+    "birthday",
+    "geburtstag",
+    "mariage",
+    "wedding",
+    "hochzeit",
+    "bapteme",
+    "bapteme",
+    "baptism",
+    "taufe",
+    "communion",
+    "kommunion",
+    "paques",
+    "easter",
+    "ostern",
+    "reveillon",
+    "silvester",
+    "fete",
+    "party",
+    "feier",
+    "soiree",
+    "carnaval",
+    "fasching",
+    "halloween",
+    "nouvel",
+    "naissance",
+    "birth",
+    "geburt",
+];
 /// A day with this many photos is an event even without a folder name.
 const BUSY_DAY: usize = 60;
 const PERSON_PHOTOS: usize = 40;
@@ -410,7 +448,25 @@ impl Library {
 
     fn build(&self, today: i64) -> Collections {
         let homes = homes(&self.shots, &self.set_homes);
-        let trips = self.trips(&homes);
+        let mut trips = self.trips(&homes);
+        let gps_days: Vec<(i64, i64)> = trips.iter().map(|trip| (trip.from, trip.to)).collect();
+        let in_gps_trip = |day: i64| gps_days.iter().any(|(from, to)| day >= *from && day <= *to);
+        // Before phones had GPS: holidays from folder names.
+        let (folder_trips, events): (Vec<_>, Vec<_>) = self
+            .events(&in_gps_trip)
+            .into_iter()
+            .partition(|(_, title, shots)| self.is_folder_trip(title, shots));
+        trips.extend(folder_trips.into_iter().map(|(folder, title, shots)| {
+            let days = shots.iter().map(|&i| self.shots[i].day);
+            FoundTrip {
+                from: days.clone().min().unwrap_or_default(),
+                to: days.max().unwrap_or_default(),
+                title,
+                shots,
+                folder: Some(folder),
+            }
+        }));
+        trips.sort_by_key(|trip| trip.from);
         let in_trip = |day: i64| trips.iter().any(|trip| day >= trip.from && day <= trip.to);
 
         let mut memories: Vec<Memory> = Vec::new();
@@ -420,13 +476,18 @@ impl Library {
                 MemoryKind::Trip,
                 Some(trip.title.clone()),
                 &trip.shots,
-                Listing::Days {
-                    from: trip.from,
-                    to: trip.to,
+                match &trip.folder {
+                    Some(folder) => Listing::Folder {
+                        folder: folder.clone(),
+                        subfolders: true,
+                    },
+                    None => Listing::Days {
+                        from: trip.from,
+                        to: trip.to,
+                    },
                 },
             ));
         }
-        let events = self.events(&in_trip);
         let event_days: HashSet<i64> = events
             .iter()
             .flat_map(|(_, _, shots)| shots.iter().map(|&i| self.shots[i].day))
@@ -696,6 +757,7 @@ impl Library {
                 to,
                 title,
                 shots,
+                folder: None,
             });
         }
         trips
@@ -753,6 +815,28 @@ fn ranked(counts: HashMap<&str, usize>) -> Vec<(&str, usize)> {
 
 impl Library {
     /// Events named after folders: (folder, title, shots).
+    /// An event folder that is a trip: most of its photos have no position
+    /// (so GPS couldn't find it), they span a few days, and its name isn't
+    /// a celebration at home ("Noël", "Anniversaire Théo"…).
+    fn is_folder_trip(&self, title: &str, shots: &[usize]) -> bool {
+        let located = shots
+            .iter()
+            .filter(|&&i| self.shots[i].position.is_some())
+            .count();
+        let days: HashSet<i64> = shots.iter().map(|&i| self.shots[i].day).collect();
+        let name = crate::clip::fold(title);
+        let celebration = CELEBRATIONS.iter().any(|word| {
+            name.split(|c: char| !c.is_alphanumeric())
+                .any(|part| part == *word)
+        });
+        // A folder named after someone in the library is about them.
+        let a_person = self
+            .names
+            .iter()
+            .any(|person| crate::clip::fold(person) == name);
+        located * 5 < shots.len() && days.len() >= FOLDER_TRIP_DAYS && !celebration && !a_person
+    }
+
     fn events(&self, in_trip: &dyn Fn(i64) -> bool) -> Vec<(String, String, Vec<usize>)> {
         let mut by_folder: HashMap<String, (String, Vec<usize>)> = HashMap::new();
         for (i, shot) in self.shots.iter().enumerate() {
@@ -1051,6 +1135,9 @@ struct FoundTrip {
     title: String,
     /// Indices of its dated shots, in order.
     shots: Vec<usize>,
+    /// For a trip found from a folder (photos without positions): that
+    /// folder, which it lists instead of every photo of those days.
+    folder: Option<String>,
 }
 
 /// Where home was, year by year.
@@ -1455,9 +1542,42 @@ fn event_title(name: &str) -> Option<String> {
         return None;
     }
     let title = words.join(" ");
+    // A year stuck to the name ("Sicile2008").
+    let title = match title
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_ascii_digit())
+        .last()
+    {
+        Some((at, _)) if title.len() - at == 4 && title[..at].ends_with(char::is_alphabetic) => {
+            title[..at].to_owned()
+        }
+        _ => title,
+    };
     let title = title
         .trim_matches(|c: char| !c.is_alphanumeric())
         .to_owned();
+    // Names typed in capitals ("MAJORQUE", "IRL VALENCE"): each word
+    // capitalized, except short ones that are probably abbreviations.
+    let title = if title.chars().filter(|c| c.is_alphabetic()).count() >= 4
+        && !title.chars().any(char::is_lowercase)
+    {
+        title
+            .split(' ')
+            .map(|word| {
+                if word.chars().count() <= 3 {
+                    return word.to_owned();
+                }
+                let mut letters = word.chars();
+                letters.next().map_or(String::new(), |first| {
+                    first.to_string() + &letters.as_str().to_lowercase()
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    } else {
+        title
+    };
     let mut chars = title.chars();
     let first = chars.next()?;
     Some(first.to_uppercase().chain(chars).collect())
@@ -1496,6 +1616,12 @@ mod tests {
         assert_eq!(
             event("2021/Anniversaire Théo 6 ans").map(|e| e.1),
             Some("Anniversaire Théo 6 ans".into())
+        );
+        assert_eq!(event("2008/Sicile2008").map(|e| e.1), Some("Sicile".into()));
+        assert_eq!(event("2003/MAJORQUE").map(|e| e.1), Some("Majorque".into()));
+        assert_eq!(
+            event("2004/IRL VALENCE").map(|e| e.1),
+            Some("IRL Valence".into())
         );
         assert_eq!(event("2011/2011-10"), None);
         assert_eq!(event("2009/200911 - Novembre"), None);
