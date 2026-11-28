@@ -29,6 +29,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            is_television,
             phone_name,
             phone_backup_status,
             start_phone_backup,
@@ -160,6 +161,12 @@ fn describe(error: ureq::Error) -> String {
             .unwrap_or_else(|_| "The Phototek server refused it.".to_owned()),
         other => format!("Can't reach the Phototek server: {other}"),
     }
+}
+
+/// True on a TV (Android TV): the interface then switches to the TV one.
+#[tauri::command(async)]
+fn is_television(app: AppHandle) -> bool {
+    app.photos().is_television().unwrap_or(false)
 }
 
 /// The phone's name, as its owner set it (iOS gives only "iPhone" to apps).

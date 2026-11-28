@@ -11,6 +11,9 @@
   ],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "core:app:allow-exit",
+    "core:app:allow-register-listener",
+    "core:app:allow-remove-listener"
   ]
 }

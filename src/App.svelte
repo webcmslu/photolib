@@ -12,6 +12,7 @@
   import LibraryView from "./lib/LibraryView.svelte";
   import AboutButton from "./lib/AboutButton.svelte";
   import { autoBackup, startBackup } from "./lib/phone";
+  import { invoke } from "@tauri-apps/api/core";
   import SettingsButton from "./lib/SettingsButton.svelte";
   import { suppressDefaultMenu } from "./lib/contextMenu";
   import { errorText, locale, t } from "./lib/i18n";
@@ -79,6 +80,11 @@
     // The phone app shows a server's library: the last one used, or the
     // form to add one.
     if (inPhoneApp) {
+      // On a TV (Android TV), the interface made for the remote.
+      // (VITE_PHOTOTEK_TV=1 makes a test build act as a TV, on a phone.)
+      invoke<boolean>("is_television")
+        .then((tv) => (tv || import.meta.env.VITE_PHOTOTEK_TV === "1") && location.replace("tv/index.html"))
+        .catch(() => {});
       const [last] = servers;
       // Development and store screenshots: a server given at build time
       // (never set for a store build).

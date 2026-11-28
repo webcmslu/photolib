@@ -53,3 +53,9 @@ pub(crate) struct Deleted {
 pub(crate) struct Name {
     pub name: String,
 }
+
+#[cfg(mobile)]
+#[derive(Deserialize)]
+pub(crate) struct Television {
+    pub tv: bool,
+}

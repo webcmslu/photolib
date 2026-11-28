@@ -52,6 +52,12 @@ impl<R: Runtime> Photos<R> {
         Ok(deleted.deleted)
     }
 
+    /// True on a TV (Android TV).
+    pub fn is_television(&self) -> crate::Result<bool> {
+        let answer: Television = self.0.run_mobile_plugin("isTelevision", ())?;
+        Ok(answer.tv)
+    }
+
     /// The phone's name, as its owner set it.
     pub fn device_name(&self) -> crate::Result<String> {
         let name: Name = self.0.run_mobile_plugin("deviceName", ())?;

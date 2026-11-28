@@ -1,6 +1,43 @@
 // The remote control: its keys, and moving the focus with the arrows to the
 // nearest item in that direction (any element with `data-focus`, inside the
-// screen on top, the last `[data-screen]` that is shown).
+// screen on top, the last `[data-screen]` that is shown). The same app runs
+// on LG webOS, Samsung Tizen and Android TV (inside the Tauri app).
+
+interface Tizen {
+  tvinputdevice: { registerKeyBatch: (keys: string[]) => void };
+  application: { getCurrentApplication: () => { exit: () => void } };
+}
+
+const tizen = (globalThis as { tizen?: Tizen }).tizen;
+const inTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+/**
+ * Gets the remote ready: Samsung TVs send the media keys only once asked,
+ * and Android TV's Back button reaches the app only through Tauri.
+ */
+export async function setUpRemote(onBack: () => void) {
+  try {
+    tizen?.tvinputdevice.registerKeyBatch(["MediaPlayPause", "MediaPlay", "MediaPause"]);
+  } catch {
+    // An older Tizen: the keys stay with the TV.
+  }
+  if (inTauri) {
+    const { onBackButtonPress } = await import("@tauri-apps/api/app");
+    await onBackButtonPress(() => onBack()).catch(() => {});
+  }
+}
+
+/** Leaves the app, as Back does on a TV's first screen. */
+export async function exitApp() {
+  if (tizen) {
+    tizen.application.getCurrentApplication().exit();
+  } else if (inTauri) {
+    const { exit } = await import("@tauri-apps/api/app");
+    await exit(0);
+  } else {
+    window.close();
+  }
+}
 
 /** What a key on the remote means, on webOS, Tizen, Android TV or a keyboard. */
 export type RemoteKey = "up" | "down" | "left" | "right" | "ok" | "back" | "play" | "pause" | "playPause" | null;

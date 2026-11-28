@@ -1,8 +1,8 @@
 # The TV app
 
 Phototek on the living-room TV: the library of a Phototek server (see
-[server.md](server.md)), browsed with the remote. LG webOS first; the same
-app will serve Samsung Tizen and Android TV, which also run web apps.
+[server.md](server.md)), browsed with the remote. One app for LG (webOS),
+Samsung (Tizen) and Android TV.
 
 ## What it does
 
@@ -53,6 +53,35 @@ The arrows, Enter (OK) and Escape (Back) act as the remote.
 Developer Mode lasts 50 hours at a time; the app's settings page has the
 button that extends it.
 
+## Samsung TVs (Tizen)
+
+The same files, with `tv/tizen/config.xml` instead of `appinfo.json`:
+`tools/build-tv.sh tizen` puts them in `build/tizen/`. The app registers the
+media keys (Tizen sends them only when asked) and leaves through Tizen's own
+call on Back from the home screen.
+
+To package and install: Tizen Studio with the **TV Extensions**, a Samsung
+certificate profile made in its Certificate Manager (named `phototek`, or set
+`TIZEN_PROFILE`), and the TV in Developer Mode (Apps → type 12345 on the
+remote → Developer Mode on, with the Mac's IP address). Then
+`tools/build-tv.sh tizen` makes the `.wgt`, and Tizen Studio's Device
+Manager installs it. Publishing goes through the Samsung Apps TV Seller
+Office.
+
+## Android TV
+
+The Android app itself: on a TV (Android detects it, `isTelevision` in
+plugins/photos), it opens this interface instead of the phone's. The
+Android build bundles it (`build.beforeBuildCommand` in
+`tauri.android.conf.json` copies `dist-tv/` into `dist/tv/`). The app shows
+in the TV's launcher with its banner (`res/drawable-xhdpi/banner.png`), and
+the manifest says it needs no touch screen, which Google Play asks of TV
+apps. The remote's Back button reaches the app through Tauri's
+`onBackButtonPress`. Most Android TVs give web views 960 × 540: the layout
+(made for 1920 × 1080) scales to fit.
+
+A test build can act as a TV on a phone: `VITE_PHOTOTEK_TV=1`.
+
 ## LG Content Store
 
 Publishing needs an LG Seller Lounge account (seller.lgappstv.com), the
@@ -63,6 +92,12 @@ the reviewer sees photos.
 
 ## Tested
 
-On 2026-11-28 in Chrome at 1920 × 1080, driven by its keys against the demo
-server: connecting, the rows, a day's grid, the viewer, Back with the focus
-put back, and a memory playing. Not yet on a real TV.
+On 2026-11-28, against the demo server:
+
+- in Chrome at 1920 × 1080 and 960 × 540, driven by its keys: connecting, the
+  rows, a day's grid, the viewer, Back with the focus put back, a memory
+  playing;
+- in the Android app on the emulator (as a TV, `VITE_PHOTOTEK_TV=1`): the
+  switch to this interface, the D-pad, OK, and the Back button.
+
+Not yet on a real TV, nor on Tizen (it needs Tizen Studio).

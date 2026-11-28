@@ -102,6 +102,11 @@ class PhotosPlugin: Plugin {
     }
   }
 
+  /// Never a TV on iOS (Apple TV has no web view).
+  @objc public func isTelevision(_ invoke: Invoke) {
+    invoke.resolve(["tv": false])
+  }
+
   /// The phone's name, as its owner set it when the system allows it.
   @objc public func deviceName(_ invoke: Invoke) {
     DispatchQueue.main.async {

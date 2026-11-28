@@ -1,6 +1,7 @@
 //! The phone's photo library, for the Phototek phone app: list the photos
 //! and videos, copy their originals out to send them to a Phototek server,
-//! and delete those the server has, to free up space. Swift on iOS (`ios/`),
+//! and delete those the server has, to free up space; and whether the app
+//! runs on a TV. Swift on iOS (`ios/`),
 //! Kotlin on Android (`android/`); on computers every call fails.
 
 use tauri::{
@@ -41,6 +42,9 @@ impl<R: Runtime> Photos<R> {
     }
     pub fn device_name(&self) -> Result<String> {
         Self::unavailable()
+    }
+    pub fn is_television(&self) -> Result<bool> {
+        Ok(false)
     }
 }
 

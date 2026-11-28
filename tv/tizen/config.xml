@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The Samsung TV (Tizen) app: the same files as the webOS one (dist-tv/),
+     with this description instead of appinfo.json (tools/build-tv.sh tizen). -->
+<widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
+        id="https://phototek.webcms.lu/tv" version="1.0.0" viewmodes="maximized">
+    <tizen:application id="PhototekTV.Phototek" package="PhototekTV" required_version="6.0"/>
+    <tizen:profile name="tv-samsung"/>
+    <content src="index.html"/>
+    <name>Phototek</name>
+    <icon src="largeIcon.png"/>
+    <feature name="http://tizen.org/feature/screen.size.normal.1080.1920"/>
+    <access origin="*" subdomains="true"/>
+    <tizen:privilege name="http://tizen.org/privilege/internet"/>
+    <tizen:privilege name="http://tizen.org/privilege/tv.inputdevice"/>
+    <tizen:setting screen-orientation="landscape" context-menu="disable" background-support="disable"
+                   encryption="disable" install-location="auto" hwkey-event="enable"/>
+</widget>

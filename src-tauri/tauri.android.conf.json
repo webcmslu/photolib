@@ -4,5 +4,8 @@
     "android": {
       "versionCode": 1
     }
+  },
+  "build": {
+    "beforeBuildCommand": "npm run build && npm run build:tv && rm -rf dist/tv && cp -R dist-tv dist/tv"
   }
 }

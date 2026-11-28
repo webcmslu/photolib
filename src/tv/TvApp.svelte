@@ -10,7 +10,7 @@
   import { unlockAudio } from "../lib/memories";
   import MemoryPlayer from "../lib/MemoryPlayer.svelte";
   import { savedServers, useServer, type Server } from "../lib/platform";
-  import { focusFirst, focusOn, moveFocus, remoteKey } from "./remote";
+  import { exitApp, focusFirst, focusOn, moveFocus, remoteKey, setUpRemote } from "./remote";
   import TvConnect from "./TvConnect.svelte";
   import TvGrid from "./TvGrid.svelte";
   import TvHome from "./TvHome.svelte";
@@ -53,7 +53,7 @@
   async function back() {
     if (screens.length <= 1) {
       // Back on the first screen leaves the app, as TV apps do.
-      window.close();
+      void exitApp();
       return;
     }
     screens = screens.slice(0, -1);
@@ -75,6 +75,8 @@
   }
 
   onMount(() => {
+    // Android TV's Back button: as the Back key elsewhere.
+    void setUpRemote(() => back());
     const [last] = savedServers();
     if (last) {
       connected(last).catch(() => showConnect());

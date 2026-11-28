@@ -5,6 +5,9 @@ package lu.webcms.phototek.photos
 
 import android.Manifest
 import android.app.Activity
+import android.app.UiModeManager
+import android.content.Context
+import android.content.res.Configuration
 import android.content.ContentUris
 import android.net.Uri
 import android.os.Build
@@ -151,6 +154,14 @@ class PhotosPlugin(private val activity: Activity) : Plugin(activity) {
   @ActivityCallback
   private fun deleteAnswered(invoke: Invoke, result: ActivityResult) {
     invoke.resolve(JSObject().put("deleted", result.resultCode == Activity.RESULT_OK))
+  }
+
+  /** True on a TV (Android TV, Google TV). */
+  @Command
+  fun isTelevision(invoke: Invoke) {
+    val modes = activity.getSystemService(Context.UI_MODE_SERVICE) as UiModeManager
+    val tv = modes.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+    invoke.resolve(JSObject().put("tv", tv))
   }
 
   /** The phone's name, as its owner set it. */
