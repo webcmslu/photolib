@@ -802,6 +802,33 @@ export function personFaces(path: string, clusters: number[]): Promise<FaceBox[]
   return invoke("person_faces", { path, clusters });
 }
 
+/** A person's face that may be someone else's. Mirrors `DoubtfulFace` in people.rs. */
+export interface DoubtfulFace {
+  fingerprint: string;
+  bounds: [number, number, number, number];
+  width: number | null;
+  height: number | null;
+  /** 1 the same as their other faces of those years, around 0 someone else. */
+  likeness: number;
+}
+
+/** Mirrors `PersonCheck` in people.rs. */
+export interface PersonCheck {
+  doubtful: number;
+  unchecked: number;
+  faces: DoubtfulFace[];
+}
+
+/** A person's faces not checked yet, least like them first. */
+export function checkPerson(path: string, clusters: number[], limit: number): Promise<PersonCheck> {
+  return invoke("check_person", { path, clusters, limit });
+}
+
+/** Says the person's faces in these photos are them: a check doesn't show them again. */
+export function confirmPersonFaces(path: string, clusters: number[], photos: string[]): Promise<void> {
+  return invoke("confirm_person_faces", { path, clusters, photos });
+}
+
 /** Takes photos out of a person, whose face in them was someone else's. */
 export function removeFromPerson(
   path: string,

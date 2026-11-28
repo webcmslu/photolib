@@ -82,22 +82,14 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-u
 - **A privacy policy page** at phototek.webcms.lu/privacy ("Data Not
   Collected": the app talks only to the user's server).
 - **The price:** a paid app, or free with an in-app purchase.
-- **Store licence:** see below.
 - Screenshots: 6.9" iPhone (1320 × 2868) and 13" iPad (2064 × 2752), and the
   Play phone screenshots and feature graphic (1024 × 500).
 
 ## Licence of the store apps
 
-The repository is GPL-3.0. The GPL's extra conditions don't fit the App
-Store's terms, so the store builds need other terms. As the copyright holder,
-WebCMS can publish its own builds under other terms while the code stays
-GPL here. Two ways:
-
-- **The stores' standard terms** (Apple's standard EULA, Google Play's
-  terms) for the store builds, with the repository staying GPL-3.0.
-  CasaFlow's listing points to Apple's standard EULA too. Its `LICENSE` file
-  is Expo's own MIT licence, which came with the project template; it isn't
-  a CasaFlow licence.
-- **MIT for everything**, as suggested. Also possible, but MIT lets anyone
-  publish a copy of Phototek, closed or paid, in the stores; the GPL doesn't
-  allow a closed copy.
+Decided on 2026-11-28: the code stays GPL-3.0 in this repository, and
+WebCMS, as the copyright holder, publishes its own store builds under the
+stores' standard terms: Apple's standard EULA
+(`urls.terms` in `store/common.json`) and Google Play's terms, as for CasaFlow.
+Contributions from other people would need their agreement to that (a CLA)
+before they are merged.

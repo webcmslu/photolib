@@ -1141,6 +1141,32 @@ fn person_faces(
     db::faces_in(&open_index(&state, &path)?, &clusters).map_err(|e| e.to_string())
 }
 
+/// The faces of the person made of `clusters` not checked yet, least like
+/// them first.
+#[tauri::command(async)]
+fn check_person(
+    path: String,
+    clusters: Vec<i64>,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<people::PersonCheck, String> {
+    people::check_person(&open_index(&state, &path)?, &clusters, limit.min(500))
+        .map_err(|e| e.to_string())
+}
+
+/// Records that the faces of the person made of `clusters` in `photos` are
+/// them: a check doesn't show them again.
+#[tauri::command(async)]
+fn confirm_person_faces(
+    path: String,
+    clusters: Vec<i64>,
+    photos: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    db::confirm_faces(&mut open_index(&state, &path)?, &clusters, &photos)
+        .map_err(|e| e.to_string())
+}
+
 /// Records that the group `cluster` is not the person `name`: it is no longer
 /// suggested for them.
 #[tauri::command(async)]
@@ -1706,6 +1732,8 @@ pub fn run() {
             faces_status,
             enable_faces,
             disable_faces,
+            check_person,
+            confirm_person_faces,
             content_status,
             enable_content,
             disable_content,

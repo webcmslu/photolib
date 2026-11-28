@@ -97,6 +97,23 @@ struct ClustersArgs {
 }
 
 #[derive(Deserialize)]
+struct CheckArgs {
+    clusters: Vec<i64>,
+    #[serde(default = "check_page")]
+    limit: usize,
+}
+
+fn check_page() -> usize {
+    40
+}
+
+#[derive(Deserialize)]
+struct PhotosArgs {
+    clusters: Vec<i64>,
+    photos: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct OpsArgs {
     ops: Vec<org::Op>,
 }
@@ -260,6 +277,16 @@ fn run(library: &Library, command: &str, args: Value) -> Result<Value, String> {
             answer(people::suggestions(&index()?, &a.clusters, &a.name).map_err(failed)?)
         }
 
+        "check_person" => {
+            let a: CheckArgs = parse(args)?;
+            answer(people::check_person(&index()?, &a.clusters, a.limit.min(500)).map_err(failed)?)
+        }
+        "confirm_person_faces" => {
+            let a: PhotosArgs = parse(args)?;
+            db::confirm_faces(&mut index()?, &a.clusters, &a.photos).map_err(failed)?;
+            Ok(Value::Null)
+        }
+
         // Changes, recorded in the library's logs.
         "apply_ops" => {
             let a: OpsArgs = parse(args)?;
@@ -294,6 +321,24 @@ fn run(library: &Library, command: &str, args: Value) -> Result<Value, String> {
                 .ok_or("This person's face isn't found in this photo.")?;
             library.record(&mut conn, vec![op])?;
             Ok(Value::Null)
+        }
+        "remove_from_person" => {
+            #[derive(Deserialize)]
+            struct Args {
+                clusters: Vec<i64>,
+                photos: Vec<String>,
+                #[serde(default)]
+                name: Option<String>,
+            }
+            let a: Args = parse(args)?;
+            let mut conn = index()?;
+            let removed = db::remove_faces(&mut conn, &a.clusters, &a.photos).map_err(failed)?;
+            // Another of their faces carries the name from now on.
+            if let Some(name) = a.name.filter(|name| !name.trim().is_empty()) {
+                let ops = people::naming_ops(&conn, &a.clusters, name.trim()).map_err(failed)?;
+                library.record(&mut conn, ops)?;
+            }
+            answer(removed)
         }
         "set_person_hidden" => {
             let a: HiddenArgs = parse(args)?;

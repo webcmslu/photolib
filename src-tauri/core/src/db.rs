@@ -199,6 +199,11 @@ CREATE TABLE IF NOT EXISTS faces.not_person (
     name    TEXT NOT NULL,
     PRIMARY KEY (cluster, name)
 ) WITHOUT ROWID;
+-- Faces the user checked: they are the person their group is, and a check
+-- of that person doesn't show them again (see people::check_person).
+CREATE TABLE IF NOT EXISTS faces.confirmed (
+    face INTEGER PRIMARY KEY
+);
 -- Two groups the user split apart, which must not be merged again (a < b).
 CREATE TABLE IF NOT EXISTS faces.kept_apart (
     a INTEGER NOT NULL,
@@ -669,6 +674,81 @@ pub fn faces_in(conn: &Connection, clusters: &[i64]) -> rusqlite::Result<Vec<Fac
         }
     }
     Ok(boxes)
+}
+
+/// A face of a person, for checking that it is them.
+pub struct CheckedFace {
+    pub id: i64,
+    pub fingerprint: String,
+    pub bounds: [f64; 4],
+    pub embedding: Vec<f32>,
+    /// When the photo was taken (ms), 0 when unknown.
+    pub sort_date: i64,
+    /// The photo's size, when known.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// The user said it is them.
+    pub confirmed: bool,
+}
+
+/// Every face in `clusters`, with its photo's date.
+pub fn faces_to_check(conn: &Connection, clusters: &[i64]) -> rusqlite::Result<Vec<CheckedFace>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.id, f.fingerprint, f.left, f.top, f.width, f.height, f.embedding,
+                COALESCE(p.sort_date, 0), f.id IN (SELECT face FROM faces.confirmed),
+                p.width, p.height
+         FROM faces.face f
+         LEFT JOIN (SELECT fingerprint, MIN(sort_date) AS sort_date, MAX(width) AS width,
+                           MAX(height) AS height
+                    FROM photos GROUP BY fingerprint) p ON p.fingerprint = f.fingerprint
+         WHERE f.cluster = ?1",
+    )?;
+    let mut faces = Vec::new();
+    for cluster in clusters {
+        let rows = stmt.query_map([cluster], |row| {
+            let bytes: Vec<u8> = row.get(6)?;
+            Ok(CheckedFace {
+                id: row.get(0)?,
+                fingerprint: row.get(1)?,
+                bounds: [row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?],
+                embedding: bytes
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|chunk| f32::from_le_bytes(*chunk))
+                    .collect(),
+                sort_date: row.get(7)?,
+                confirmed: row.get(8)?,
+                width: row.get(9)?,
+                height: row.get(10)?,
+            })
+        })?;
+        for face in rows {
+            faces.push(face?);
+        }
+    }
+    Ok(faces)
+}
+
+/// Records that the faces of `clusters` in the given photos are that person.
+pub fn confirm_faces(
+    conn: &mut Connection,
+    clusters: &[i64],
+    photos: &[String],
+) -> rusqlite::Result<()> {
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    {
+        let mut insert = tx.prepare(
+            "INSERT OR IGNORE INTO faces.confirmed (face)
+             SELECT id FROM faces.face WHERE fingerprint = ?1 AND cluster = ?2",
+        )?;
+        for photo in photos {
+            for cluster in clusters {
+                insert.execute(params![photo, cluster])?;
+            }
+        }
+    }
+    tx.commit()
 }
 
 /// Takes the faces of `clusters` in the given photos out of their group, for

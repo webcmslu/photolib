@@ -194,3 +194,9 @@ To build installers locally: `npm run tauri build`.
   merge. Its header comment describes the format.
 - Per-machine state (recents now; index and thumbnails later) lives in the OS
   app-data dir, never in the library folder.
+
+## Licence
+
+GPL-3.0 (see `LICENSE`). The iOS and Android apps in the App Store and
+Google Play are published by WebCMS, the copyright holder, under the stores'
+standard terms (see `docs/mobile.md`).

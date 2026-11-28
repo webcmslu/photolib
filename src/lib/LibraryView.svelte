@@ -59,6 +59,7 @@
   import Overview from "./Overview.svelte";
   import PeopleView from "./PeopleView.svelte";
   import PersonSuggestions from "./PersonSuggestions.svelte";
+  import PersonCheck from "./PersonCheck.svelte";
   import { PhotoPages } from "./pages.svelte";
   import PhotoGrid from "./PhotoGrid.svelte";
   import Viewer from "./Viewer.svelte";
@@ -311,6 +312,8 @@
   /** The name of the person whose photos are listed. */
   let personName = $state<string | null>(null);
   let personHidden = $state(false);
+  /** The "Check photos" window of a named person is open. */
+  let checkingPerson = $state(false);
 
   async function loadSidebar() {
     try {
@@ -2081,6 +2084,15 @@
               {personHidden ? t("Show in People") : t("Hide from People")}
             </button>
             {#if personName}
+              <button
+                class="secondary"
+                onclick={() => (checkingPerson = true)}
+                title={t("Show the photos that look least like {name}, to take out those that are someone else", {
+                  name: personName,
+                })}
+              >
+                {t("Check Photos…")}
+              </button>
               {@const favorite = favoritePeople.includes(personName)}
               <button
                 class="secondary icon-button"
@@ -2320,6 +2332,16 @@
           </span>
           <button class="link-button" onclick={dismissPersonHint}>{t("Got it")}</button>
         </p>
+      {/if}
+      {#if checkingPerson && listing.kind === "person" && personName}
+        <PersonCheck
+          libraryPath={library.path}
+          name={personName}
+          clusters={listing.clusters}
+          canEdit={online}
+          onchanged={refreshAll}
+          onclose={() => (checkingPerson = false)}
+        />
       {/if}
       {#if listing.kind === "person" && personName}
         <PersonSuggestions

@@ -756,6 +756,131 @@ fn assign_groups(faces: &[db::GroupingFace], named: &HashMap<i64, String>) -> Ve
     assigned
 }
 
+/// A person's face that may be someone else's, to check.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoubtfulFace {
+    pub fingerprint: String,
+    /// Left, top, width, height, as fractions of the upright photo.
+    pub bounds: [f64; 4],
+    /// The photo's size, when known.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    /// How much it looks like the person's other faces of the same years
+    /// (1 the same, around 0 someone else).
+    pub likeness: f32,
+}
+
+/// A person's faces not checked yet, least like them first.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PersonCheck {
+    /// How many faces look doubtful, not yet checked.
+    pub doubtful: usize,
+    /// How many faces are left to check, doubtful or not.
+    pub unchecked: usize,
+    /// The least alike first, at most the number asked for.
+    pub faces: Vec<DoubtfulFace>,
+}
+
+/// A face looking less than this like the person's other faces of the same
+/// years is doubtful (see [`check_person`]).
+const DOUBTFUL: f32 = 0.45;
+/// The person's faces taken this close in time (ms) are what a face is
+/// compared with: people change, children most of all.
+const SAME_YEARS: i64 = 365 * 24 * 3600 * 1000;
+/// Fewer faces than this in those years: compared with all of them.
+const MIN_COMPARED: usize = 20;
+const DAY: i64 = 24 * 3600 * 1000;
+
+/// Lists the faces of the person made of `clusters` not checked yet, those
+/// that look least like them first: a relative who looks alike can still
+/// pass for them, so the list goes on as far as the user wants. Each face
+/// is compared with the average of their faces from the year
+/// before and after, leaving out the photos of the same day (a series of
+/// photos of someone else would otherwise vouch for itself). Faces the user
+/// checked aren't shown again, but still count as the person's.
+pub fn check_person(
+    conn: &Connection,
+    clusters: &[i64],
+    limit: usize,
+) -> rusqlite::Result<PersonCheck> {
+    let mut faces = db::faces_to_check(conn, clusters)?;
+    faces.sort_by_key(|face| face.sort_date);
+    let dims = faces.first().map_or(0, |face| face.embedding.len());
+    if faces.len() < 2 || dims == 0 {
+        return Ok(PersonCheck {
+            doubtful: 0,
+            unchecked: 0,
+            faces: Vec::new(),
+        });
+    }
+    // Running sums, to add up any span of faces at once.
+    let mut running = vec![vec![0f32; dims]];
+    for face in &faces {
+        let mut next = running.last().unwrap().clone();
+        for (total, value) in next.iter_mut().zip(&face.embedding) {
+            *total += value;
+        }
+        running.push(next);
+    }
+    let span_sum = |from: usize, to: usize| -> Vec<f32> {
+        running[to]
+            .iter()
+            .zip(&running[from])
+            .map(|(a, b)| a - b)
+            .collect()
+    };
+    let first_at = |date: i64| faces.partition_point(|face| face.sort_date < date);
+    let mut doubtful: Vec<DoubtfulFace> = Vec::new();
+    let mut seen = HashSet::new();
+    for face in &faces {
+        if face.confirmed {
+            continue;
+        }
+        let day = face.sort_date.div_euclid(DAY) * DAY;
+        let (day_from, day_to) = (first_at(day), first_at(day + DAY));
+        let (from, to) = (
+            first_at(face.sort_date - SAME_YEARS),
+            first_at(face.sort_date + SAME_YEARS + 1),
+        );
+        let (from, to) = if to - from - (day_to - day_from) < MIN_COMPARED {
+            (0, faces.len())
+        } else {
+            (from, to)
+        };
+        let mut reference = span_sum(from, to);
+        for (total, value) in reference.iter_mut().zip(span_sum(day_from, day_to)) {
+            *total -= value;
+        }
+        if reference.iter().all(|v| *v == 0.0) {
+            continue; // all their photos are from that one day
+        }
+        let likeness = similarity(&face.embedding, &unit(&reference));
+        if seen.insert(face.fingerprint.clone()) {
+            doubtful.push(DoubtfulFace {
+                fingerprint: face.fingerprint.clone(),
+                bounds: face.bounds,
+                width: face.width,
+                height: face.height,
+                likeness,
+            });
+        }
+    }
+    doubtful.sort_by(|a, b| a.likeness.total_cmp(&b.likeness));
+    let unchecked = doubtful.len();
+    let total = doubtful
+        .iter()
+        .filter(|face| face.likeness < DOUBTFUL)
+        .count();
+    doubtful.truncate(limit);
+    Ok(PersonCheck {
+        doubtful: total,
+        unchecked,
+        faces: doubtful,
+    })
+}
+
 /// A person as the People screen shows them.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1500,5 +1625,51 @@ mod tests {
             db::split_faces(&mut conn, &[new], &["zz".repeat(32)]).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn a_check_shows_the_faces_least_like_the_person_first() {
+        let mut conn = db::open_in_memory().unwrap();
+        // 30 photos of one person over the days, two of them someone else.
+        let names: Vec<String> = (0..30).map(|n| format!("p{n:02}")).collect();
+        for (n, name) in names.iter().enumerate() {
+            photo(&mut conn, name);
+            conn.execute(
+                "UPDATE photos SET sort_date = ?1 WHERE rel_path = ?2",
+                rusqlite::params![n as i64 * DAY, format!("{name}.jpg")],
+            )
+            .unwrap();
+            let who = if n == 7 || n == 20 { 4 } else { 0 };
+            let embedding = face_of(who, 0.05 * (n % 3) as f32);
+            let faces = [NewFace {
+                bounds: [0.1, 0.1, 0.2, 0.2],
+                score: 0.9,
+                embedding: &embedding,
+            }];
+            let tx = conn.transaction().unwrap();
+            db::save_faces(&tx, &name.repeat(64 / name.len()), &faces).unwrap();
+            tx.commit().unwrap();
+        }
+        conn.execute("UPDATE faces.face SET cluster = 7", [])
+            .unwrap();
+
+        let check = check_person(&conn, &[7], 5).unwrap();
+        assert_eq!((check.doubtful, check.unchecked), (2, 30));
+        let first: HashSet<&str> = check.faces[..2]
+            .iter()
+            .map(|face| &face.fingerprint[..3])
+            .collect();
+        assert_eq!(first, HashSet::from(["p07", "p20"]));
+        assert_eq!(check.faces.len(), 5);
+
+        // Checked faces aren't shown again.
+        let shown: Vec<String> = check.faces.iter().map(|f| f.fingerprint.clone()).collect();
+        db::confirm_faces(&mut conn, &[7], &shown[2..]).unwrap();
+        let again = check_person(&conn, &[7], 100).unwrap();
+        assert_eq!(again.unchecked, 27);
+        assert!(again
+            .faces
+            .iter()
+            .all(|face| !shown[2..].contains(&face.fingerprint)));
     }
 }
