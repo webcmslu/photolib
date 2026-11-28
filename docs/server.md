@@ -53,18 +53,23 @@ The desktop apps (Mac, Windows, Linux) don't change and don't need it.
    e.g. `Docker/phototek`. Note the path of your photos share, e.g.
    `/volume1/Photos`. The first scan of a large library takes a while; after
    that, only new photos are read.
-3. **The image.** Until it is published, build it on a Mac (from this
-   folder) for your NAS's processor. Most ASUSTOR models are Intel or AMD
-   (`amd64`); a few are ARM (`arm64`, the AS10 and AS11 series):
+3. **The image** is published with each release as
+   `ghcr.io/webcmslu/phototek-server` (for Intel and AMD processors, which
+   covers most ASUSTOR models, the AS6208T among them). Nothing to do here:
+   the stack below downloads it. To build it yourself instead (e.g. for an
+   ARM model, `--platform linux/arm64`):
    ```sh
    docker buildx build --platform linux/amd64 -f src-tauri/server/Dockerfile \
      -t phototek-server --output type=docker,dest=phototek-server.tar .
    ```
-   In Portainer, go to **Images → Import** and choose `phototek-server.tar`.
+   then import the `.tar` in Portainer (**Images → Import**) and write
+   `image: phototek-server` in the stack.
 4. **The container.** In Portainer, go to **Stacks → Add stack**, paste
    `src-tauri/server/compose.yaml`, change the folders and the password,
    then **Deploy**.
-5. **Open it.** Go to `http://<NAS address>:8080` in a browser. On a phone,
+5. **Updates.** In Portainer, open the stack and choose **Update the stack**
+   with **Re-pull image** on, or pin a version (`:0.1.20`) in `image:`.
+6. **Open it.** Go to `http://<NAS address>:8080` in a browser. On a phone,
    "Add to Home Screen" makes it look like an app.
 
 ### Outside the house
@@ -108,7 +113,6 @@ Then open http://localhost:8080.
 
 ## Next
 
-- **A published image:** a multi-architecture image on a registry, so the
-  install is just the stack (needs your OK to publish).
+- **An ARM image** (`arm64`), for the few ARM NAS.
 - **Mobile apps** (Tauri 2 for iOS and Android) and **TV apps** (webOS,
   Tizen), on the same API.

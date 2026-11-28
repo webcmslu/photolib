@@ -2,7 +2,7 @@
 # Change the two folders on the left of the ":" to your own (see docs/server.md).
 services:
   phototek:
-    image: phototek-server
+    image: ghcr.io/webcmslu/phototek-server:latest
     container_name: phototek
     restart: unless-stopped
     ports:
