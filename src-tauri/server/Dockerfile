@@ -30,6 +30,9 @@ WORKDIR /app/src-tauri
 COPY src-tauri/Cargo.toml src-tauri/Cargo.lock ./
 COPY src-tauri/core ./core
 COPY src-tauri/server ./server
+# A member of the workspace (the phone app's photo library): Cargo reads it
+# to load the workspace, without building it.
+COPY src-tauri/plugins/photos ./plugins/photos
 # The desktop app is part of the workspace but not built here: only its
 # manifest is needed, with an empty library.
 COPY src-tauri/build.rs ./
