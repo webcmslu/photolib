@@ -604,7 +604,6 @@ const de: Record<string, string> = {
   "{saved} of {total} photos and videos are on the server.": "{saved} von {total} Fotos und Videos sind auf dem Server.",
   "1 couldn't be sent; it will be tried again.": "1 konnte nicht gesendet werden; es wird erneut versucht.",
   "1 photo or video removed from this phone.": "1 Foto oder Video von diesem Telefon entfernt.",
-  "Back up each time the app opens": "Bei jedem Öffnen der App sichern",
   "Back Up Now": "Jetzt sichern",
   "Backing up… {n} sent so far.": "Sicherung … bisher {n} gesendet.",
   "Backing up… 1 sent so far.": "Sicherung … bisher 1 gesendet.",
@@ -623,6 +622,9 @@ const de: Record<string, string> = {
   "◀ ▶ to move · OK for details · ▶︎❙❙ for a slideshow": "◀ ▶ zum Blättern · OK für Details · ▶︎❙❙ für eine Diashow",
   "Memory": "Erinnerung",
   "No photos here.": "Hier gibt es keine Fotos.",
+  "Back up automatically": "Automatisch sichern",
+  "Each time the app opens, and every few hours while it is closed.": "Bei jedem Öffnen der App und alle paar Stunden, wenn sie geschlossen ist.",
+  "Each time the app opens.": "Bei jedem Öffnen der App.",
   "Connect to a Phototek server…": "Mit einem Phototek-Server verbinden …",
   "Phototek servers": "Phototek-Server",
 };

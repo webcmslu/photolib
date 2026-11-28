@@ -46,6 +46,19 @@ impl<R: Runtime> Photos<R> {
     pub fn is_television(&self) -> Result<bool> {
         Ok(false)
     }
+    pub fn schedule_backup(
+        &self,
+        _url: &str,
+        _token: Option<&str>,
+        _device: &str,
+        _record: &str,
+        _hours: u32,
+    ) -> Result<bool> {
+        Self::unavailable()
+    }
+    pub fn cancel_backup(&self) -> Result<()> {
+        Self::unavailable()
+    }
 }
 
 /// Access to the photo library from the app: `app.photos()`.

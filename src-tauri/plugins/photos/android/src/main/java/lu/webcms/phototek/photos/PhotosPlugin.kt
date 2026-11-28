@@ -35,6 +35,15 @@ class ExportArgs {
 }
 
 @InvokeArg
+class ScheduleArgs {
+  lateinit var url: String
+  var token: String? = null
+  lateinit var device: String
+  lateinit var record: String
+  var hours: Long = 6
+}
+
+@InvokeArg
 class DeleteArgs {
   var ids: List<String> = emptyList()
 }
@@ -154,6 +163,20 @@ class PhotosPlugin(private val activity: Activity) : Plugin(activity) {
   @ActivityCallback
   private fun deleteAnswered(invoke: Invoke, result: ActivityResult) {
     invoke.resolve(JSObject().put("deleted", result.resultCode == Activity.RESULT_OK))
+  }
+
+  /** Backs up every few hours while the app is closed (BackupWorker). */
+  @Command
+  fun scheduleBackup(invoke: Invoke) {
+    val args = invoke.parseArgs(ScheduleArgs::class.java)
+    BackupWorker.schedule(activity, args.url, args.token, args.device, args.record, args.hours)
+    invoke.resolve(JSObject().put("scheduled", true))
+  }
+
+  @Command
+  fun cancelBackup(invoke: Invoke) {
+    BackupWorker.cancel(activity)
+    invoke.resolve(JSObject().put("scheduled", false))
   }
 
   /** True on a TV (Android TV, Google TV). */

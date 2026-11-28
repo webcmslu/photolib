@@ -18,6 +18,40 @@ class DeleteArgs: Decodable {
 }
 
 class PhotosPlugin: Plugin {
+  /// Extra time iOS gives when the app leaves the screen, so that a backup
+  /// in progress goes on for a while (backing up while the app is closed
+  /// needs a background task, still to do).
+  private var extraTime: UIBackgroundTaskIdentifier = .invalid
+
+  override func load(webview: WKWebView) {
+    let center = NotificationCenter.default
+    center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+      guard let self = self, self.extraTime == .invalid else { return }
+      self.extraTime = UIApplication.shared.beginBackgroundTask(withName: "Phototek backup") { [weak self] in
+        self?.endExtraTime()
+      }
+    }
+    center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+      self?.endExtraTime()
+    }
+  }
+
+  private func endExtraTime() {
+    if extraTime != .invalid {
+      UIApplication.shared.endBackgroundTask(extraTime)
+      extraTime = .invalid
+    }
+  }
+
+  /// Not on iOS yet: answers that nothing was scheduled.
+  @objc public func scheduleBackup(_ invoke: Invoke) {
+    invoke.resolve(["scheduled": false])
+  }
+
+  @objc public func cancelBackup(_ invoke: Invoke) {
+    invoke.resolve(["scheduled": false])
+  }
+
   /// Asks for access to the photo library (the system asks the user once).
   @objc public func requestAccess(_ invoke: Invoke) {
     PHPhotoLibrary.requestAuthorization(for: .readWrite) { status in

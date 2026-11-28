@@ -36,11 +36,20 @@ Settings → "This phone" (`src/lib/PhoneBackup.svelte`), on the phone app:
   (MediaStore) on Android. Originals only, a Live Photo's video included;
   photos kept in iCloud are downloaded first.
 
-Tested on 2026-11-28 in the Android emulator (backup, a known photo skipped,
-free up space). On iOS the plugin asks for access as it should; the rest
-needs a tap the simulator can't be given from a script, so try it on a real
-iPhone. The backup runs while the app is open: backing up in the background
-is still to do.
+- **While the app is closed:** "Back up automatically" also schedules,
+  on Android, a WorkManager task every 6 hours when the phone is online
+  (`BackupWorker.kt`). It sends the photos not in the app's record to
+  `/api/upload` and records the fingerprints the server answers with, so
+  the app and the task never send a photo twice. On iOS, a backup in
+  progress goes on for a while after the app leaves the screen
+  (`beginBackgroundTask`); a true background backup there needs a
+  `BGProcessingTask`, to build and try on a real iPhone.
+
+Tested on 2026-11-28 in the Android emulator: backup, a known photo skipped,
+free up space, and the background task (turned on, it sent two new photos
+by itself, and the app then counted them as saved). On iOS the plugin asks
+for access as it should; the rest needs a tap the simulator can't be given
+from a script, so try it on a real iPhone.
 
 ## Versions
 

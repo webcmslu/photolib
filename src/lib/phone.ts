@@ -67,6 +67,16 @@ export function setAutoBackup(on: boolean) {
   }
 }
 
+/**
+ * Backs up while the app is closed too, every few hours (Android), or
+ * stops. Resolves with whether the phone does it (not on iPhones yet).
+ */
+export async function scheduleBackground(on: boolean): Promise<boolean> {
+  return invoke<boolean>("schedule_phone_backup", { server: current(), device: await phoneName(), on }).catch(
+    () => false,
+  );
+}
+
 export function backupStatus(): Promise<BackupProgress> {
   return invoke("phone_backup_status", { server: current() });
 }

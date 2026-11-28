@@ -59,3 +59,9 @@ pub(crate) struct Name {
 pub(crate) struct Television {
     pub tv: bool,
 }
+
+#[cfg(mobile)]
+#[derive(Deserialize)]
+pub(crate) struct Scheduled {
+    pub scheduled: bool,
+}

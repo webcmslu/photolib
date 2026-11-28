@@ -52,6 +52,29 @@ impl<R: Runtime> Photos<R> {
         Ok(deleted.deleted)
     }
 
+    /// Backs up every `hours` while the app is closed, with these settings
+    /// (`record` is the app's record of what is saved). False where the
+    /// system doesn't allow it yet (iOS).
+    pub fn schedule_backup(
+        &self,
+        url: &str,
+        token: Option<&str>,
+        device: &str,
+        record: &str,
+        hours: u32,
+    ) -> crate::Result<bool> {
+        let answer: Scheduled = self.0.run_mobile_plugin(
+            "scheduleBackup",
+            json!({ "url": url, "token": token, "device": device, "record": record, "hours": hours }),
+        )?;
+        Ok(answer.scheduled)
+    }
+
+    pub fn cancel_backup(&self) -> crate::Result<()> {
+        let _: Scheduled = self.0.run_mobile_plugin("cancelBackup", ())?;
+        Ok(())
+    }
+
     /// True on a TV (Android TV).
     pub fn is_television(&self) -> crate::Result<bool> {
         let answer: Television = self.0.run_mobile_plugin("isTelevision", ())?;

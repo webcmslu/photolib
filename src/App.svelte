@@ -11,7 +11,7 @@
   } from "./lib/api";
   import LibraryView from "./lib/LibraryView.svelte";
   import AboutButton from "./lib/AboutButton.svelte";
-  import { autoBackup, startBackup } from "./lib/phone";
+  import { autoBackup, scheduleBackground, startBackup } from "./lib/phone";
   import { invoke } from "@tauri-apps/api/core";
   import SettingsButton from "./lib/SettingsButton.svelte";
   import { suppressDefaultMenu } from "./lib/contextMenu";
@@ -48,7 +48,11 @@
       useServer({ url, token });
       const opened = await openLibrary("");
       saveServer({ url, token, name: opened.name });
-      if (inPhoneApp && autoBackup()) startBackup().catch(() => {});
+      if (inPhoneApp && autoBackup()) {
+        startBackup().catch(() => {});
+        // With the server's current address and token.
+        scheduleBackground(true).catch(() => {});
+      }
       servers = savedServers();
       connecting = null;
       library = opened;

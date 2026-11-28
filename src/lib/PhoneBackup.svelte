@@ -15,6 +15,7 @@
     onBackupProgress,
     phoneName,
     savePhoneName,
+    scheduleBackground,
     setAutoBackup,
     spaceToFree,
     startBackup,
@@ -30,9 +31,12 @@
   let toFree = $state<number | null>(null);
   let freed = $state<number | null>(null);
   let busy = $state(false);
+  /** The phone also backs up while the app is closed (Android). */
+  let background = $state(false);
 
   onMount(() => {
     phoneName().then((found) => (name = found));
+    if (auto) scheduleBackground(true).then((on) => (background = on));
     backupStatus()
       .then((status) => (progress = status))
       .catch((e) => (error = errorText(e)));
@@ -153,15 +157,25 @@
   {/if}
 
   <label class="row">
-    <span>{t("Back up each time the app opens")}</span>
+    <span>{t("Back up automatically")}</span>
     <input
       type="checkbox"
       role="switch"
       class="switch"
       bind:checked={auto}
-      onchange={() => setAutoBackup(auto)}
+      onchange={async () => {
+        setAutoBackup(auto);
+        background = await scheduleBackground(auto);
+      }}
     />
   </label>
+  {#if auto}
+    <p class="note">
+      {background
+        ? t("Each time the app opens, and every few hours while it is closed.")
+        : t("Each time the app opens.")}
+    </p>
+  {/if}
   <p class="note">
     {t("Only what the server doesn't have is sent, in full quality, into the folder above, and only to your own server.")}
   </p>

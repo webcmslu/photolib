@@ -30,6 +30,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             is_television,
+            schedule_phone_backup,
             phone_name,
             phone_backup_status,
             start_phone_backup,
@@ -173,6 +174,34 @@ fn is_television(app: AppHandle) -> bool {
 #[tauri::command(async)]
 fn phone_name(app: AppHandle) -> Result<String, String> {
     app.photos().device_name().map_err(|e| e.to_string())
+}
+
+/// How often the phone backs up while the app is closed.
+const BACKGROUND_HOURS: u32 = 6;
+
+/// Backs up while the app is closed (`on`), or stops doing so. Returns
+/// whether the system does it (Android; not iOS yet).
+#[tauri::command(async)]
+fn schedule_phone_backup(
+    app: AppHandle,
+    server: Server,
+    device: String,
+    on: bool,
+) -> Result<bool, String> {
+    if !on {
+        app.photos().cancel_backup().map_err(|e| e.to_string())?;
+        return Ok(false);
+    }
+    let record = record_path(&app, &server)?;
+    app.photos()
+        .schedule_backup(
+            &server.url,
+            server.token.as_deref(),
+            &device,
+            &record.to_string_lossy(),
+            BACKGROUND_HOURS,
+        )
+        .map_err(|e| e.to_string())
 }
 
 /// How many photos are on the phone, and how many of them on `server`.
