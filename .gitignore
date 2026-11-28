@@ -10,3 +10,5 @@ photos-schema.txt
 *.photoslibrary/
 store/index.html
 asc-api-key.env
+dist-tv/
+build/

@@ -11,7 +11,9 @@
     "check": "svelte-check --tsconfig ./tsconfig.json && node tools/i18n-check.mjs",
     "tauri": "tauri",
     "store": "node store/render.mjs",
-    "store:open": "node store/render.mjs && open store/index.html"
+    "store:open": "node store/render.mjs && open store/index.html",
+    "dev:tv": "vite --config vite.tv.config.ts",
+    "build:tv": "vite build --config vite.tv.config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.12.5",

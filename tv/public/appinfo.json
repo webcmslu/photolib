@@ -1,0 +1,13 @@
+{
+  "id": "lu.webcms.phototek",
+  "version": "1.0.0",
+  "vendor": "WebCMS",
+  "type": "web",
+  "main": "index.html",
+  "title": "Phototek",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "bgColor": "#16213A",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}

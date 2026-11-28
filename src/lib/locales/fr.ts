@@ -620,6 +620,9 @@ const fr: Record<string, string> = {
   "The phone asks you to confirm, and keeps them 30 days in its trash (Recently Deleted on an iPhone).": "Le téléphone vous demande de confirmer et les garde 30 jours dans sa corbeille (Supprimés récemment sur un iPhone).",
   "This phone's name": "Nom de ce téléphone",
   "This phone": "Ce téléphone",
+  "◀ ▶ to move · OK for details · ▶︎❙❙ for a slideshow": "◀ ▶ pour avancer · OK pour les détails · ▶︎❙❙ pour un diaporama",
+  "Memory": "Souvenir",
+  "No photos here.": "Aucune photo ici.",
   "Connect to a Phototek server…": "Se connecter à un serveur Phototek…",
   "Phototek servers": "Serveurs Phototek",
 };

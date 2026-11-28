@@ -1,0 +1,42 @@
+/* The TV app: always dark, large type for a screen seen from the sofa. */
+:root {
+  color-scheme: dark;
+  --bg: #0e0f12;
+  --surface: #1d1f25;
+  --surface-hover: #2a2d35;
+  --border: #353842;
+  --text: #f4f4f6;
+  --text-dim: #a3a6b0;
+  --accent: #3d8bff;
+  --accent-text: #ffffff;
+  --danger: #ff6b5e;
+  --focus: #ffffff;
+  font-size: 24px;
+}
+
+html,
+body {
+  margin: 0;
+  width: 1920px;
+  height: 1080px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  cursor: none;
+}
+
+/* What the remote points at. */
+[data-focus] {
+  outline: none;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+[data-focus]:focus {
+  box-shadow:
+    0 0 0 5px var(--focus),
+    0 12px 40px rgb(0 0 0 / 0.6);
+  transform: scale(1.06);
+  z-index: 1;
+}
