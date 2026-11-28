@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "revision": 1,
+  "date": "2026-11-28",
+  "status": "in development",
+  "headline": {
+    "en": "First release",
+    "fr": "Première version",
+    "de": "Erste Version"
+  },
+  "builds": {
+    "iosBuild": null,
+    "androidVersionCode": null,
+    "androidVersionName": "1.0.0"
+  },
+  "notes": [
+    "The phone app shows a Phototek server's library (src-tauri/src/mobile.rs); it builds and runs in the iOS simulator and the Android emulator.",
+    "What's New is unused on a first submission: it starts with 1.0.1."
+  ],
+  "holds": [
+    {
+      "scope": "all",
+      "text": " Demo server for App Review: Reviewers can't reach a NAS: a public Phototek server with sample photos must be up, and its address written in the review contact."
+    },
+    {
+      "scope": "all",
+      "text": " Privacy policy page: https://phototek.webcms.lu/privacy doesn't exist yet (web/ repository)."
+    },
+    {
+      "scope": "all",
+      "text": " Price: Paid app or free with a purchase: not decided. inAppPurchases is empty until then."
+    }
+  ],
+  "whatsNew": {
+    "appStore": {
+      "en": "",
+      "fr": "",
+      "de": ""
+    },
+    "play": {
+      "en": "",
+      "fr": "",
+      "de": ""
+    }
+  }
+}

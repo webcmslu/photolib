@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json && node tools/i18n-check.mjs",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "store": "node store/render.mjs",
+    "store:open": "node store/render.mjs && open store/index.html"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.12.5",

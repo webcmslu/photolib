@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Phototek Store Submission</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/*{{STYLE}}*/
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <h1>Store submission</h1>
+      <span class="ver" id="ver-label"></span>
+    </div>
+
+    <div class="control">
+      <span class="eyebrow">Version</span>
+      <select class="picker" id="version-picker" aria-label="Version"></select>
+    </div>
+
+    <div class="control">
+      <span class="eyebrow">Language</span>
+      <div class="seg" id="locale-seg" role="group" aria-label="Listing language"></div>
+    </div>
+
+    <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch theme"></button>
+
+    <div class="progress">
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <span class="progress-text" id="progress-text"></span>
+    </div>
+  </div>
+</header>
+
+<div class="shell">
+  <aside class="rail" id="rail"></aside>
+  <div class="main" id="main"></div>
+</div>
+
+<script id="store-data" type="application/json">/*{{DATA}}*/</script>
+<script>
+window.__STORE_SHEET__ = JSON.parse(document.getElementById("store-data").textContent);
+</script>
+<script>
+/*{{SCRIPT}}*/
+</script>
+
+</body>
+</html>

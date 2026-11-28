@@ -114,5 +114,6 @@ Then open http://localhost:8080.
 ## Next
 
 - **An ARM image** (`arm64`), for the few ARM NAS.
-- **Mobile apps** (Tauri 2 for iOS and Android) and **TV apps** (webOS,
+- The phone apps are in [mobile.md](mobile.md).
+- **TV apps** (webOS,
   Tizen), on the same API.

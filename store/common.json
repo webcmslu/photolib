@@ -1,0 +1,218 @@
+{
+  "app": {
+    "storeTitle": {
+      "en": "Phototek",
+      "fr": "Phototek",
+      "de": "Phototek"
+    },
+    "homeScreenName": "Phototek",
+    "bundleId": "lu.webcms.phototek",
+    "appleId": null,
+    "sku": "phototek",
+    "primaryLocale": "en",
+    "locales": [
+      "en",
+      "fr",
+      "de"
+    ],
+    "ascLocales": {
+      "en": "en-US",
+      "fr": "fr-FR",
+      "de": "de-DE"
+    },
+    "playLocaleTags": {
+      "en": "en-US",
+      "fr": "fr-FR",
+      "de": "de-DE"
+    },
+    "stores": [
+      "ios",
+      "play"
+    ],
+    "appStore": {
+      "category": "Photo & Video",
+      "secondaryCategory": "Utilities"
+    },
+    "play": {
+      "category": "Photography"
+    }
+  },
+  "urls": {
+    "support": "https://phototek.webcms.lu/",
+    "marketing": "https://phototek.webcms.lu/",
+    "privacy": "https://phototek.webcms.lu/privacy",
+    "terms": "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/",
+    "supportEmail": "(the support address: filled in the consoles, not kept in this public repository)"
+  },
+  "review": {
+    "contact": [
+      [
+        "Sign-in required",
+        "Yes: the address of the demo Phototek server below (no account; the password field stays empty)"
+      ],
+      [
+        "Demo server",
+        "(to set up before the first submission: a Phototek server with sample photos, reachable from the internet)"
+      ],
+      [
+        "Contact name, phone, email",
+        "(filled in App Store Connect, not kept in this public repository)"
+      ]
+    ],
+    "notes": "Phototek shows the photo library kept on the user's own NAS (network storage at home), through the free Phototek server that runs on it (Docker image ghcr.io/webcmslu/phototek-server). The app has no account and no cloud: it talks only to the server the user types in.\n\nTo review it, connect to our demo server: type its address (above) on the first screen and tap Connect, leaving the password empty. It holds sample photos only.\n\nThen: browse the timeline, open a photo and swipe between photos, pinch to zoom, open Collections for the memories, People and the map.\n\nThe app uses plain HTTP because home NAS servers have no certificate; NSAllowsArbitraryLoads is set for that reason only (also to reach the NAS through a VPN such as Tailscale, whose addresses iOS does not count as local)."
+  },
+  "inAppPurchases": [],
+  "appPrivacy": {
+    "summary": "Data Not Collected",
+    "answers": [
+      [
+        "Do you or your partners collect data?",
+        "No: the app talks only to the user's own Phototek server; nothing reaches us or anyone else"
+      ],
+      [
+        "Tracking",
+        "None"
+      ],
+      [
+        "Third-party SDKs",
+        "None"
+      ]
+    ]
+  },
+  "ageRating": {
+    "appStore": {
+      "expected": "4+",
+      "answers": [
+        [
+          "Violence, sexual content, profanity, horror, gambling, drugs",
+          "None"
+        ],
+        [
+          "Unrestricted web access",
+          "No"
+        ],
+        [
+          "User-generated content",
+          "The user's own photos only, never shared with others"
+        ]
+      ]
+    },
+    "play": {
+      "expected": "Everyone",
+      "answers": [
+        [
+          "Category",
+          "Utility, productivity, communication or other"
+        ],
+        [
+          "Violence, sexuality, language, controlled substances, gambling",
+          "None"
+        ],
+        [
+          "Users interact or share content",
+          "No"
+        ]
+      ]
+    }
+  },
+  "screenshots": {
+    "appStore": [
+      [
+        "6.9\"",
+        "iPhone 17 Pro Max — 1320 × 2868 (required)"
+      ],
+      [
+        "13\"",
+        "iPad Pro — 2064 × 2752 (required: the app runs on iPad)"
+      ]
+    ],
+    "play": [
+      [
+        "Phone",
+        "At least 2, 1080 × 1920 or more, 9:16"
+      ],
+      [
+        "Feature graphic",
+        "1024 × 500"
+      ],
+      [
+        "Icon",
+        "512 × 512 (src-tauri/icons/app-icon-mobile.svg)"
+      ]
+    ],
+    "suggestedScreens": [
+      "Timeline: days and months",
+      "A photo, full screen",
+      "Collections: memories",
+      "A memory playing",
+      "People",
+      "The map",
+      "Search"
+    ]
+  },
+  "guardrails": [
+    {
+      "scope": "appStore",
+      "title": "No Apple trademarks in the listing",
+      "body": "Never write “Apple Photos” or “iCloud” in the name, subtitle or keywords (guideline 2.3.7). The description may say the app needs no cloud."
+    },
+    {
+      "scope": "appStore",
+      "title": "Reviewers must reach the demo server",
+      "body": "The app shows nothing without a server: App Review rejects it (guideline 2.1) if the demo server is down. Check it the day of each submission."
+    },
+    {
+      "scope": "all",
+      "title": "Only what the app does today",
+      "body": "Auto-upload and freeing up space are on the roadmap: don't list them before they ship."
+    }
+  ],
+  "differences": [
+    [
+      "Release notes",
+      "What's New, 4000 characters",
+      "What's new, 500 characters"
+    ],
+    [
+      "Short pitch",
+      "Subtitle (30) + Promotional Text (170)",
+      "Short description (80)"
+    ]
+  ],
+  "listing": {
+    "appStore": {
+      "subtitle": {
+        "en": "Your NAS photos, beautifully",
+        "fr": "Les photos de votre NAS",
+        "de": "Ihre NAS-Fotos, wunderschön"
+      },
+      "promotionalText": {
+        "en": "Your whole photo library from your NAS: timeline, memories with music, people, places and search. No cloud, no subscription for storage: your photos stay at home.",
+        "fr": "Toute votre photothèque depuis votre NAS : chronologie, souvenirs en musique, personnes, lieux et recherche. Sans cloud : vos photos restent chez vous.",
+        "de": "Ihre ganze Fotobibliothek vom NAS: Zeitleiste, Erinnerungen mit Musik, Personen, Orte und Suche. Ohne Cloud: Ihre Fotos bleiben zu Hause."
+      },
+      "description": {
+        "en": "Phototek brings the photo library on your NAS to your iPhone and iPad, as beautifully as the photos on the phone itself.\n\nYOUR LIBRARY, AT HOME\nYour photos stay on your own NAS: no cloud, no storage plan to pay every month. The free Phototek server runs on the NAS (ASUSTOR, Synology, QNAP or any Linux box with Docker) and the app shows its library, at home or away through your VPN.\n\nEVERYTHING YOU EXPECT\n• Timeline by years, months and days, fast even with tens of thousands of photos\n• Memories: trips, people and past years, played with music\n• People, recognised by the server and named once for every device\n• Places on a map\n• Favourites, albums and folders, shared with the Phototek apps on your computers\n• Swipe, pinch to zoom, Live Photos and videos\n\nPRIVATE BY DESIGN\nThe app talks only to your server. No account, no tracking, no data collected.\n\nPhototek also exists for macOS, Windows and Linux, where the library can be any folder: a NAS, an external drive or a local disk.",
+        "fr": "Phototek apporte la photothèque de votre NAS sur votre iPhone et votre iPad, aussi belle que les photos du téléphone lui-même.\n\nVOTRE PHOTOTHÈQUE, CHEZ VOUS\nVos photos restent sur votre propre NAS : pas de cloud, pas d'abonnement de stockage à payer chaque mois. Le serveur Phototek gratuit tourne sur le NAS (ASUSTOR, Synology, QNAP ou tout Linux avec Docker) et l'app affiche sa photothèque, à la maison ou en déplacement grâce à votre VPN.\n\nTOUT CE QUE VOUS ATTENDEZ\n• Chronologie par années, mois et jours, rapide même avec des dizaines de milliers de photos\n• Souvenirs : voyages, personnes et années passées, en musique\n• Personnes, reconnues par le serveur et nommées une fois pour tous vos appareils\n• Lieux sur une carte\n• Favoris, albums et dossiers, partagés avec les apps Phototek de vos ordinateurs\n• Balayage, zoom à deux doigts, Live Photos et vidéos\n\nPRIVÉ PAR CONCEPTION\nL'app ne parle qu'à votre serveur. Pas de compte, pas de pistage, aucune donnée collectée.\n\nPhototek existe aussi pour macOS, Windows et Linux, où la photothèque peut être n'importe quel dossier : un NAS, un disque externe ou un disque local.",
+        "de": "Phototek bringt die Fotobibliothek Ihres NAS auf Ihr iPhone und iPad, so schön wie die Fotos auf dem Telefon selbst.\n\nIHRE BIBLIOTHEK, ZU HAUSE\nIhre Fotos bleiben auf Ihrem eigenen NAS: keine Cloud, kein Speicherabo jeden Monat. Der kostenlose Phototek-Server läuft auf dem NAS (ASUSTOR, Synology, QNAP oder jedes Linux mit Docker), und die App zeigt seine Bibliothek, zu Hause oder unterwegs über Ihr VPN.\n\nALLES, WAS SIE ERWARTEN\n• Zeitleiste nach Jahren, Monaten und Tagen, schnell auch bei Zehntausenden Fotos\n• Erinnerungen: Reisen, Personen und vergangene Jahre, mit Musik\n• Personen, vom Server erkannt und einmal für alle Geräte benannt\n• Orte auf einer Karte\n• Favoriten, Alben und Ordner, geteilt mit den Phototek-Apps Ihrer Computer\n• Wischen, Zoomen mit zwei Fingern, Live Photos und Videos\n\nPRIVAT VON GRUND AUF\nDie App spricht nur mit Ihrem Server. Kein Konto, kein Tracking, keine Datenerfassung.\n\nPhototek gibt es auch für macOS, Windows und Linux, wo die Bibliothek jeder Ordner sein kann: ein NAS, eine externe Festplatte oder ein lokales Laufwerk."
+      },
+      "keywords": {
+        "en": "nas,photo library,gallery,memories,asustor,synology,qnap,self-hosted,private,album,timeline,docker",
+        "fr": "nas,photothèque,galerie,souvenirs,asustor,synology,qnap,auto-hébergé,privé,album,chronologie",
+        "de": "nas,fotobibliothek,galerie,erinnerungen,asustor,synology,qnap,selbst gehostet,privat,album"
+      }
+    },
+    "play": {
+      "shortDescription": {
+        "en": "The photo library on your NAS: timeline, memories, people and places. No cloud.",
+        "fr": "Les photos de votre NAS : chronologie, souvenirs, personnes, lieux. Sans cloud.",
+        "de": "Fotos von Ihrem NAS: Zeitleiste, Erinnerungen, Personen, Orte. Ohne Cloud."
+      },
+      "fullDescription": {
+        "en": "Phototek brings the photo library on your NAS to your phone and tablet, as beautifully as the photos on the phone itself.\n\nYOUR LIBRARY, AT HOME\nYour photos stay on your own NAS: no cloud, no storage plan to pay every month. The free Phototek server runs on the NAS (ASUSTOR, Synology, QNAP or any Linux box with Docker) and the app shows its library, at home or away through your VPN.\n\nEVERYTHING YOU EXPECT\n• Timeline by years, months and days, fast even with tens of thousands of photos\n• Memories: trips, people and past years, played with music\n• People, recognised by the server and named once for every device\n• Places on a map\n• Favourites, albums and folders, shared with the Phototek apps on your computers\n• Swipe, pinch to zoom, Live Photos and videos\n\nPRIVATE BY DESIGN\nThe app talks only to your server. No account, no tracking, no data collected.\n\nPhototek also exists for macOS, Windows and Linux, where the library can be any folder: a NAS, an external drive or a local disk.",
+        "fr": "Phototek apporte la photothèque de votre NAS sur votre téléphone et votre tablette, aussi belle que les photos du téléphone lui-même.\n\nVOTRE PHOTOTHÈQUE, CHEZ VOUS\nVos photos restent sur votre propre NAS : pas de cloud, pas d'abonnement de stockage à payer chaque mois. Le serveur Phototek gratuit tourne sur le NAS (ASUSTOR, Synology, QNAP ou tout Linux avec Docker) et l'app affiche sa photothèque, à la maison ou en déplacement grâce à votre VPN.\n\nTOUT CE QUE VOUS ATTENDEZ\n• Chronologie par années, mois et jours, rapide même avec des dizaines de milliers de photos\n• Souvenirs : voyages, personnes et années passées, en musique\n• Personnes, reconnues par le serveur et nommées une fois pour tous vos appareils\n• Lieux sur une carte\n• Favoris, albums et dossiers, partagés avec les apps Phototek de vos ordinateurs\n• Balayage, zoom à deux doigts, Live Photos et vidéos\n\nPRIVÉ PAR CONCEPTION\nL'app ne parle qu'à votre serveur. Pas de compte, pas de pistage, aucune donnée collectée.\n\nPhototek existe aussi pour macOS, Windows et Linux, où la photothèque peut être n'importe quel dossier : un NAS, un disque externe ou un disque local.",
+        "de": "Phototek bringt die Fotobibliothek Ihres NAS auf Ihr Smartphone und Tablet, so schön wie die Fotos auf dem Telefon selbst.\n\nIHRE BIBLIOTHEK, ZU HAUSE\nIhre Fotos bleiben auf Ihrem eigenen NAS: keine Cloud, kein Speicherabo jeden Monat. Der kostenlose Phototek-Server läuft auf dem NAS (ASUSTOR, Synology, QNAP oder jedes Linux mit Docker), und die App zeigt seine Bibliothek, zu Hause oder unterwegs über Ihr VPN.\n\nALLES, WAS SIE ERWARTEN\n• Zeitleiste nach Jahren, Monaten und Tagen, schnell auch bei Zehntausenden Fotos\n• Erinnerungen: Reisen, Personen und vergangene Jahre, mit Musik\n• Personen, vom Server erkannt und einmal für alle Geräte benannt\n• Orte auf einer Karte\n• Favoriten, Alben und Ordner, geteilt mit den Phototek-Apps Ihrer Computer\n• Wischen, Zoomen mit zwei Fingern, Live Photos und Videos\n\nPRIVAT VON GRUND AUF\nDie App spricht nur mit Ihrem Server. Kein Konto, kein Tracking, keine Datenerfassung.\n\nPhototek gibt es auch für macOS, Windows und Linux, wo die Bibliothek jeder Ordner sein kann: ein NAS, eine externe Festplatte oder ein lokales Laufwerk."
+      }
+    }
+  }
+}
