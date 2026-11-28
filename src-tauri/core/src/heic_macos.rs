@@ -184,7 +184,7 @@ pub fn decode(bytes: &[u8]) -> Result<RgbImage, String> {
         drop(context);
 
         let mut rgb = Vec::with_capacity(width * height * 3);
-        for pixel in rgbx.chunks_exact(4) {
+        for pixel in rgbx.as_chunks::<4>().0 {
             rgb.extend_from_slice(&pixel[..3]);
         }
         RgbImage::from_raw(width as u32, height as u32, rgb)

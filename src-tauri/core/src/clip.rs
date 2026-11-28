@@ -222,8 +222,10 @@ fn vocabulary() -> &'static Vocabulary {
             });
         }
         let points: Vec<f32> = CONCEPTS_BIN
-            .chunks_exact(4)
-            .map(|bytes| f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
             .collect();
         assert_eq!(
             points.len(),
@@ -346,7 +348,9 @@ struct Calibration {
 fn similarities(point: &[f32]) -> Vec<f32> {
     vocabulary()
         .points
-        .chunks_exact(DIMENSIONS)
+        .as_chunks::<DIMENSIONS>()
+        .0
+        .iter()
         .map(|concept| concept.iter().zip(point).map(|(a, b)| a * b).sum())
         .collect()
 }
@@ -399,8 +403,10 @@ fn to_bytes(point: &[f32]) -> Vec<u8> {
 
 fn from_bytes(bytes: &[u8]) -> Vec<f32> {
     bytes
-        .chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| f32::from_le_bytes(*b))
         .collect()
 }
 
@@ -635,7 +641,7 @@ mod tests {
         let vocabulary = vocabulary();
         assert!(vocabulary.concepts.len() > 200);
         // Each point has length 1.
-        for point in vocabulary.points.chunks_exact(DIMENSIONS) {
+        for point in vocabulary.points.as_chunks::<DIMENSIONS>().0 {
             let length: f32 = point.iter().map(|v| v * v).sum::<f32>().sqrt();
             assert!((length - 1.0).abs() < 1e-3);
         }

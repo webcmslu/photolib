@@ -268,6 +268,16 @@ pub fn scan_with(
         if let Some(tx) = tx {
             tx.commit()?;
         }
+        // The walk can end with the last file, before the loop reports it.
+        if !reported_walk_end {
+            on_progress(Progress {
+                phase: Phase::Indexing,
+                discovered: discovered.load(Ordering::Relaxed),
+                total: queued.load(Ordering::Relaxed),
+                done,
+                known: known_count,
+            });
+        }
         walker.join().expect("the folder walk panicked")
     })?;
 
