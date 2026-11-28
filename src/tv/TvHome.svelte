@@ -147,9 +147,9 @@
     </section>
   {/if}
 
-  {#if people.length > 0}
+  {#if people.length > 0 || rows?.pets}
     <section>
-      <h2>{t("People")}</h2>
+      <h2>{people.length > 0 ? t("People") : t("Pets")}</h2>
       <div class="row">
         {#each people as person (person.clusters[0])}
           <button
@@ -169,6 +169,13 @@
             <strong>{person.name}</strong>
           </button>
         {/each}
+        {#if rows?.pets}
+          {@const pets = rows.pets}
+          <button data-focus class="person" onclick={() => onlisting(t("Pets"), pets.listing)}>
+            <span class="face"><img src={thumbUrl(pets.cover, "preview")} alt="" /></span>
+            <strong>🐾 {t("Pets")}</strong>
+          </button>
+        {/if}
       </div>
     </section>
   {/if}
@@ -341,5 +348,13 @@
   .error {
     margin: 24px 96px;
     color: var(--danger);
+  }
+
+  /* The pets card: a photo in the circle, as a person's face. */
+  .face img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 </style>

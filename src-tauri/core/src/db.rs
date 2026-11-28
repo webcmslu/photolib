@@ -1081,6 +1081,11 @@ pub enum Listing {
     Picked {
         fingerprints: Vec<String>,
     },
+    /// The photos that show one of these things (keys from
+    /// data/concepts.tsv, see clip.rs): the pets.
+    Showing {
+        concepts: Vec<String>,
+    },
     /// Another listing narrowed down by the filter menu.
     Only {
         within: Box<Listing>,
@@ -1444,6 +1449,16 @@ impl Listing {
                     format!("fingerprint IN ({})", picked.join(", "))
                 };
                 (format!("WHERE {visible} AND {inside} AND ?1 IS NULL"), None)
+            }
+            Listing::Showing { concepts } => {
+                let keys: Vec<&str> = concepts.iter().map(String::as_str).collect();
+                (
+                    format!(
+                        "WHERE {visible} AND {} AND ?1 IS NULL",
+                        crate::clip::condition(&keys)
+                    ),
+                    None,
+                )
             }
             Listing::Only { within, only } => {
                 let (filter, param) = within.filter();
@@ -2483,6 +2498,16 @@ pub fn hidden_and_duplicates(conn: &Connection) -> rusqlite::Result<(u32, u32)> 
         |row| row.get(0),
     )?;
     Ok((hidden, duplicates))
+}
+
+/// How many photos a listing shows.
+pub fn count_in(conn: &Connection, listing: &Listing) -> rusqlite::Result<u32> {
+    let (filter, param) = listing.filter();
+    conn.query_row(
+        &format!("SELECT COUNT(DISTINCT fingerprint) FROM photos {filter}"),
+        [param],
+        |row| row.get(0),
+    )
 }
 
 /// How many photos and videos are indexed. A Live Photo counts once.

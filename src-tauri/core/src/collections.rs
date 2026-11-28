@@ -72,6 +72,51 @@ pub struct Collections {
     pub duplicates: u32,
     /// The town home is in, these days.
     pub home: Option<String>,
+    /// The photos of pets (dogs, cats…), once search by content found some.
+    pub pets: Option<Pets>,
+}
+
+/// The pets row: how many photos show one, and the clearest of them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pets {
+    pub count: u32,
+    pub cover: String,
+    pub listing: Listing,
+}
+
+/// What counts as a pet, among the things search by content knows.
+const PETS: &[&str] = &["dog", "cat", "rabbit", "hamster"];
+
+/// The pets, if search by content found any.
+fn pets(conn: &Connection) -> rusqlite::Result<Option<Pets>> {
+    let listing = Listing::Showing {
+        concepts: PETS.iter().map(|key| (*key).to_owned()).collect(),
+    };
+    let count = db::count_in(conn, &listing)?;
+    if count == 0 {
+        return Ok(None);
+    }
+    let keys: Vec<String> = PETS.iter().map(|key| format!("'{key}'")).collect();
+    // The photo CLIP is surest shows a pet, among the listed ones.
+    let cover: Option<String> = conn
+        .query_row(
+            &format!(
+                "SELECT t.fingerprint FROM content.tag t
+                 WHERE t.concept IN ({}) AND t.fingerprint IN
+                     (SELECT fingerprint FROM photos WHERE thumb_state != 2 AND part = 0)
+                 ORDER BY t.similarity DESC LIMIT 1",
+                keys.join(", ")
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(cover.map(|cover| Pets {
+        count,
+        cover,
+        listing,
+    }))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -187,6 +232,7 @@ pub fn collections(conn: &Connection, today: i64) -> rusqlite::Result<Collection
     media.retain(|_, count| *count > 0);
     collections.media = media;
     (collections.hidden, collections.duplicates) = db::hidden_and_duplicates(conn)?;
+    collections.pets = pets(conn)?;
     Ok(collections)
 }
 
@@ -438,6 +484,7 @@ impl Library {
             featured: self.featured(today),
             recent_days: self.recent_days(),
             home: homes.latest_town.clone(),
+            pets: None,
             memories,
             today: today_list,
             trips: trips_out,
@@ -1533,5 +1580,49 @@ mod tests {
             });
             std::fs::write(out, json.to_string()).unwrap();
         }
+    }
+
+    #[test]
+    fn pets_come_from_what_photos_show() {
+        let mut conn = db::open_in_memory().unwrap();
+        assert!(pets(&conn).unwrap().is_none(), "no pets found yet");
+        let tx = conn.transaction().unwrap();
+        for (n, name) in ["dog", "cat", "beach"].iter().enumerate() {
+            db::upsert(
+                &tx,
+                &db::PhotoRow {
+                    rel_path: format!("{name}.jpg"),
+                    size: 1,
+                    mtime_ms: 0,
+                    fingerprint: format!("{n}").repeat(64),
+                    sort_date: 0,
+                    date_from_exif: false,
+                    orientation: None,
+                    width: None,
+                    height: None,
+                    camera_make: None,
+                    camera_model: None,
+                    latitude: None,
+                    longitude: None,
+                    is_video: false,
+                    duration_ms: None,
+                    live_candidate: false,
+                },
+            )
+            .unwrap();
+            tx.execute(
+                "INSERT INTO content.tag (concept, fingerprint, similarity) VALUES (?1, ?2, ?3)",
+                rusqlite::params![name, format!("{n}").repeat(64), 0.25 + n as f64 / 100.0],
+            )
+            .unwrap();
+        }
+        tx.commit().unwrap();
+        let found = pets(&conn).unwrap().unwrap();
+        assert_eq!(found.count, 2);
+        // The surest of the two.
+        assert_eq!(found.cover, "1".repeat(64));
+        let listed =
+            db::photos_page_in(&conn, &found.listing, db::Order::default(), 0, 10).unwrap();
+        assert_eq!(listed.len(), 2);
     }
 }

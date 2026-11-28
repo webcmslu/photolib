@@ -321,9 +321,12 @@
       </section>
     {/if}
 
-    {#if people.length > 0}
+    {#if people.length > 0 || data.pets}
+      {@const petsOnly = people.length === 0 ? data.pets : null}
       <section>
-        {@render header(t("People"), () => onsection("people"))}
+        {@render header(petsOnly ? t("Pets") : t("People"), () =>
+          petsOnly ? onlisting(petsOnly.listing, t("Pets")) : onsection("people"),
+        )}
         <div class="row-wrap">
           <div class="row">
             {#each people as { person, favorite } (person.clusters[0])}
@@ -342,6 +345,15 @@
                 </span>
               </button>
             {/each}
+            {#if data.pets}
+              {@const pets = data.pets}
+              <button class="person" onclick={() => onlisting(pets.listing, t("Pets"))}>
+                <span class="face">
+                  <img src={thumbUrl(pets.cover, "preview")} alt="" loading="lazy" draggable="false" />
+                </span>
+                <span class="tile-name">🐾 {t("Pets")}</span>
+              </button>
+            {/if}
           </div>
           {@render scroller()}
         </div>
@@ -837,5 +849,13 @@
   .favorite {
     margin-right: 4px;
     color: var(--danger);
+  }
+
+  /* The pets card: a photo in the circle, as a person's face. */
+  .face img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
   }
 </style>

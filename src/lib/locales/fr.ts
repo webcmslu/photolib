@@ -625,6 +625,7 @@ const fr: Record<string, string> = {
   "Back up automatically": "Sauvegarder automatiquement",
   "Each time the app opens, and every few hours while it is closed.": "À chaque ouverture de l'app, et toutes les quelques heures quand elle est fermée.",
   "Each time the app opens.": "À chaque ouverture de l'app.",
+  "Pets": "Animaux",
   "Connect to a Phototek server…": "Se connecter à un serveur Phototek…",
   "Phototek servers": "Serveurs Phototek",
 };

@@ -528,6 +528,8 @@ export type Listing =
   | { kind: "days"; from: number; to: number }
   /** A chosen set of photos: a memory, the featured photos. */
   | { kind: "picked"; fingerprints: string[] }
+  /** The photos showing one of these things (see clip.rs): the pets. */
+  | { kind: "showing"; concepts: string[] }
   /** Another listing narrowed down to a camera, a lens, an aperture or a focal length. */
   | ({ kind: "gear"; within: Listing } & Gear)
   /** Another listing narrowed down by the filter menu. */
@@ -1026,6 +1028,8 @@ export interface Collections {
   duplicates: number;
   /** The town home is in, these days. */
   home: string | null;
+  /** The photos of pets, once search by content found some. */
+  pets: { count: number; cover: string; listing: Listing } | null;
 }
 
 /** The Collections page's rows. `today` is the viewer's date in days since 1970. */
