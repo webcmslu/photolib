@@ -105,8 +105,8 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-u
 - **Demo server for App Review** (guideline 2.1): done, at
   https://demo-phototek.webcms.lu ("Try the demo" on the first screen; see
   `web/k8s/README.md`). Check it's up on the day of each submission.
-- **A privacy policy page** at phototek.webcms.lu/privacy ("Data Not
-  Collected": the app talks only to the user's server).
+- **Privacy page:** done, https://phototek.webcms.lu/privacy/ (in the
+  `web` repository, `public/privacy/`).
 - **The price:** free, with a one-time unlock (about €9.99, no subscription)
   for automatic upload, freeing up space, memories with music and videos.
   The in-app purchase is still to build.

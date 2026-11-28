@@ -16,13 +16,10 @@
   "notes": [
     "The phone app shows a Phototek server's library (src-tauri/src/mobile.rs); it builds and runs in the iOS simulator and the Android emulator.",
     "What's New is unused on a first submission: it starts with 1.0.1.",
-    "Demo server up on 2026-11-28 at https://demo-phototek.webcms.lu (web/k8s/demo); the app's first screen has “Try the demo”."
+    "Demo server up on 2026-11-28 at https://demo-phototek.webcms.lu (web/k8s/demo); the app's first screen has “Try the demo”.",
+    "Privacy page live on 2026-11-28: https://phototek.webcms.lu/privacy/ (English, French, German; web/public/privacy/)."
   ],
   "holds": [
-    {
-      "scope": "all",
-      "text": " Privacy policy page: https://phototek.webcms.lu/privacy doesn't exist yet (web/ repository)."
-    },
     {
       "scope": "all",
       "text": " Price: free, with a one-time unlock (about 9.99 €) for automatic upload, freeing up space, memories with music and videos. The in-app purchase isn't built yet."
