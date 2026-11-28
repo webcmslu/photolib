@@ -112,6 +112,14 @@ PHOTOTEK_LIBRARY=~/Pictures PHOTOTEK_DATA=/tmp/phototek PHOTOTEK_WEB=../dist \
 
 Then open http://localhost:8080.
 
+## Photos from phones
+
+The phone app backs up its photos to the server: they go into
+`Phones/<phone name>/<year>/<month>/` in the photo folder, never over another
+file, and a photo the library already has isn't stored twice. The photo
+folder must be mounted writable for that (it is in `compose.yaml`; with
+`:ro` the phone is told uploads can't be stored).
+
 ## Next
 
 - **An ARM image** (`arm64`), for the few ARM NAS.

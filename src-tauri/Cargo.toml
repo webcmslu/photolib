@@ -9,7 +9,7 @@ publish = false
 
 [workspace]
 # The library code is in `core`, shared with the NAS server (`server`).
-members = ["core", "server"]
+members = ["core", "server", "plugins/photos"]
 
 [workspace.package]
 # The one version of the app, the core and the server.
@@ -30,6 +30,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+blake3 = "1.8.7"
 
 # The desktop app: the library is on this computer, and every command runs
 # here. The phone app only talks to a Phototek server (src/mobile.rs).
@@ -44,7 +45,6 @@ tauri-plugin-dialog = "2"
 percent-encoding = "2"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 walkdir = "2.5.0"
-blake3 = "1.8.7"
 kamadak-exif = "0.6.2"
 rayon = "1.12.0"
 chrono = "0.4.45"
@@ -57,6 +57,11 @@ tract-onnx = "0.23"
 ureq = "2"
 tauri-plugin-process = "2"
 tauri-plugin-updater = "2"
+
+# The phone app: its photo library, and sending photos to the server.
+[target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
+tauri-plugin-photos = { path = "plugins/photos" }
+ureq = { version = "2", features = ["json"] }
 
 [target.'cfg(target_os = "ios")'.dependencies]
 # One call to WKWebView, to let the page reach under the notch and the home

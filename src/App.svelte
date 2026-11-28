@@ -11,6 +11,7 @@
   } from "./lib/api";
   import LibraryView from "./lib/LibraryView.svelte";
   import AboutButton from "./lib/AboutButton.svelte";
+  import { autoBackup, startBackup } from "./lib/phone";
   import SettingsButton from "./lib/SettingsButton.svelte";
   import { suppressDefaultMenu } from "./lib/contextMenu";
   import { errorText, locale, t } from "./lib/i18n";
@@ -46,6 +47,7 @@
       useServer({ url, token });
       const opened = await openLibrary("");
       saveServer({ url, token, name: opened.name });
+      if (inPhoneApp && autoBackup()) startBackup().catch(() => {});
       servers = savedServers();
       connecting = null;
       library = opened;

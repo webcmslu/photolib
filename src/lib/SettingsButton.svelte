@@ -15,7 +15,8 @@
     onFacesDownload,
     type FacesStatus,
   } from "./api";
-  import { server } from "./platform";
+  import { inPhoneApp, server } from "./platform";
+  import PhoneBackup from "./PhoneBackup.svelte";
   import { formatBytes } from "./format";
   import { chooseLanguage, errorText, languageChoice, LANGUAGES, t, type LanguageChoice } from "./i18n";
   import type { Order } from "./api";
@@ -243,6 +244,10 @@
           {/if}
         </p>
       </section>
+
+      {#if inPhoneApp && server()}
+        <PhoneBackup />
+      {/if}
 
       {#if error}
         <p class="error" role="alert">{error}</p>

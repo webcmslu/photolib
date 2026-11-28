@@ -16,6 +16,32 @@ Android:
 - `inPhoneApp` in `platform.ts`: the welcome screen opens the last server
   used, or the form to add one.
 
+## Backing up the phone
+
+Settings → "This phone" (`src/lib/PhoneBackup.svelte`), on the phone app:
+
+- **Back Up Now**, or each time the app opens: the photos and videos the
+  server doesn't have are sent, in full quality, to `POST /api/upload`. They
+  land in `Phones/<the phone's name>/<year>/<month>/` in the library
+  (server/src/upload.rs). A photo the library has anywhere (same
+  fingerprint) isn't sent twice: the phone asks `known_photos` first.
+- **Free Up Space…** removes from the phone the photos recorded as saved
+  *and* found on the server at that moment, after the user confirms twice
+  (ours, then the system's). iOS keeps them 30 days in Recently Deleted,
+  Android in its trash.
+- The phone keeps, per server, which of its photos are saved
+  (`backup-<server>.json` in its app data), so later backups only look at new
+  photos.
+- `plugins/photos` reads the photo library: Swift (PhotoKit) on iOS, Kotlin
+  (MediaStore) on Android. Originals only, a Live Photo's video included;
+  photos kept in iCloud are downloaded first.
+
+Tested on 2026-11-28 in the Android emulator (backup, a known photo skipped,
+free up space). On iOS the plugin asks for access as it should; the rest
+needs a tap the simulator can't be given from a script, so try it on a real
+iPhone. The backup runs while the app is open: backing up in the background
+is still to do.
+
 ## Versions
 
 The store versions are their own (1.0.0 for the first), apart from the

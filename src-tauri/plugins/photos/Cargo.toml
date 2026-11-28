@@ -1,0 +1,18 @@
+[package]
+name = "tauri-plugin-photos"
+version.workspace = true
+description = "The phone's photo library (iOS, Android), for backing it up to a Phototek server"
+edition = "2021"
+license = "GPL-3.0-or-later"
+rust-version = "1.90"
+publish = false
+links = "tauri-plugin-photos"
+
+[dependencies]
+tauri = { version = "2" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

@@ -7,6 +7,7 @@
 //!   same interface runs in a browser, on a phone or on a TV;
 //! - `GET /thumb/<grid|preview>/<fingerprint>` and `GET /photo/<fingerprint>`
 //!   serve the thumbnails and the photos and videos themselves;
+//! - `POST /api/upload` takes photos from phones, into `Phones/` (upload.rs);
 //! - everything else is the interface (the app's `dist` folder).
 //!
 //! Set up with environment variables:
@@ -30,6 +31,7 @@ mod access;
 mod commands;
 mod library;
 mod media;
+mod upload;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -80,6 +82,11 @@ async fn main() {
     let index = web_dir.join("index.html");
     let app = Router::new()
         .route("/api/events", get(events))
+        // Photos and videos from phones: no size limit on these.
+        .route(
+            "/api/upload",
+            post(upload::upload).layer(axum::extract::DefaultBodyLimit::disable()),
+        )
         .route("/api/{command}", post(commands::handle))
         .route("/thumb/{size}/{fingerprint}", get(media::thumb))
         .route("/photo/{fingerprint}", get(media::photo))

@@ -51,5 +51,7 @@
 	<string>Phototek connects to the Phototek server on your NAS to show your photos.</string>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Phototek backs up your photos and videos to the Phototek server on your NAS, and can then remove them from this phone to free up space.</string>
 </dict>
 </plist>

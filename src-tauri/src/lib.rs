@@ -11,6 +11,8 @@ pub use desktop::run;
 mod mobile;
 #[cfg(mobile)]
 pub use mobile::run;
+#[cfg(any(mobile, test))]
+mod phone_fingerprint;
 
 // The desktop app's modules. They reach the library code as `crate::db` and
 // the like.

@@ -277,6 +277,22 @@ fn run(library: &Library, command: &str, args: Value) -> Result<Value, String> {
             answer(people::suggestions(&index()?, &a.clusters, &a.name).map_err(failed)?)
         }
 
+        // Which of a phone's files the library has (see upload.rs).
+        "known_photos" => {
+            #[derive(Deserialize)]
+            struct Args {
+                fingerprints: Vec<String>,
+            }
+            let a: Args = parse(args)?;
+            let conn = index()?;
+            let mut known = Vec::new();
+            for fingerprint in a.fingerprints.iter().take(5000) {
+                if crate::upload::known(&conn, fingerprint).map_err(failed)? {
+                    known.push(fingerprint.clone());
+                }
+            }
+            answer(known)
+        }
         "check_person" => {
             let a: CheckArgs = parse(args)?;
             answer(people::check_person(&index()?, &a.clusters, a.limit.min(500)).map_err(failed)?)
