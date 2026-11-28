@@ -77,7 +77,7 @@
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { saveSettings, settings } from "./settings.svelte";
   import { ICONS, type Icon } from "./icons";
-  import { inBrowser } from "./platform";
+  import { inBrowser, server } from "./platform";
 
   interface Props {
     library: LibraryInfo;
@@ -1649,7 +1649,7 @@
     <p class="banner">
       {t("This library can't be reached right now. You are browsing what this computer has cached; full-size photos and changes are unavailable until it is back.")}
     </p>
-  {:else if !writable && !inBrowser}
+  {:else if !writable && !server()}
     <p class="banner">
       {t("This folder is read-only. Favorites, albums and hidden photos are kept on this computer only.")}
     </p>

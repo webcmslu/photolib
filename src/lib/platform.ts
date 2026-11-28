@@ -7,6 +7,20 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 /** True in a browser, served by the Phototek server. */
 export const inBrowser = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window);
 
+/**
+ * True in the phone app (iOS, Android): Tauri, but with no library of its
+ * own: it always shows a Phototek server's (see src-tauri/src/mobile.rs).
+ * iPads say they are Macs, but Macs have no touch screen.
+ */
+export const inPhoneApp =
+  typeof navigator !== "undefined" &&
+  !inBrowser &&
+  (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1));
+
+/** True where the desktop's native menus, window and updates aren't there. */
+export const noDesktop = inBrowser || inPhoneApp;
+
 /** A Phototek server the interface talks to instead of the app's own commands. */
 export interface Server {
   /** "" for the server that served the page; else e.g. "http://nas.local:8080". */
@@ -79,7 +93,7 @@ export function appWindow(): {
   isFullscreen: () => Promise<boolean>;
   setFullscreen: (on: boolean) => Promise<void>;
 } {
-  if (!inBrowser) return getCurrentWindow();
+  if (!noDesktop) return getCurrentWindow();
   return {
     isFullscreen: async () => document.fullscreenElement !== null,
     setFullscreen: async (on) => {

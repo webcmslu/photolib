@@ -17,6 +17,7 @@
   import {
     forgetServer,
     inBrowser,
+    inPhoneApp,
     logIn,
     savedServers,
     saveServer,
@@ -70,6 +71,18 @@
     // In a browser, the server has one library: open it straight away.
     if (inBrowser) {
       void open("");
+      return;
+    }
+    // The phone app shows a server's library: the last one used, or the
+    // form to add one.
+    if (inPhoneApp) {
+      const [last] = servers;
+      // Development and store screenshots: a server given at build time
+      // (never set for a store build).
+      const preset = import.meta.env.VITE_PHOTOTEK_SERVER as string | undefined;
+      if (last) void connect(last.url, null, last);
+      else if (preset) void connect(preset, "");
+      else connecting = { address: "", password: "" };
       return;
     }
     refreshRecents();
@@ -141,7 +154,8 @@
     library = null;
     // Back to this computer's own libraries.
     useServer(null);
-    refreshRecents();
+    if (inPhoneApp) servers = savedServers();
+    else refreshRecents();
   }
 
   const dateFormat = new Intl.DateTimeFormat(locale, {
@@ -160,14 +174,18 @@
   <div class="corner"><SettingsButton /><AboutButton /></div>
   <div class="welcome">
     <h1>Phototek</h1>
-    <p class="dim">{t("Browse any folder of photos: a NAS, an external drive or a local disk.")}</p>
+    <p class="dim">
+      {inPhoneApp
+        ? t("Your photos, from the Phototek server on your NAS.")
+        : t("Browse any folder of photos: a NAS, an external drive or a local disk.")}
+    </p>
 
-    <div class="drop" class:dropping>
+    {#if !inPhoneApp}<div class="drop" class:dropping>
       <button class="primary" onclick={pickAndOpen} disabled={busy}>
         {busy ? t("Opening…") : t("Open library folder…")}
       </button>
       <p class="hint">{dropping ? t("Drop to open this folder") : t("or drop a folder here")}</p>
-    </div>
+    </div>{/if}
 
     {#if error}
       <p class="error" role="alert">{error}</p>
@@ -200,7 +218,9 @@
           <input type="password" bind:value={connecting.password} autocomplete="current-password" />
         </label>
         <div class="connect-buttons">
-          <button type="button" class="link" onclick={() => (connecting = null)}>{t("Cancel")}</button>
+          {#if !inPhoneApp || servers.length > 0}
+            <button type="button" class="link" onclick={() => (connecting = null)}>{t("Cancel")}</button>
+          {/if}
           <button type="submit" class="primary" disabled={busy}>{busy ? t("Connecting…") : t("Connect")}</button>
         </div>
       </form>
@@ -278,8 +298,8 @@
 <style>
   .corner {
     position: fixed;
-    top: 12px;
-    right: 12px;
+    top: max(12px, env(safe-area-inset-top));
+    right: max(12px, env(safe-area-inset-right));
     display: flex;
     gap: 6px;
   }
@@ -287,7 +307,7 @@
   .welcome {
     max-width: 560px;
     margin: 0 auto;
-    padding: 64px 24px 32px;
+    padding: calc(64px + env(safe-area-inset-top)) 24px 32px;
     text-align: center;
   }
 

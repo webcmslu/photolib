@@ -576,6 +576,7 @@ const fr: Record<string, string> = {
   "Password, if it has one": "Mot de passe, s’il en a un",
   "Connecting…": "Connexion…",
   "Connect": "Se connecter",
+  "Your photos, from the Phototek server on your NAS.": "Vos photos, depuis le serveur Phototek de votre NAS.",
   "Connect to a Phototek server…": "Se connecter à un serveur Phototek…",
   "Phototek servers": "Serveurs Phototek",
 };

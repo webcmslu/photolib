@@ -55,7 +55,14 @@
         "upgradeCode": "0a82bb92-bbf4-531a-9bf6-ca1622c676e1"
       }
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "iOS": {
+      "developmentTeam": "7LMT79E5E4",
+      "minimumSystemVersion": "16.0"
+    },
+    "android": {
+      "minSdkVersion": 26
+    }
   },
   "plugins": {
     "updater": {

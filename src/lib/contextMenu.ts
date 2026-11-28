@@ -8,7 +8,7 @@ import {
   PredefinedMenuItem,
   Submenu,
 } from "@tauri-apps/api/menu";
-import { inBrowser } from "./platform";
+import { noDesktop } from "./platform";
 
 export type MenuEntry =
   | { label: string; action: () => void; enabled?: boolean }
@@ -52,7 +52,7 @@ export async function showMenu(
 ): Promise<void> {
   event.preventDefault();
   event.stopPropagation();
-  if (inBrowser) return showPageMenu(event.clientX, event.clientY, entries);
+  if (noDesktop) return showPageMenu(event.clientX, event.clientY, entries);
   try {
     const menu = await Menu.new({ items: await build(entries) });
     await menu.popup();

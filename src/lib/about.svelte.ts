@@ -10,7 +10,7 @@ import { getName, getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { inBrowser } from "./platform";
+import { noDesktop } from "./platform";
 
 const RELEASES = "https://github.com/webcmslu/phototek/releases/latest";
 const LATEST_API = "https://api.github.com/repos/webcmslu/phototek/releases/latest";
@@ -46,7 +46,7 @@ export async function checkForUpdate(): Promise<void> {
   if (checked) return;
   checked = true;
   // A server updates with its container, not from here.
-  if (inBrowser) return;
+  if (noDesktop) return;
   try {
     [about.name, about.version] = await Promise.all([getName(), getVersion()]);
     const [response, suffix] = await Promise.all([

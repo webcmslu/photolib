@@ -1,7 +1,8 @@
 node_modules/
 dist/
 src-tauri/target/
-src-tauri/gen/
+# The schemas are made at each build; the iOS and Android projects are kept.
+src-tauri/gen/schemas/
 .DS_Store
 *.log
 photos-schema.txt
