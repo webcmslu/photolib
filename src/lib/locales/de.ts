@@ -597,6 +597,8 @@ const de: Record<string, string> = {
   "All are {name}: next": "Alle sind {name}: weiter",
   "Take out 1 photo: next": "1 Foto entfernen: weiter",
   "Take out {n} photos: next": "{n} Fotos entfernen: weiter",
+  "No Phototek server yet?": "Noch kein Phototek-Server?",
+  "Try the demo": "Demo ausprobieren",
   "Connect to a Phototek server…": "Mit einem Phototek-Server verbinden …",
   "Phototek servers": "Phototek-Server",
 };

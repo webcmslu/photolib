@@ -18,6 +18,7 @@
     forgetServer,
     inBrowser,
     inPhoneApp,
+    DEMO_SERVER,
     logIn,
     savedServers,
     saveServer,
@@ -228,6 +229,15 @@
       <button class="link connect-link" onclick={() => (connecting = { address: "", password: "" })}>
         {t("Connect to a Phototek server…")}
       </button>
+    {/if}
+
+    <!-- Sample photos on our own server: to try the app without a NAS (and
+         for App Review). -->
+    {#if !servers.some((entry) => entry.url === DEMO_SERVER)}
+      <p class="demo">
+        {t("No Phototek server yet?")}
+        <button class="link" onclick={() => connect(DEMO_SERVER, "")} disabled={busy}>{t("Try the demo")}</button>
+      </p>
     {/if}
 
     {#if servers.length > 0}
@@ -446,6 +456,16 @@
 
   .connect-link {
     margin-top: 14px;
+    font-size: 13px;
+  }
+
+  .demo {
+    margin: 10px 0 0;
+    font-size: 13px;
+    color: var(--text-dim);
+  }
+
+  .demo .link {
     font-size: 13px;
   }
 

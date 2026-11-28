@@ -76,12 +76,14 @@ adb install -r src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-u
 
 ## Before the first submission
 
-- **A demo server for App Review** (guideline 2.1): reviewers can't reach a
-  NAS. A Phototek server with sample photos, reachable from the internet, and
-  its address in the review notes.
+- **Demo server for App Review** (guideline 2.1): done, at
+  https://demo-phototek.webcms.lu ("Try the demo" on the first screen; see
+  `web/k8s/README.md`). Check it's up on the day of each submission.
 - **A privacy policy page** at phototek.webcms.lu/privacy ("Data Not
   Collected": the app talks only to the user's server).
-- **The price:** a paid app, or free with an in-app purchase.
+- **The price:** free, with a one-time unlock (about €9.99, no subscription)
+  for automatic upload, freeing up space, memories with music and videos.
+  The in-app purchase is still to build.
 - Screenshots: 6.9" iPhone (1320 × 2868) and 13" iPad (2064 × 2752), and the
   Play phone screenshots and feature graphic (1024 × 500).
 

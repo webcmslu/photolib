@@ -18,6 +18,9 @@ export const inPhoneApp =
   (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
     (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1));
 
+/** The public demo: a Phototek server with sample photos (web/k8s/demo). */
+export const DEMO_SERVER = "https://demo-phototek.webcms.lu";
+
 /** True where the desktop's native menus, window and updates aren't there. */
 export const noDesktop = inBrowser || inPhoneApp;
 

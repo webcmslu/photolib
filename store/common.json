@@ -48,18 +48,18 @@
     "contact": [
       [
         "Sign-in required",
-        "Yes: the address of the demo Phototek server below (no account; the password field stays empty)"
+        "No: on the first screen, tap “Try the demo” (or type https://demo-phototek.webcms.lu and tap Connect, password empty)"
       ],
       [
         "Demo server",
-        "(to set up before the first submission: a Phototek server with sample photos, reachable from the internet)"
+        "https://demo-phototek.webcms.lu (163 public-domain sample photos)"
       ],
       [
         "Contact name, phone, email",
         "(filled in App Store Connect, not kept in this public repository)"
       ]
     ],
-    "notes": "Phototek shows the photo library kept on the user's own NAS (network storage at home), through the free Phototek server that runs on it (Docker image ghcr.io/webcmslu/phototek-server). The app has no account and no cloud: it talks only to the server the user types in.\n\nTo review it, connect to our demo server: type its address (above) on the first screen and tap Connect, leaving the password empty. It holds sample photos only.\n\nThen: browse the timeline, open a photo and swipe between photos, pinch to zoom, open Collections for the memories, People and the map.\n\nThe app uses plain HTTP because home NAS servers have no certificate; NSAllowsArbitraryLoads is set for that reason only (also to reach the NAS through a VPN such as Tailscale, whose addresses iOS does not count as local)."
+    "notes": "Phototek shows the photo library kept on the user's own NAS (network storage at home), through the free Phototek server that runs on it (Docker image ghcr.io/webcmslu/phototek-server). The app has no account and no cloud: it talks only to the server the user types in.\n\nTo review it, tap “Try the demo” on the first screen: the app connects to our demo server (https://demo-phototek.webcms.lu), which holds 163 public-domain sample photos.\n\nThen: browse the timeline, open a photo and swipe between photos, pinch to zoom, open Collections for the memories and trips, the map, and search for “beach” or “dog”.\n\nThe app uses plain HTTP because home NAS servers have no certificate; NSAllowsArbitraryLoads is set for that reason only (also to reach the NAS through a VPN such as Tailscale, whose addresses iOS does not count as local)."
   },
   "inAppPurchases": [],
   "appPrivacy": {
