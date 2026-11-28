@@ -25,20 +25,31 @@ It works in the desktop app (Settings → Search) and on the Phototek server
    half (250 MB, not shipped), are in `core/data/concepts.bin`.
 4. **Tags.** A photo is tagged with a concept when CLIP is clearly sure
    (a 30% share of all the concepts), or when the concept is among the
-   photo's first 4 and stands out by 2.6 standard deviations from the others
-   (`clip.rs`). That gives about 2.6 tags a photo. Tags and points are kept
-   in `content.db` next to the index; changing the list or the rule only
-   works the tags out again from the points, in seconds.
+   photo's first 4 and stands out by 2.6 standard deviations from the others.
+   Once the library has 300 photos, the concept must also be 2 standard
+   deviations above how close it usually is to *this library's* photos:
+   some concepts sit close to every family photo. That calibration is worked
+   out again whenever the library grows by a quarter (`clip.rs`). Tags and
+   points are kept in `content.db` next to the index; changing the list or
+   the rule only works the tags out again from the points (15 seconds for
+   58,000 photos).
 5. **Search.** A word that names a concept (`clip::concepts_for`, accents
    and case ignored, multi-word phrases like "salle de bain" kept together)
    also matches the photos tagged with it (`search.rs`).
 
-## Tuning notes (2026-11-28, on the family library)
+## Tuning notes (2026-11-28, on the family library: 58,357 photos)
 
-- On a random 3,000-photo sample, even the weakest "beach" matches were all
-  beaches; the beach photos left out were mostly sea views (tagged "sea").
-  "Snow" and "cake" were as clean at the margin. Events are looser:
-  "Christmas" also brings indoor family scenes in winter.
+- Looking at all of them took 17 minutes on the MacBook Pro.
+- With the first rule alone, "birthday" tagged 6,849 photos: any gathering
+  around a table. Two fixes: concrete descriptions ("a birthday cake with
+  lit candles", not "a birthday party"), and the per-library calibration.
+  Birthday went down to 757, mostly cakes, candles and banners.
+- Searches checked by eye on random results: beach (2,638), dog (34), wedding
+  (1,694), cake (753), snow (507), fireworks (244), horse (162). Beach and
+  dog were all right; wedding brought wedding dresses and ceremonies; sledding
+  is the weakest (snowy scenes, some sleds).
+- A concept described by one vague word ("sledding", "party") draws too much:
+  describe what it looks like.
 - The quantized model (89 MB) runs 7× slower in tract and gives different
   points: the full model is the better choice.
 - Without its text half, the app can't search for any free text: only the

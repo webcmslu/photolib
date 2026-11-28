@@ -66,8 +66,15 @@ const CLOSE_RANK: usize = 4;
 const CLOSE_STANDOUT: f32 = 2.6;
 /// Never below this similarity: the photo shows nothing CLIP knows.
 const MIN_SIMILARITY: f32 = 0.2;
+/// And, once the library has enough photos to tell, this far (in standard
+/// deviations) above how close the concept usually is to this library's
+/// photos: some concepts ("party", "child") are close to every family
+/// photo, and would otherwise tag thousands of them.
+const ABOVE_USUAL: f32 = 2.0;
+/// The photos needed to tell how close each concept usually is.
+const MIN_CALIBRATION: u64 = 300;
 /// Changes when the rule above changes, so the tags are worked out again.
-const RULE_VERSION: u32 = 1;
+const RULE_VERSION: u32 = 2;
 
 const WRITE_BATCH: usize = 50;
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
@@ -327,15 +334,28 @@ pub fn condition(concepts: &[&str]) -> String {
     )
 }
 
-/// The concepts a photo shows, by index, with their similarity.
-fn tags(point: &[f32]) -> Vec<(usize, f32)> {
-    let vocabulary = vocabulary();
-    let count = vocabulary.concepts.len();
-    let similarities: Vec<f32> = vocabulary
+/// How close each concept usually is to a library's photos.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Calibration {
+    /// The photos it was worked out from.
+    photos: u64,
+    mean: Vec<f32>,
+    deviation: Vec<f32>,
+}
+
+fn similarities(point: &[f32]) -> Vec<f32> {
+    vocabulary()
         .points
         .chunks_exact(DIMENSIONS)
         .map(|concept| concept.iter().zip(point).map(|(a, b)| a * b).sum())
-        .collect();
+        .collect()
+}
+
+/// The concepts a photo shows, by index, with their similarity.
+fn tags(point: &[f32], calibration: Option<&Calibration>) -> Vec<(usize, f32)> {
+    let vocabulary = vocabulary();
+    let count = vocabulary.concepts.len();
+    let similarities = similarities(point);
     let mean = similarities.iter().sum::<f32>() / count as f32;
     let deviation = (similarities.iter().map(|s| (s - mean).powi(2)).sum::<f32>() / count as f32)
         .sqrt()
@@ -355,7 +375,10 @@ fn tags(point: &[f32]) -> Vec<(usize, f32)> {
             let similarity = similarities[index];
             let share = exponentials[index] / total;
             let standout = (similarity - mean) / deviation;
+            let usual = calibration
+                .is_none_or(|c| (similarity - c.mean[index]) / c.deviation[index] >= ABOVE_USUAL);
             similarity >= MIN_SIMILARITY
+                && usual
                 && (share >= SURE_SHARE || (rank < CLOSE_RANK && standout >= CLOSE_STANDOUT))
         })
         .map(|(_, &index)| (index, similarities[index]))
@@ -364,7 +387,7 @@ fn tags(point: &[f32]) -> Vec<(usize, f32)> {
 
 /// The keys of the concepts a photo's point shows (for tests and tuning).
 pub fn tag_keys(point: &[f32]) -> Vec<&'static str> {
-    tags(point)
+    tags(point, None)
         .into_iter()
         .map(|(index, _)| vocabulary().concepts[index].key.as_str())
         .collect()
@@ -382,21 +405,31 @@ fn from_bytes(bytes: &[u8]) -> Vec<f32> {
 }
 
 /// Writes a photo's point and its tags.
-fn store(conn: &Connection, fingerprint: &str, point: &[f32]) -> rusqlite::Result<()> {
+fn store(
+    conn: &Connection,
+    fingerprint: &str,
+    point: &[f32],
+    calibration: Option<&Calibration>,
+) -> rusqlite::Result<()> {
     conn.prepare_cached(
         "INSERT OR REPLACE INTO content.embedding (fingerprint, point) VALUES (?1, ?2)",
     )?
     .execute(params![fingerprint, to_bytes(point)])?;
-    write_tags(conn, fingerprint, point)
+    write_tags(conn, fingerprint, point, calibration)
 }
 
-fn write_tags(conn: &Connection, fingerprint: &str, point: &[f32]) -> rusqlite::Result<()> {
+fn write_tags(
+    conn: &Connection,
+    fingerprint: &str,
+    point: &[f32],
+    calibration: Option<&Calibration>,
+) -> rusqlite::Result<()> {
     conn.prepare_cached("DELETE FROM content.tag WHERE fingerprint = ?1")?
         .execute([fingerprint])?;
     let mut insert = conn.prepare_cached(
         "INSERT INTO content.tag (concept, fingerprint, similarity) VALUES (?1, ?2, ?3)",
     )?;
-    for (index, similarity) in tags(point) {
+    for (index, similarity) in tags(point, calibration) {
         insert.execute(params![
             vocabulary().concepts[index].key,
             fingerprint,
@@ -406,36 +439,92 @@ fn write_tags(conn: &Connection, fingerprint: &str, point: &[f32]) -> rusqlite::
     Ok(())
 }
 
+fn meta(conn: &Connection, key: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT value FROM content.meta WHERE key = ?1",
+        [key],
+        |row| row.get(0),
+    )
+    .ok()
+}
+
+/// The library's calibration, once it has enough photos.
+fn calibration(conn: &Connection) -> Option<Calibration> {
+    serde_json::from_str(&meta(conn, "calibration")?).ok()
+}
+
+/// Each stored point, skipping the empty ones.
+fn each_point(
+    conn: &Connection,
+    mut handle: impl FnMut(String, Vec<f32>) -> rusqlite::Result<()>,
+) -> rusqlite::Result<()> {
+    let mut points = conn.prepare("SELECT fingerprint, point FROM content.embedding")?;
+    let mut rows = points.query([])?;
+    while let Some(row) = rows.next()? {
+        let point = from_bytes(&row.get::<_, Vec<u8>>(1)?);
+        if point.len() == DIMENSIONS {
+            handle(row.get(0)?, point)?;
+        }
+    }
+    Ok(())
+}
+
 /// Works the tags out again from the stored points when the list of
-/// concepts or the rule changed (a few seconds for a large library).
+/// concepts or the rule changed, or when the library grew by a quarter since
+/// it was last calibrated (a few seconds for a large library).
 pub fn retag_if_needed(conn: &mut Connection) -> rusqlite::Result<bool> {
     let version = &vocabulary().version;
-    let stored: Option<String> = conn
-        .query_row(
-            "SELECT value FROM content.meta WHERE key = 'vocabulary'",
-            [],
-            |row| row.get(0),
-        )
-        .ok();
-    if stored.as_ref() == Some(version) {
+    let photos = conn.query_row(
+        "SELECT count(*) FROM content.embedding WHERE length(point) > 0",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as u64;
+    let calibrated = calibration(conn).map_or(0, |c| c.photos);
+    let grew = photos >= MIN_CALIBRATION && photos > calibrated + calibrated / 4;
+    if meta(conn, "vocabulary").as_ref() == Some(version) && !grew {
         return Ok(false);
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    tx.execute("DELETE FROM content.tag", [])?;
-    {
-        let mut points = tx.prepare("SELECT fingerprint, point FROM content.embedding")?;
-        let rows = points.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+    let calibration = if photos >= MIN_CALIBRATION {
+        let count = vocabulary().concepts.len();
+        let (mut sum, mut squares) = (vec![0f64; count], vec![0f64; count]);
+        each_point(&tx, |_, point| {
+            for (index, similarity) in similarities(&point).into_iter().enumerate() {
+                sum[index] += f64::from(similarity);
+                squares[index] += f64::from(similarity).powi(2);
+            }
+            Ok(())
         })?;
-        for row in rows {
-            let (fingerprint, bytes) = row?;
-            write_tags(&tx, &fingerprint, &from_bytes(&bytes))?;
-        }
-    }
+        let n = photos as f64;
+        let mean: Vec<f32> = sum.iter().map(|s| (s / n) as f32).collect();
+        let deviation = squares
+            .iter()
+            .zip(&sum)
+            .map(|(q, s)| ((q / n - (s / n).powi(2)).max(0.0).sqrt() as f32).max(1e-6))
+            .collect();
+        Some(Calibration {
+            photos,
+            mean,
+            deviation,
+        })
+    } else {
+        None
+    };
+    tx.execute("DELETE FROM content.tag", [])?;
+    each_point(&tx, |fingerprint, point| {
+        write_tags(&tx, &fingerprint, &point, calibration.as_ref())
+    })?;
     tx.execute(
         "INSERT OR REPLACE INTO content.meta (key, value) VALUES ('vocabulary', ?1)",
         [version],
     )?;
+    match &calibration {
+        Some(calibration) => tx.execute(
+            "INSERT OR REPLACE INTO content.meta (key, value) VALUES ('calibration', ?1)",
+            [serde_json::to_string(calibration).unwrap_or_default()],
+        )?,
+        None => tx.execute("DELETE FROM content.meta WHERE key = 'calibration'", [])?,
+    };
     tx.commit()?;
     Ok(true)
 }
@@ -451,6 +540,7 @@ pub fn embed_pending(
     on_progress: &(dyn Fn(Progress) + Sync),
 ) -> rusqlite::Result<usize> {
     retag_if_needed(conn)?;
+    let calibration = calibration(conn);
     let pending: Vec<String> = conn
         .prepare(
             "SELECT DISTINCT fingerprint FROM photos
@@ -512,7 +602,7 @@ pub fn embed_pending(
             }
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             for (fingerprint, point) in batch.drain(..) {
-                store(&tx, fingerprint, &point)?;
+                store(&tx, fingerprint, &point, calibration.as_ref())?;
             }
             tx.commit()
         };
@@ -531,6 +621,8 @@ pub fn embed_pending(
         write(&mut batch)
     })?;
     report(done);
+    // The first time, or after many new photos: calibrated on all of them.
+    retag_if_needed(conn)?;
     Ok(done as usize)
 }
 
@@ -600,9 +692,9 @@ mod tests {
             .position(|concept| concept.key == "snow")
             .unwrap();
         let point = vocabulary.points[snow * DIMENSIONS..(snow + 1) * DIMENSIONS].to_vec();
-        store(&conn, "f1", &point).unwrap();
+        store(&conn, "f1", &point, None).unwrap();
         // Unreadable thumbnails: no tags.
-        store(&conn, "f2", &[]).unwrap();
+        store(&conn, "f2", &[], None).unwrap();
         let tagged = |conn: &Connection| -> Vec<String> {
             conn.prepare("SELECT fingerprint FROM content.tag WHERE concept = 'snow'")
                 .unwrap()
@@ -616,5 +708,44 @@ mod tests {
         assert!(retag_if_needed(&mut conn).unwrap());
         assert!(!retag_if_needed(&mut conn).unwrap());
         assert_eq!(tagged(&conn), ["f1"]);
+    }
+
+    #[test]
+    fn large_libraries_are_calibrated_and_kept_so() {
+        let mut conn = crate::db::open_in_memory().unwrap();
+        let vocabulary = vocabulary();
+        let count = vocabulary.concepts.len();
+        // Photos that each look like one concept, a bit blurred.
+        let photo = |n: usize| -> Vec<f32> {
+            let a = &vocabulary.points[(n % count) * DIMENSIONS..][..DIMENSIONS];
+            let b = &vocabulary.points[((n * 7 + 3) % count) * DIMENSIONS..][..DIMENSIONS];
+            normalized(a.iter().zip(b).map(|(a, b)| a * 0.8 + b * 0.2))
+        };
+        let add = |conn: &Connection, range: std::ops::Range<usize>| {
+            for n in range {
+                store(conn, &format!("f{n}"), &photo(n), None).unwrap();
+            }
+        };
+        add(&conn, 0..100);
+        retag_if_needed(&mut conn).unwrap();
+        assert!(calibration(&conn).is_none(), "too few photos to tell");
+        add(&conn, 100..400);
+        assert!(retag_if_needed(&mut conn).unwrap());
+        assert_eq!(calibration(&conn).unwrap().photos, 400);
+        // A few more photos: kept as is; a quarter more: calibrated again.
+        add(&conn, 400..450);
+        assert!(!retag_if_needed(&mut conn).unwrap());
+        add(&conn, 450..520);
+        assert!(retag_if_needed(&mut conn).unwrap());
+        assert_eq!(calibration(&conn).unwrap().photos, 520);
+        // Photos still find their concept.
+        let tagged: i64 = conn
+            .query_row(
+                "SELECT count(DISTINCT fingerprint) FROM content.tag",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(tagged > 400, "{tagged}");
     }
 }
