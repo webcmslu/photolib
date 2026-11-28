@@ -8,7 +8,7 @@ rust-version = "1.90"
 publish = false
 
 [dependencies]
-phototek-core = { path = "../core" }
+phototek-core = { path = "../core", default-features = false }
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
@@ -22,3 +22,8 @@ blake3 = "1.8.7"
 
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+default = ["heic"]
+# HEIC/HEIF through libheif, as in the desktop app (the Docker image has it).
+heic = ["phototek-core/heic"]
