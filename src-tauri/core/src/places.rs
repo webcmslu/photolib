@@ -102,6 +102,47 @@ fn square(latitude: f64, longitude: f64) -> (i32, i32) {
     (latitude.floor() as i32, longitude.floor() as i32)
 }
 
+/// A town found by its name.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Town {
+    /// "Metz, France".
+    pub name: String,
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+/// The towns whose name starts with `typed` (case and accents ignored),
+/// largest first, at most `limit`.
+pub fn find(typed: &str, limit: usize) -> Vec<Town> {
+    let typed = crate::clip::fold(typed.trim());
+    if typed.chars().count() < 2 {
+        return Vec::new();
+    }
+    let atlas = atlas();
+    let mut found: Vec<&City> = atlas
+        .cities
+        .iter()
+        .filter(|city| {
+            crate::clip::fold(city.name).starts_with(&typed)
+                || (!city.ascii.is_empty() && crate::clip::fold(city.ascii).starts_with(&typed))
+        })
+        .collect();
+    found.sort_by(|a, b| b.population.total_cmp(&a.population));
+    found
+        .into_iter()
+        .take(limit)
+        .map(|city| Town {
+            name: match atlas.countries.get(city.country) {
+                Some(country) => format!("{}, {country}", city.name),
+                None => city.name.to_owned(),
+            },
+            latitude: city.latitude,
+            longitude: city.longitude,
+        })
+        .collect()
+}
+
 /// The nearest town to a position, if one is close enough.
 pub fn lookup(latitude: f64, longitude: f64) -> Option<Place> {
     if !latitude.is_finite() || !longitude.is_finite() || latitude.abs() > 90.0 {
@@ -197,5 +238,13 @@ mod tests {
         // Paris to London is about 344 km.
         let d = distance_km(48.8566, 2.3522, 51.5074, -0.1278);
         assert!((d - 344.0).abs() < 3.0, "{d}");
+    }
+
+    #[test]
+    fn towns_are_found_by_name() {
+        assert_eq!(find("metz", 5)[0].name, "Metz, France");
+        assert!(find("Luxem", 5)[0].name.starts_with("Luxembourg"));
+        assert!(find("zuri", 5)[0].name.starts_with("Zürich"));
+        assert!(find("m", 5).is_empty(), "too short");
     }
 }

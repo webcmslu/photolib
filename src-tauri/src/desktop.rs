@@ -815,6 +815,18 @@ fn save_video(request: tauri::ipc::Request<'_>) -> Result<(), String> {
     fs::write(&path, bytes).map_err(|e| e.to_string())
 }
 
+/// Towns whose name starts with `query`, largest first: to set home.
+#[tauri::command(async)]
+fn find_towns(query: String) -> Vec<phototek_core::places::Town> {
+    phototek_core::places::find(&query, 8)
+}
+
+/// The homes set by hand (see `Op::Home`).
+#[tauri::command(async)]
+fn homes(path: String, state: State<'_, AppState>) -> Result<Vec<db::Home>, String> {
+    db::homes(&open_index(&state, &path)?).map_err(|e| e.to_string())
+}
+
 /// The town most of a listing's photos were taken in, to name a pinned place.
 #[tauri::command(async)]
 fn listing_place(
@@ -1734,6 +1746,8 @@ pub fn run() {
             disable_faces,
             check_person,
             confirm_person_faces,
+            find_towns,
+            homes,
             content_status,
             enable_content,
             disable_content,

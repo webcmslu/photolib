@@ -45,6 +45,7 @@
   import { ICONS } from "./icons";
   import { memorySubtitle, memoryTitle } from "./memories";
   import { showMenu } from "./contextMenu";
+  import HomeDialog from "./HomeDialog.svelte";
 
   interface Props {
     libraryPath: string;
@@ -78,6 +79,8 @@
       .slice(0, 20),
   );
   let error = $state<string | null>(null);
+  /** The "Where is home?" dialog is open. */
+  let settingHome = $state(false);
   let pinnedCovers = $state<Record<string, string>>({});
 
   async function load() {
@@ -408,6 +411,11 @@
         </div>
       </section>
     {/if}
+    <!-- Trips are the days far from home: where home is can be set by hand. -->
+    <p class="home-line">
+      {data.home ? t("Home: {town}", { town: data.home }) : t("Home isn't known yet")}
+      · <button class="link" onclick={() => (settingHome = true)}>{t("Change…")}</button>
+    </p>
 
     {#if media.length > 0}
       <section>
@@ -456,6 +464,16 @@
     </section>
   {/if}
 </div>
+
+{#if settingHome && data}
+  <HomeDialog
+    {libraryPath}
+    current={data.home}
+    canEdit={true}
+    onchanged={load}
+    onclose={() => (settingHome = false)}
+  />
+{/if}
 
 <style>
   .collections {
@@ -857,5 +875,20 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  .home-line {
+    margin: 4px 0 18px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .home-line .link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    cursor: pointer;
   }
 </style>

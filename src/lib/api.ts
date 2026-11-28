@@ -896,7 +896,33 @@ export type Op =
   /** 1 to 5 stars; 0 takes the rating away. */
   | { op: "rating"; photo: string; stars: number }
   /** A colour label; "" takes it away. */
-  | { op: "label"; photo: string; color: LabelColor | "" };
+  | { op: "label"; photo: string; color: LabelColor | "" }
+  /** Home from the year `since` on (0: always), in hundred-thousandths of a degree; town "" takes it away. */
+  | { op: "home"; since: number; latitude: number; longitude: number; town: string };
+
+/** A town found by its name. Mirrors `Town` in places.rs. */
+export interface Town {
+  name: string;
+  latitude: number;
+  longitude: number;
+}
+
+/** Towns whose name starts with `query`, largest first. */
+export function findTowns(query: string): Promise<Town[]> {
+  return invoke("find_towns", { query });
+}
+
+/** A home set by hand. Mirrors `Home` in db.rs. */
+export interface Home {
+  since: number;
+  latitude: number;
+  longitude: number;
+  town: string;
+}
+
+export function listHomes(path: string): Promise<Home[]> {
+  return invoke("homes", { path });
+}
 
 /** Mirrors `Album` in src-tauri/core/src/db.rs. */
 export interface Album {

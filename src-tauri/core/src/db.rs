@@ -2321,6 +2321,7 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
     let face_point: String;
     let face_key: (String, String);
     let rating: String;
+    let home: (String, String);
     let (kind, key, photo, value) = match &event.op {
         Op::Fav { photo, on } => ("fav", photo.as_str(), "", flag(on)),
         Op::Hide { photo, on } => ("hide", photo.as_str(), "", flag(on)),
@@ -2347,6 +2348,23 @@ pub fn apply_event(tx: &Transaction<'_>, device: &str, event: &Event) -> rusqlit
             ("rating", photo.as_str(), "", rating.as_str())
         }
         Op::Label { photo, color } => ("label", photo.as_str(), "", color.as_str()),
+        Op::Home {
+            since,
+            latitude,
+            longitude,
+            town,
+        } => {
+            home = (
+                since.to_string(),
+                if town.is_empty() {
+                    String::new()
+                } else {
+                    serde_json::json!({ "latitude": latitude, "longitude": longitude, "town": town })
+                        .to_string()
+                },
+            );
+            ("home", home.0.as_str(), "", home.1.as_str())
+        }
         Op::Edit { photo, edit } => {
             // The edit as JSON; an empty value means "not edited".
             edit_json = edit
@@ -2498,6 +2516,45 @@ pub fn hidden_and_duplicates(conn: &Connection) -> rusqlite::Result<(u32, u32)> 
         |row| row.get(0),
     )?;
     Ok((hidden, duplicates))
+}
+
+/// A home set by hand (see `Op::Home`).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Home {
+    /// From this year on (0: always).
+    pub since: i32,
+    pub latitude: f64,
+    pub longitude: f64,
+    pub town: String,
+}
+
+/// The homes set by hand, earliest first.
+pub fn homes(conn: &Connection) -> rusqlite::Result<Vec<Home>> {
+    #[derive(serde::Deserialize)]
+    struct Stored {
+        latitude: i32,
+        longitude: i32,
+        town: String,
+    }
+    let mut homes: Vec<Home> = conn
+        .prepare("SELECT key, value FROM org_state WHERE kind = 'home' AND value != ''")?
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|row| {
+            let (since, value) = row.ok()?;
+            let stored: Stored = serde_json::from_str(&value).ok()?;
+            Some(Home {
+                since: since.parse().ok()?,
+                latitude: f64::from(stored.latitude) / 100_000.0,
+                longitude: f64::from(stored.longitude) / 100_000.0,
+                town: stored.town,
+            })
+        })
+        .collect();
+    homes.sort_by_key(|home| home.since);
+    Ok(homes)
 }
 
 /// How many photos a listing shows.

@@ -106,6 +106,16 @@ pub enum Op {
         photo: String,
         color: String,
     },
+    /// Says where home is from the year `since` on (0: always), for trips:
+    /// photos far from home are away. Positions are in hundred-thousandths
+    /// of a degree. An empty `town` takes that home away again, and home is
+    /// then worked out from the photos for those years.
+    Home {
+        since: i32,
+        latitude: i32,
+        longitude: i32,
+        town: String,
+    },
 }
 
 /// The colour labels a photo can have.
@@ -224,6 +234,17 @@ impl Op {
             Op::Rating { photo, stars } => is_id(photo, 64) && *stars <= 5,
             Op::Label { photo, color } => {
                 is_id(photo, 64) && (color.is_empty() || LABELS.contains(&color.as_str()))
+            }
+            Op::Home {
+                since,
+                latitude,
+                longitude,
+                town,
+            } => {
+                (*since == 0 || (1800..=2200).contains(since))
+                    && latitude.abs() <= 9_000_000
+                    && longitude.abs() <= 18_000_000
+                    && town.chars().count() <= MAX_ALBUM_NAME_CHARS
             }
         }
     }
@@ -1022,5 +1043,19 @@ mod tests {
         )
         .unwrap();
         assert!(db::albums(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn homes_are_checked() {
+        let home = |since, latitude, longitude| Op::Home {
+            since,
+            latitude,
+            longitude,
+            town: "Luxembourg".into(),
+        };
+        assert!(home(0, 4_961_000, 613_000).is_valid());
+        assert!(home(2010, 4_961_000, 613_000).is_valid());
+        assert!(!home(12, 4_961_000, 613_000).is_valid());
+        assert!(!home(2010, 9_100_000, 0).is_valid());
     }
 }

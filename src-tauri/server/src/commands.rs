@@ -277,6 +277,15 @@ fn run(library: &Library, command: &str, args: Value) -> Result<Value, String> {
             answer(people::suggestions(&index()?, &a.clusters, &a.name).map_err(failed)?)
         }
 
+        "find_towns" => {
+            #[derive(Deserialize)]
+            struct Args {
+                query: String,
+            }
+            let a: Args = parse(args)?;
+            answer(phototek_core::places::find(&a.query, 8))
+        }
+        "homes" => answer(db::homes(&index()?).map_err(failed)?),
         // Which of a phone's files the library has (see upload.rs).
         "known_photos" => {
             #[derive(Deserialize)]

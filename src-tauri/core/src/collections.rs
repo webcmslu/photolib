@@ -239,6 +239,8 @@ pub fn collections(conn: &Connection, today: i64) -> rusqlite::Result<Collection
 struct Library {
     /// In date order.
     shots: Vec<Shot>,
+    /// Homes set by hand, earliest first: they win over the photos.
+    set_homes: Vec<db::Home>,
     names: Vec<String>,
     /// The face groups of each name, to list a person's photos.
     clusters: Vec<Vec<i64>>,
@@ -400,13 +402,14 @@ impl Library {
         }
         Ok(Library {
             shots,
+            set_homes: db::homes(conn)?,
             names,
             clusters,
         })
     }
 
     fn build(&self, today: i64) -> Collections {
-        let homes = homes(&self.shots);
+        let homes = homes(&self.shots, &self.set_homes);
         let trips = self.trips(&homes);
         let in_trip = |day: i64| trips.iter().any(|trip| day >= trip.from && day <= trip.to);
 
@@ -1076,8 +1079,28 @@ impl Homes {
 type Spot<'a> = (f64, f64, usize, HashMap<&'a str, usize>);
 
 /// For each year with photos that have a position: the square where the
-/// most days were photographed in that year and the years either side.
-fn homes(shots: &[Shot]) -> Homes {
+/// most days were photographed in that year and the years either side;
+/// but where homes were set by hand, those, for the years they cover.
+fn homes(shots: &[Shot], set: &[db::Home]) -> Homes {
+    let mut found = homes_from_photos(shots);
+    if let Some(first) = set.first() {
+        // Each set home holds from its year until the next one; the first
+        // one also before its year.
+        let years: HashSet<i32> = shots.iter().map(|shot| year_of(shot.day)).collect();
+        for year in years {
+            let home = set
+                .iter()
+                .rev()
+                .find(|home| home.since <= year)
+                .unwrap_or(first);
+            found.by_year.insert(year, (home.latitude, home.longitude));
+        }
+        found.latest_town = set.last().map(|home| home.town.clone());
+    }
+    found
+}
+
+fn homes_from_photos(shots: &[Shot]) -> Homes {
     // (year, cell) -> days, and where the photos in each cell were.
     let mut days: HashMap<(i32, (i64, i64)), HashSet<i64>> = HashMap::new();
     let mut spots: HashMap<(i64, i64), Spot> = HashMap::new();
@@ -1624,5 +1647,50 @@ mod tests {
         let listed =
             db::photos_page_in(&conn, &found.listing, db::Order::default(), 0, 10).unwrap();
         assert_eq!(listed.len(), 2);
+    }
+
+    #[test]
+    fn homes_set_by_hand_win_over_the_photos() {
+        let shot = |year: i32, position: (f64, f64)| Shot {
+            fingerprint: String::new(),
+            time: 0,
+            day: days_of(year, 6, 1),
+            dated: true,
+            position: Some(position),
+            town: None,
+            country: None,
+            folder: String::new(),
+            video: false,
+            clip: false,
+            screenshot: false,
+            burst: None,
+            visual: None,
+            people: Vec::new(),
+            score: 0.0,
+        };
+        let metz = (49.12, 6.18);
+        let luxembourg = (49.61, 6.13);
+        let shots = vec![
+            shot(2008, metz),
+            shot(2008, metz),
+            shot(2015, metz),
+            shot(2015, metz),
+        ];
+        // From the photos: Metz both years.
+        assert_eq!(homes(&shots, &[]).at(2015), Some(metz));
+        let set = |since: i32, (latitude, longitude): (f64, f64), town: &str| db::Home {
+            since,
+            latitude,
+            longitude,
+            town: town.into(),
+        };
+        // Moved to Luxembourg in 2010.
+        let moved = homes(
+            &shots,
+            &[set(0, metz, "Metz"), set(2010, luxembourg, "Luxembourg")],
+        );
+        assert_eq!(moved.at(2008), Some(metz));
+        assert_eq!(moved.at(2015), Some(luxembourg));
+        assert_eq!(moved.latest_town.as_deref(), Some("Luxembourg"));
     }
 }
